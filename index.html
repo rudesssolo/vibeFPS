@@ -86,6 +86,26 @@
     box-shadow: 0 0 22px rgba(0, 229, 255, 0.25), inset 0 0 12px rgba(0, 229, 255, 0.08);
     transition: background 0.15s, color 0.15s;
   }
+  #overlay:not(.ready) .cta,
+  #overlay:not(.ready) .keys,
+  #overlay:not(.ready) .settings-panel,
+  #overlay.is-loading .cta,
+  #overlay.is-loading .keys,
+  #overlay.is-loading .settings-panel { visibility: hidden; pointer-events: none; }
+  #overlay.is-loading { cursor: wait; }
+  .loading-panel {
+    width: min(520px, 78vw);
+    margin: 34px 0 6px;
+    color: rgba(218, 249, 252, .82);
+    text-align: left;
+  }
+  #overlay.ready .loading-panel { display: none; }
+  #overlay.ready.is-loading .loading-panel { display: block; }
+  .loading-head { display: flex; justify-content: space-between; gap: 18px; font: 800 10px ui-monospace, monospace; letter-spacing: 2px; color: rgba(119, 246, 255, .82); }
+  #loading-percent { color: rgba(255, 200, 87, .9); }
+  .loading-track { position: relative; height: 6px; margin-top: 10px; overflow: hidden; border: 1px solid rgba(119, 246, 255, .24); background: rgba(3, 18, 29, .78); box-shadow: inset 0 0 14px rgba(0, 229, 255, .08), 0 0 18px rgba(0, 229, 255, .08); }
+  #loading-fill { display: block; width: 0%; height: 100%; transform-origin: left center; background: linear-gradient(90deg, #00e5ff, #77f6ff 62%, #ffc857); box-shadow: 0 0 14px rgba(0, 229, 255, .8); transition: width .24s ease-out; }
+  #loading-detail { margin-top: 9px; color: rgba(182, 225, 234, .48); font: 700 9px ui-monospace, monospace; letter-spacing: 1.2px; }
   #overlay:hover .cta { background: #00e5ff; color: #05060d; box-shadow: 0 0 40px rgba(0, 229, 255, 0.5); text-shadow: none; }
   #overlay .keys { margin-top: 34px; font-size: 14px; color: #5d6a8f; line-height: 2.1; }
   #overlay .keys .pad-hint { color: #ff2d95; font-weight: 600; text-shadow: 0 0 10px rgba(255, 45, 149, 0.6); }
@@ -285,10 +305,15 @@
 
   <div id="overlay">
     <div class="boot">VIBE COMBAT OS<br>NEURAL LINK: READY<br>AUDIO ENGINE: STANDBY</div>
-    <div class="build">BUILD 2.6.08 // WEBGL</div>
+    <div class="build">BUILD 2.6.08 // GPU INIT</div>
     <h1>VIBE&nbsp;FPS</h1>
     <div class="sub">NIGHT//SHIFT · REAL-TIME CYBERPUNK COMBAT SIMULATION</div>
     <div class="brief">Entra nel poligono urbano, neutralizza le unità sentinella e sopravvivi a ondate sempre più aggressive. Audio 3D procedurale, materiali PBR, illuminazione dinamica e fisica in tempo reale.</div>
+    <div id="loading-panel" class="loading-panel" aria-live="polite">
+      <div class="loading-head"><span id="loading-label">BOOT SEQUENCE</span><span id="loading-percent">0%</span></div>
+      <div class="loading-track"><i id="loading-fill"></i></div>
+      <div id="loading-detail">IN ATTESA DEL LINK GRAFICO...</div>
+    </div>
     <div class="cta">INIZIALIZZA SIMULAZIONE</div>
     <div class="keys">
       <kbd>WASD</kbd> muovi · <kbd>SHIFT</kbd> scatto · <kbd>SPAZIO</kbd> salta ·
@@ -300,8 +325,10 @@
   <script type="importmap">
   {
     "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"
+      "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.webgpu.js",
+      "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.webgpu.js",
+      "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.tsl.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/"
     }
   }
   </script>
@@ -309,24 +336,57 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
 
   <script type="module">
-  import * as THREE from 'three';
-  import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-  import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-  import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-  import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-  import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-  import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
-  import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
-  import { VignetteShader } from 'three/addons/shaders/VignetteShader.js';
-  import { Reflector } from 'three/addons/objects/Reflector.js';
+  import * as THREE from 'three/webgpu';
+  import {
+    blendOverlay, color, dot, instancedBufferAttribute, max, mix,
+    positionGeometry, reflector, smoothstep, uniform, vec3
+  } from 'three/tsl';
   import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-  import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
+  import { RectAreaLightTexturesLib } from 'three/addons/lights/RectAreaLightTexturesLib.js';
   import { FacadeSystem } from './src/facade-system.js';
   import { DroneSystem } from './src/drone-system.js';
-  import { ExplosionSystem, ShockwaveShader } from './src/explosion-system.js';
+  import { ExplosionSystem } from './src/explosion-system.js';
   import { AdaptiveAudioEngine } from './src/audio-engine.js';
   import { HudController } from './src/hud-controller.js';
   import { GraphicsManager } from './src/graphics-manager.js';
+  import { RenderPipelineController } from './src/render-pipeline.js';
+
+  const loadingUI = (() => {
+    const overlay = document.getElementById('overlay');
+    const label = document.getElementById('loading-label');
+    const percent = document.getElementById('loading-percent');
+    const detail = document.getElementById('loading-detail');
+    const fill = document.getElementById('loading-fill');
+    let ready = false;
+    // Un timer lascia respirare il main thread anche quando il rendering sta
+    // compilando risorse, senza dipendere dalla schedulazione di rAF.
+    const nextFrame = () => new Promise(resolve => setTimeout(resolve, 0));
+    const update = (progress, nextLabel, nextDetail) => {
+      const safeProgress = Math.max(0, Math.min(1, progress));
+      fill.style.width = `${safeProgress * 100}%`;
+      percent.textContent = `${Math.round(safeProgress * 100)}%`;
+      if (nextLabel) label.textContent = nextLabel;
+      if (nextDetail) detail.textContent = nextDetail;
+    };
+    const showModal = (nextLabel, nextDetail) => {
+      overlay.classList.add('is-loading');
+      overlay.style.display = 'flex';
+      update(0, nextLabel, nextDetail);
+    };
+    const hideModal = ({ hideOverlay = false } = {}) => {
+      overlay.classList.remove('is-loading');
+      if (hideOverlay) overlay.style.display = 'none';
+      else if (ready) overlay.style.display = 'flex';
+    };
+    const finishBoot = () => {
+      ready = true;
+      update(1, 'SYSTEM READY', 'LINK GRAFICO OPERATIVO · CONFIGURAZIONE PRONTA');
+      overlay.classList.remove('is-loading');
+      overlay.classList.add('ready');
+      overlay.style.display = 'flex';
+    };
+    return { nextFrame, update, showModal, hideModal, finishBoot };
+  })();
 
   /* ============================================================
      1. CONFIG E COSTANTI DI GIOCO
@@ -375,7 +435,6 @@
       distanceFallOff: 1.0,
       scale: 2.0,
       samples: 16,
-      screenSpaceRadius: true,
       blendIntensity: 1.0
     },
     grain: { enabled: true, amount: 0.01 },
@@ -394,7 +453,7 @@
       ]
     },
     reflectiveFloor: true,
-    reflector: { color: 0x0d1220, width: 512, height: 512 }
+    reflector: { color: 0x0d1220 }
   };
 
   // Gruppi di collisione (bitmask)
@@ -412,7 +471,9 @@
   /* ============================================================
      2. RENDERER, SCENA, CAMERA E POST-PROCESSING
      ============================================================ */
-  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  const forceWebGL = new URLSearchParams(window.location.search).get('backend') === 'webgl';
+  const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL });
+  loadingUI.update(.08, 'GPU BOOT', 'INIZIALIZZAZIONE DEL BACKEND WEBGPU / WEBGL2...');
   let renderScale = Math.min(window.devicePixelRatio, 1.5);
   renderer.setPixelRatio(renderScale);
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -423,121 +484,44 @@
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   document.body.appendChild(renderer.domElement);
 
+  const showRendererFailure = message => {
+    const build = document.querySelector('#overlay .build');
+    const cta = document.querySelector('#overlay .cta');
+    if (build) build.textContent = 'RENDERER // OFFLINE';
+    if (cta) cta.textContent = message;
+  };
+  renderer.onDeviceLost = () => {
+    renderer.setAnimationLoop(null);
+    showRendererFailure('GPU DEVICE LOST · RICARICA LA PAGINA');
+  };
+  renderer.onError = error => console.error('VIBE renderer error', error);
+  try {
+    await renderer.init();
+  } catch (error) {
+    showRendererFailure('WEBGPU / WEBGL2 NON DISPONIBILE');
+    throw error;
+  }
+  loadingUI.update(.24, 'GPU ONLINE', 'ALLOCAZIONE DEL DEVICE E DEL CANVAS COMPLETATA');
+
+  const rendererBackend = renderer.coordinateSystem === THREE.WebGPUCoordinateSystem
+    ? 'WEBGPU'
+    : 'WEBGL2 FALLBACK';
+  document.querySelector('#overlay .build').textContent = `BUILD 2.6.08 // ${rendererBackend}`;
+
   // Anisotropia massima per texture nitide in prospettiva
-  const aniso = renderer.capabilities.getMaxAnisotropy();
+  const aniso = renderer.getMaxAnisotropy();
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x05060d);
   scene.fog = new THREE.FogExp2(GRAPHICS.fogColor, GRAPHICS.fogDensity);
 
-  const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500);
+  // Un near plane più corto evita che superfici vicine vengano tagliate quando
+  // il giocatore si muove rasente ai muri perimetrali.
+  const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 500);
   camera.rotation.order = 'YXZ';
 
-  // Pipeline post-process: HDR lineare -> GTAO -> Bloom Unreal -> FXAA -> Grana -> Vignette -> Output
-  // (il tone mapping ACES viene applicato solo nell'OutputPass, a schermo)
-  const composer = new EffectComposer(renderer);
-  composer.addPass(new RenderPass(scene, camera));
-
-  // Ambient occlusion (GTAO) per contatti e crepe fotorealistiche
-  let gtaoPass = null;
-  if (GRAPHICS.gtao.enabled) {
-    gtaoPass = new GTAOPass(
-      scene, camera,
-      Math.floor(window.innerWidth * 0.5), Math.floor(window.innerHeight * 0.5),
-      null,
-      {
-        radius: GRAPHICS.gtao.radius,
-        distanceExponent: GRAPHICS.gtao.distanceExponent,
-        thickness: GRAPHICS.gtao.thickness,
-        distanceFallOff: GRAPHICS.gtao.distanceFallOff,
-        scale: GRAPHICS.gtao.scale,
-        samples: GRAPHICS.gtao.samples,
-        screenSpaceRadius: GRAPHICS.gtao.screenSpaceRadius
-      }
-    );
-    gtaoPass.blendIntensity = GRAPHICS.gtao.blendIntensity;
-    composer.addPass(gtaoPass);
-  }
-
-  const bloomPass = new UnrealBloomPass(
-    new THREE.Vector2(window.innerWidth, window.innerHeight),
-    GRAPHICS.bloom.strength, GRAPHICS.bloom.radius, GRAPHICS.bloom.threshold
-  );
-  composer.addPass(bloomPass);
-
-  const smaaPass = new SMAAPass(window.innerWidth * renderScale, window.innerHeight * renderScale);
-  composer.addPass(smaaPass);
-
-  // Grana cinematografica (leggera, per un look fotografico)
-  const grainPass = new ShaderPass({
-    name: 'GrainPass',
-    uniforms: {
-      tDiffuse: { value: null },
-      amount: { value: GRAPHICS.grain.amount },
-      time: { value: 0 }
-    },
-    vertexShader: `
-      varying vec2 vUv;
-      void main() {
-        vUv = uv;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }`,
-    fragmentShader: `
-      uniform sampler2D tDiffuse;
-      uniform float amount;
-      uniform float time;
-      varying vec2 vUv;
-      float hash(vec2 p) {
-        return fract(sin(dot(p, vec2(127.1, 311.7)) + time * 0.7) * 43758.5453);
-      }
-      void main() {
-        vec4 c = texture2D(tDiffuse, vUv);
-        float n = hash(vUv * vec2(1920.0, 1080.0)) - 0.5;
-        c.rgb += n * amount;
-        gl_FragColor = c;
-      }`
-  });
-  if (!GRAPHICS.grain.enabled) grainPass.enabled = false;
-  composer.addPass(grainPass);
-
-  // Color grading cinematografico: ombre fredde, alte luci calde e aberrazione minima ai bordi.
-  const cinematicPass = new ShaderPass({
-    name: 'CinematicGrade',
-    uniforms: { tDiffuse: { value: null }, intensity: { value: 1.0 } },
-    vertexShader: `
-      varying vec2 vUv;
-      void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
-    fragmentShader: `
-      uniform sampler2D tDiffuse;
-      uniform float intensity;
-      varying vec2 vUv;
-      void main(){
-        vec2 fromCenter=vUv-.5;
-        float edge=dot(fromCenter,fromCenter);
-        vec2 shift=fromCenter*(.0012+.0022*edge)*intensity;
-        vec3 col;
-        col.r=texture2D(tDiffuse,vUv+shift).r;
-        col.g=texture2D(tDiffuse,vUv).g;
-        col.b=texture2D(tDiffuse,vUv-shift).b;
-        float luma=dot(col,vec3(.2126,.7152,.0722));
-        col=mix(vec3(luma),col,1.08);
-        col+=vec3(-.018,.006,.014)*(1.0-smoothstep(.08,.7,luma));
-        col+=vec3(.018,.004,-.012)*smoothstep(.55,1.0,luma);
-        gl_FragColor=vec4(col,1.0);
-      }`
-  });
-  composer.addPass(cinematicPass);
-
-  const shockwavePass = new ShaderPass(ShockwaveShader);
-  shockwavePass.uniforms['aspect'].value = window.innerWidth / window.innerHeight;
-  composer.addPass(shockwavePass);
-
-  const vignettePass = new ShaderPass(VignetteShader);
-  vignettePass.uniforms['offset'].value = GRAPHICS.vignette.offset;
-  vignettePass.uniforms['darkness'].value = GRAPHICS.vignette.darkness;
-  composer.addPass(vignettePass);
-
-  composer.addPass(new OutputPass());
+  const renderPipeline = new RenderPipelineController({ renderer, scene, camera, graphics: GRAPHICS });
+  loadingUI.update(.32, 'PIPELINE', 'PREPARAZIONE DI GTAO, BLOOM, SMAA E RIFLESSI...');
 
   /* ============================================================
      3. AMBIENTE NOTTURNO CYBERPUNK
@@ -545,44 +529,25 @@
   // Cielo: cupola con gradiente notturno + bagliore all'orizzonte + alone lunare
   function createNightSky() {
     const moonDir = new THREE.Vector3(...GRAPHICS.lights.moon.pos).normalize();
+    const direction = positionGeometry.normalize();
+    const height = direction.y;
+    let skyColor = mix(color(0x2a1245), color(0x0b1030), smoothstep(-.02, .18, height));
+    skyColor = mix(skyColor, color(0x050614), smoothstep(.18, .6, height));
+    const glowFactor = smoothstep(-.05, .04, height).mul(smoothstep(.04, .3, height).oneMinus());
+    skyColor = mix(skyColor, color(0xff4a2a), glowFactor.mul(.55));
+    skyColor = mix(skyColor, vec3(.012, .012, .02), smoothstep(0, -.15, height));
+    const moonDot = max(dot(direction, uniform(moonDir)), 0);
+    const moonHalo = moonDot.pow(20).mul(.55).add(moonDot.pow(120).mul(.45));
+    skyColor = skyColor.add(vec3(.55, .7, 1).mul(moonHalo));
+    const skyMaterial = new THREE.MeshBasicNodeMaterial({
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false
+    });
+    skyMaterial.colorNode = skyColor;
     const sky = new THREE.Mesh(
       new THREE.SphereGeometry(390, 48, 24),
-      new THREE.ShaderMaterial({
-        side: THREE.BackSide,
-        depthWrite: false,
-        uniforms: {
-          top:      { value: new THREE.Color(0x050614) },
-          mid:      { value: new THREE.Color(0x0b1030) },
-          horizon:  { value: new THREE.Color(0x2a1245) },
-          glow:     { value: new THREE.Color(0xff4a2a) },
-          moonDir:  { value: moonDir }
-        },
-        vertexShader: `
-          varying vec3 vDir;
-          void main() {
-            vDir = normalize(position);
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-          }`,
-        fragmentShader: `
-          uniform vec3 top;
-          uniform vec3 mid;
-          uniform vec3 horizon;
-          uniform vec3 glow;
-          uniform vec3 moonDir;
-          varying vec3 vDir;
-          void main() {
-            float h = vDir.y;
-            vec3 col = mix(horizon, mid, smoothstep(-0.02, 0.18, h));
-            col = mix(col, top, smoothstep(0.18, 0.6, h));
-            float glowF = smoothstep(-0.05, 0.04, h) * (1.0 - smoothstep(0.04, 0.3, h));
-            col = mix(col, glow, glowF * 0.55);
-            col = mix(col, vec3(0.012, 0.012, 0.02), smoothstep(0.0, -0.15, h));
-            // alone morbido intorno alla luna
-            float md = max(dot(normalize(vDir), normalize(moonDir)), 0.0);
-            col += vec3(0.55, 0.7, 1.0) * (pow(md, 20.0) * 0.55 + pow(md, 120.0) * 0.45);
-            gl_FragColor = vec4(col, 1.0);
-          }`
-      })
+      skyMaterial
     );
     sky.frustumCulled = false;
     scene.add(sky);
@@ -601,13 +566,16 @@
       pos[i * 3 + 1] = y;
       pos[i * 3 + 2] = Math.sin(a) * r;
     }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    const stars = new THREE.Points(geo, new THREE.PointsMaterial({
+    const positionAttribute = new THREE.InstancedBufferAttribute(pos, 3);
+    const starMaterial = new THREE.PointsNodeMaterial({
+      positionNode: instancedBufferAttribute(positionAttribute),
       size: 1.4, sizeAttenuation: false,
       color: 0xbfd4ff, transparent: true, opacity: 0.9,
-      depthWrite: false, fog: false
-    }));
+      depthWrite: false, fog: false, alphaToCoverage: true
+    });
+    const stars = new THREE.Sprite(starMaterial);
+    stars.count = count;
+    stars.frustumCulled = false;
     scene.add(stars);
   }
 
@@ -856,10 +824,12 @@
 
   createNightSky();
   createStars();
+  loadingUI.update(.46, 'ATMOSPHERE', 'CIELO, STELLE E PIOGGIA IN CARICAMENTO...');
   createMoon();
   createLights();
   createEnvironment();
   const facadeSystem = new FacadeSystem({ scene, anisotropy: aniso, resolution: 1024, buildingCount: 56 });
+  loadingUI.update(.62, 'CITY GRID', 'GENERAZIONE DELLE FACCIATE E DELLA CITTÀ...');
 
   // Pioggia leggera per l'atmosfera bagnata
   let rain = null;
@@ -875,13 +845,14 @@
       pos[i * 3 + 2] = (Math.random() * 2 - 1) * spread;
       vel[i] = 15 + Math.random() * 9;
     }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    const rainMat = new THREE.PointsMaterial({
+    const positionAttribute = new THREE.InstancedBufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage);
+    const rainMat = new THREE.PointsNodeMaterial({
+      positionNode: instancedBufferAttribute(positionAttribute),
       color: 0x9fb8d8, size: 0.06, transparent: true, opacity: 0.35,
-      sizeAttenuation: true, depthWrite: false
+      sizeAttenuation: true, depthWrite: false, alphaToCoverage: true
     });
-    rain = { mesh: new THREE.Points(geo, rainMat), pos, vel, spread, top };
+    rain = { mesh: new THREE.Sprite(rainMat), positionAttribute, pos, vel, spread, top };
+    rain.mesh.count = count;
     rain.mesh.frustumCulled = false;
     scene.add(rain.mesh);
   }
@@ -1100,21 +1071,10 @@
     return c;
   }
 
-  // Pavimento: asfalto bagnato riflettente (Reflector)
-  let floorReflector = null;
+  // Pavimento: asfalto bagnato riflettente (ReflectorNode WebGPU/TSL)
+  let floorReflection = null;
   if (GRAPHICS.reflectiveFloor) {
-    floorReflector = new Reflector(
-      new THREE.PlaneGeometry(CONFIG.arenaSize, CONFIG.arenaSize),
-      {
-        color: GRAPHICS.reflector.color,
-        textureWidth: GRAPHICS.reflector.width,
-        textureHeight: GRAPHICS.reflector.height,
-        multisample: 0
-      }
-    );
-    floorReflector.rotation.x = -Math.PI / 2;
-    floorReflector.position.y = 0.02;
-    scene.add(floorReflector);
+    floorReflection = reflector({ resolutionScale: .25, bounces: false, samples: 0 });
   } else {
     const floorMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(CONFIG.arenaSize, CONFIG.arenaSize),
@@ -1132,21 +1092,37 @@
   asphaltMap.repeat.set(5, 5);
   asphaltMap.anisotropy = aniso;
   const asphaltNormal = canvasToNormalTexture(asphaltCanvas, 2.2, [5, 5], aniso);
+  const asphaltMaterialOptions = {
+    map: asphaltMap, normalMap: asphaltNormal, color: 0x8290a1,
+    roughness: .42, metalness: .08, clearcoat: .65, clearcoatRoughness: .22,
+    transparent: !floorReflection, opacity: floorReflection ? 1 : .72,
+    depthWrite: Boolean(floorReflection), envMapIntensity: 1.2
+  };
+  const asphaltMaterial = floorReflection
+    ? new THREE.MeshPhysicalNodeMaterial(asphaltMaterialOptions)
+    : new THREE.MeshPhysicalMaterial(asphaltMaterialOptions);
+  if (floorReflection) {
+    asphaltMaterial.emissiveNode = blendOverlay(
+      floorReflection.rgb,
+      color(GRAPHICS.reflector.color)
+    ).mul(.28);
+  }
   const asphaltSkin = new THREE.Mesh(
-    new THREE.PlaneGeometry(CONFIG.arenaSize - .15, CONFIG.arenaSize - .15),
-    new THREE.MeshPhysicalMaterial({
-      map: asphaltMap, normalMap: asphaltNormal, color: 0x8290a1,
-      roughness: .42, metalness: .08, clearcoat: .65, clearcoatRoughness: .22,
-      transparent: true, opacity: .72, depthWrite: false, envMapIntensity: 1.2
-    })
+    // Il pavimento invade leggermente lo spessore dei muri: in questo modo un
+    // eventuale piccolo errore di integrazione non apre una fessura nera lungo
+    // il perimetro.
+    new THREE.PlaneGeometry(CONFIG.arenaSize + .18, CONFIG.arenaSize + .18),
+    asphaltMaterial
   );
   asphaltSkin.rotation.x = -Math.PI / 2;
   asphaltSkin.position.y = .035;
   asphaltSkin.receiveShadow = true;
+  if (floorReflection) asphaltSkin.add(floorReflection.target);
   scene.add(asphaltSkin);
 
   // Corpo fisico del pavimento (senza mesh: il visual è il riflettore)
   addStaticBox(0, -0.5, 0, CONFIG.arenaSize, 1, CONFIG.arenaSize, null);
+  loadingUI.update(.72, 'ARENA', 'MATERIALI PBR, PAVIMENTO RIFLETTENTE E COLLISIONI...');
 
   // Griglia neon sul pavimento (geometria reale -> si riflette correttamente)
   (function createFloorGrid() {
@@ -1459,7 +1435,7 @@
   })();
 
   // Luci ad area fisiche (soft box) per illuminazione fotorealistica
-  RectAreaLightUniformsLib.init();
+  THREE.RectAreaLightNode.setLTC(RectAreaLightTexturesLib.init());
   (function createAreaLights() {
     // Insegna VIBE -> soft box magenta
     const signLight = new THREE.RectAreaLight(0xff2d95, 2.0, 5.2, 2.6);
@@ -1631,6 +1607,55 @@
   playerBody.collisionFilterGroup = COLLISION.PLAYER;
   playerBody.collisionFilterMask = COLLISION.STATIC | COLLISION.CRATE | COLLISION.PLAYER;
   world.addBody(playerBody);
+
+  // Il solver può lasciare la sfera leggermente oltre due muri quando si
+  // entra in diagonale nell'angolo. Il limite logico è quindi più interno
+  // della faccia interna del muro e viene applicato anche alla telecamera.
+  // Così né la sfera né il suo near plane possono attraversare il perimetro.
+  const arenaHalf = CONFIG.arenaSize / 2;
+  const arenaInnerFace = arenaHalf - CONFIG.wallThick / 2;
+  const playerBoundaryMargin = CONFIG.playerRadius + .22;
+  const playerArenaLimit = arenaInnerFace - playerBoundaryMargin;
+  const cameraArenaLimit = arenaInnerFace - .12;
+
+  function constrainPlayerToArena() {
+    const position = playerBody.position;
+    if (!Number.isFinite(position.x) || !Number.isFinite(position.z)) {
+      position.set(CONFIG.spawnPos.x, CONFIG.spawnPos.y, CONFIG.spawnPos.z);
+      playerBody.velocity.set(0, 0, 0);
+      playerBody.aabbNeedsUpdate = true;
+      return;
+    }
+
+    const clampedX = THREE.MathUtils.clamp(position.x, -playerArenaLimit, playerArenaLimit);
+    const clampedZ = THREE.MathUtils.clamp(position.z, -playerArenaLimit, playerArenaLimit);
+    let corrected = false;
+    if (clampedX !== position.x) {
+      position.x = clampedX;
+      // Blocca solo la componente diretta verso il muro. La componente
+      // parallela resta disponibile per scivolare lungo il bordo.
+      playerBody.velocity.x = 0;
+      corrected = true;
+    }
+    if (clampedZ !== position.z) {
+      position.z = clampedZ;
+      playerBody.velocity.z = 0;
+      corrected = true;
+    }
+    if (corrected) {
+      playerBody.aabbNeedsUpdate = true;
+      playerBody.updateAABB();
+    }
+  }
+
+  function constrainCameraToArena() {
+    // La camera segue il corpo, ma l'head-bob può aggiungere qualche
+    // centimetro: applica un secondo limite prima che il frame venga renderizzato.
+    const x = THREE.MathUtils.clamp(camera.position.x, -cameraArenaLimit, cameraArenaLimit);
+    const z = THREE.MathUtils.clamp(camera.position.z, -cameraArenaLimit, cameraArenaLimit);
+    camera.position.x = Number.isFinite(x) ? x : 0;
+    camera.position.z = Number.isFinite(z) ? z : CONFIG.spawnPos.z;
+  }
 
   // Orientamento della camera (yaw = rotazione orizzontale, pitch = verticale)
   let yaw = 0;
@@ -1814,52 +1839,67 @@
     hudController.render(gameState);
   }
 
+  function syncHudVisibility() {
+    const visible = locked && gameState.started;
+    crosshairEl.style.display = visible ? 'block' : 'none';
+    hudEl.style.display = visible ? 'block' : 'none';
+    gameHudEl.style.display = visible ? 'block' : 'none';
+    targetLayerEl.style.display = visible ? 'block' : 'none';
+  }
+
   function startReload(){
-    if(gameState.reloading||gameState.ammo===CONFIG.magazineSize||gameState.reserve<=0||gameState.dead)return;
+    if(!gameState.started||gameState.reloading||gameState.ammo===CONFIG.magazineSize||gameState.reserve<=0||gameState.dead)return;
     gameState.reloading=true;gameState.reloadTimer=CONFIG.reloadTime;audio.reload();toast('<b>VX-9</b> · CAMBIO CARICATORE');updateHUD();
   }
   function completeReload(){
     const needed=CONFIG.magazineSize-gameState.ammo,taken=Math.min(needed,gameState.reserve);gameState.ammo+=taken;gameState.reserve-=taken;gameState.reloading=false;audio.ui();updateHUD();
   }
 
-  let shockwaveProgress = 1;
   const explosionSystem = new ExplosionSystem({
     scene,
-    onShockwave(position) {
-      const projected = position.clone().project(camera);
-      shockwavePass.uniforms['center'].value.set(projected.x * .5 + .5, -projected.y * .5 + .5);
-      shockwavePass.uniforms['progress'].value = 0;
-      shockwavePass.uniforms['strength'].value = .032;
-      shockwaveProgress = 0;
-    },
+    onShockwave(position) { renderPipeline.triggerShockwave(position); },
     onCameraImpulse(amount) {
       cameraDamageKick = Math.min(.2, cameraDamageKick + amount);
     }
   });
+  loadingUI.update(.84, 'COMBAT SYSTEMS', 'PARTICELLE, DRONI E SISTEMI DI IMPATTO...');
+
+  const reflectionBufferSize = new THREE.Vector2();
+  function updateReflectionQuality(profile) {
+    if (!floorReflection) return;
+    renderer.getDrawingBufferSize(reflectionBufferSize);
+    const longestSide = Math.max(1, reflectionBufferSize.x, reflectionBufferSize.y);
+    floorReflection.resolutionScale = Math.min(1, profile.reflectorSize / longestSide);
+  }
 
   const graphicsManager = new GraphicsManager({
     applyProfile(profile, { initial }) {
       renderScale = Math.min(window.devicePixelRatio, profile.pixelRatio);
       renderer.setPixelRatio(renderScale);
       renderer.setSize(window.innerWidth, window.innerHeight);
-      composer.setPixelRatio(renderScale);
-      composer.setSize(window.innerWidth, window.innerHeight);
       if (moonLight) {
         moonLight.shadow.mapSize.set(profile.shadowSize, profile.shadowSize);
         if (moonLight.shadow.map) { moonLight.shadow.map.dispose(); moonLight.shadow.map = null; }
       }
-      if (floorReflector) floorReflector.getRenderTarget().setSize(profile.reflectorSize, profile.reflectorSize);
-      if(gtaoPass){
-        gtaoPass.updateGtaoMaterial({samples:profile.gtaoSamples});
-        gtaoPass.updatePdMaterial({samples:Math.min(16,profile.gtaoSamples)});
-      }
+      updateReflectionQuality(profile);
+      renderPipeline.setQuality(profile);
       facadeSystem.setQuality(profile);
       explosionSystem.setQuality(profile);
       if (!initial) toast(`<b>RENDER</b> · ${profile.name}`);
     },
-    onStatus(status) { hudController.setGraphicsStatus(status); }
+    onStatus(status) { hudController.setGraphicsStatus(`${rendererBackend} · ${status}`); },
+    onTransition(state) {
+      if (state.active) {
+        loadingUI.showModal(state.label, state.detail);
+        loadingUI.update(state.progress, state.label, state.detail);
+      } else {
+        loadingUI.hideModal({ hideOverlay: locked && gameState.started });
+        syncHudVisibility();
+      }
+    }
   });
   graphicsManager.init();
+  loadingUI.update(.92, 'FINAL CHECK', 'SINCRONIZZAZIONE HUD E PROFILI GRAFICI...');
   hudController.mountSettings(overlayEl, {
     qualityMode: graphicsManager.mode,
     mix: audio.mix,
@@ -1998,15 +2038,54 @@
   }
 
   spawnWave(false);
+  loadingUI.update(.96, 'BOOT COMPLETE', 'SINCRONIZZAZIONE FINALE DELLA SCENA...');
+  loadingUI.finishBoot();
 
   /* ============================================================
      8. INPUT: POINTER LOCK, MOUSE E TASTIERA
      ============================================================ */
   const keys = {};
   let locked = false;
+  let gameStartLoading = false;
   let jumpQueued = false;
   let triggerDown = false;
   let fireCooldown = 0;
+
+  async function beginSimulationStart() {
+    if (gameStartLoading || gameState.started) return;
+    gameStartLoading = true;
+    loadingUI.showModal('LINK STARTUP', 'PREPARAZIONE DELLA SIMULAZIONE...');
+    try {
+      await loadingUI.nextFrame();
+      if (!locked) return;
+      try {
+        await audio.start();
+      } catch (error) {
+        console.warn('VIBE audio startup skipped', error);
+      }
+      loadingUI.update(.32, 'AUDIO LINK', 'ATTIVAZIONE DEL MOTORE AUDIO PROCEDURALE...');
+      await loadingUI.nextFrame();
+      if (!locked) return;
+      loadingUI.update(.64, 'COMBAT READY', 'SINCRONIZZAZIONE FISICA, HUD E SISTEMI TATTICI...');
+      await loadingUI.nextFrame();
+      if (!locked) return;
+      loadingUI.update(.86, 'FINAL SYNC', 'APERTURA DEL CANALE DI COMBATTIMENTO...');
+      await new Promise(resolve => setTimeout(resolve, 110));
+      if (!locked) return;
+      gameState.started = true;
+      syncHudVisibility();
+      hudController.beginOnboardingFade();
+      showWave();
+      toast('<b>MISSIONE</b> · AREA DI TEST ATTIVA');
+      loadingUI.update(1, 'LINK ACTIVE', 'SIMULAZIONE OPERATIVA');
+      await loadingUI.nextFrame();
+      await new Promise(resolve => setTimeout(resolve, 180));
+      loadingUI.hideModal({ hideOverlay: true });
+    } finally {
+      gameStartLoading = false;
+      if (!gameState.started) loadingUI.hideModal();
+    }
+  }
 
   document.addEventListener('keydown', (e) => {
     if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
@@ -2027,7 +2106,7 @@
   });
 
   document.addEventListener('mousedown', (e) => {
-    if (!locked || e.button !== 0) return;
+    if (!locked || !gameState.started || gameStartLoading || e.button !== 0) return;
     triggerDown = true;
     fireBullet();
   });
@@ -2045,17 +2124,11 @@
 
   document.addEventListener('pointerlockchange', () => {
     locked = document.pointerLockElement === document.body;
-    overlayEl.style.display = locked ? 'none' : 'flex';
-    crosshairEl.style.display = locked ? 'block' : 'none';
-    hudEl.style.display = locked ? 'block' : 'none';
-    gameHudEl.style.display = locked ? 'block' : 'none';
-    targetLayerEl.style.display = locked ? 'block' : 'none';
+    overlayEl.style.display = locked && gameState.started ? 'none' : 'flex';
+    syncHudVisibility();
     if (locked) triggerDown = false;   // nessun colpo accidentale al rientro
     if (locked && !gameState.started) {
-      gameState.started = true;
-      hudController.beginOnboardingFade();
-      showWave();
-      toast('<b>MISSIONE</b> · AREA DI TEST ATTIVA');
+      beginSimulationStart();
     }
     if(locked)hudController.beginOnboardingFade();
     if (!locked && gameState.started) {
@@ -2161,7 +2234,7 @@
   const effects = [];
 
   function fireBullet() {
-    if (gameState.dead || gameState.reloading) return;
+    if (!gameState.started || gameStartLoading || gameState.dead || gameState.reloading) return;
     if (gameState.ammo <= 0) { audio.dry(); startReload(); fireCooldown = .2; return; }
     gameState.ammo--;
     gameState.shots++;
@@ -2330,7 +2403,8 @@
   /* ============================================================
      11. LOOP DI GIOCO
      ============================================================ */
-  const clock = new THREE.Clock();
+  const frameTimer = new THREE.Timer();
+  frameTimer.connect(document);
   const FIXED_STEP = 1 / 60;
   let accumulator = 0;
   let elapsed = 0;
@@ -2340,18 +2414,26 @@
   let fpsTimer = 0;
 
   function animate() {
-    requestAnimationFrame(animate);
-    const delta = Math.min(clock.getDelta(), 0.1);
+    frameTimer.update();
+    const delta = Math.min(frameTimer.getDelta(), 0.1);
     elapsed += delta;
     accumulator += delta;
+    syncHudVisibility();
 
+    // Correggi subito eventuali residui dello step precedente prima che il
+    // movimento e il raycast del terreno li possano riutilizzare.
+    constrainPlayerToArena();
     updatePlayer(delta);
 
     // Fisica a passo fisso
     while (accumulator >= FIXED_STEP) {
       world.step(FIXED_STEP);
+      // Il clamp tra gli step impedisce che due collisioni simultanee in un
+      // angolo lascino il corpo oltre il muro fino al frame successivo.
+      constrainPlayerToArena();
       accumulator -= FIXED_STEP;
     }
+    constrainPlayerToArena();
 
     // Fuoco continuo tenendo premuto il tasto
     fireCooldown -= delta;
@@ -2404,6 +2486,7 @@
     const bobAmp = Math.min(speed / CONFIG.moveSpeed, 1) * 0.032;
     camera.position.y += Math.sin(bobPhase) * bobAmp;
     camera.position.x += Math.cos(bobPhase * 0.5) * bobAmp * 0.5;
+    constrainCameraToArena();
     camera.rotation.z = Math.sin(bobPhase * .5) * bobAmp * .32;
     cameraDamageKick = Math.max(0, cameraDamageKick - delta * .8);
     camera.rotation.x += Math.sin(elapsed * 46) * cameraDamageKick;
@@ -2426,14 +2509,14 @@
 
     // Pioggia
     if (rain) {
-      const arr = rain.mesh.geometry.attributes.position.array;
+      const arr = rain.pos;
       for (let i = 0; i < rain.vel.length; i++) {
         arr[i * 3 + 1] -= rain.vel[i] * delta;
         if (arr[i * 3 + 1] < 0) arr[i * 3 + 1] = rain.top;
         arr[i * 3]     += Math.sin(elapsed * 1.3 + i) * 0.5 * delta;
         arr[i * 3 + 2] += Math.cos(elapsed * 0.9 + i * 0.7) * 0.5 * delta;
       }
-      rain.mesh.geometry.attributes.position.needsUpdate = true;
+      rain.positionAttribute.needsUpdate = true;
     }
 
     // Vapore dai tombini: sprite morbidi con deriva e dissolvenza non sincronizzata.
@@ -2447,11 +2530,6 @@
 
     updateTargetMarkers();
     audio.updateDroneHums(drones,camera);
-    if(shockwaveProgress<1){
-      shockwaveProgress=Math.min(1,shockwaveProgress+delta/0.56);
-      shockwavePass.uniforms['progress'].value=shockwaveProgress;
-      shockwavePass.uniforms['strength'].value=.032*(1-shockwaveProgress);
-    }
     radarTimer -= delta;
     if (radarTimer <= 0) { updateRadar(elapsed); radarTimer = .075; }
     fpsFrames++; fpsTimer += delta;
@@ -2462,13 +2540,11 @@
       fpsFrames = 0; fpsTimer = 0;
     }
 
-    // Grana cinematografica animata
-    grainPass.uniforms['time'].value = elapsed;
-
-    // Render con post-processing (GTAO, bloom, FXAA, grana, vignette, output)
-    composer.render();
+    // Render WebGPU/TSL con GTAO, bloom, SMAA, grana, grading, shockwave e vignetta.
+    renderPipeline.render(delta, elapsed);
+    explosionSystem.finishWarmup();
   }
-  animate();
+  renderer.setAnimationLoop(animate);
 
   /* ============================================================
      12. RESIZE
@@ -2477,8 +2553,8 @@
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
-    composer.setSize(window.innerWidth, window.innerHeight);
-    shockwavePass.uniforms['aspect'].value=window.innerWidth/window.innerHeight;
+    renderPipeline.resize(window.innerWidth, window.innerHeight);
+    if (graphicsManager.profile) updateReflectionQuality(graphicsManager.profile);
   });
   </script>
 </body>

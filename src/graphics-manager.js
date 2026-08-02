@@ -1,15 +1,17 @@
 import { QUALITY_PROFILES, getStoredQualityMode, storeQualityMode } from './config.js';
 
 export class GraphicsManager {
-  constructor({ applyProfile, onStatus }) {
+  constructor({ applyProfile, onStatus, onTransition }) {
     this.applyProfile = applyProfile;
     this.onStatus = onStatus || (() => {});
+    this.onTransition = onTransition || (() => {});
     this.mode = getStoredQualityMode();
     this.autoTier = 'autoHigh';
     this.lowWindows = 0;
     this.highWindows = 0;
     this.cooldown = 0;
     this.profile = null;
+    this.transitioning = false;
   }
 
   init() {
@@ -18,12 +20,34 @@ export class GraphicsManager {
   }
 
   setMode(mode) {
-    this.mode = mode === 'ultra' ? 'ultra' : 'auto';
+    const nextMode = mode === 'ultra' ? 'ultra' : 'auto';
+    if (this.transitioning || nextMode === this.mode) return;
+    this.mode = nextMode;
     this.autoTier = 'autoHigh';
     this.lowWindows = 0;
     this.highWindows = 0;
     storeQualityMode(this.mode);
-    this.applyCurrent(false);
+    if (this.mode !== 'ultra') {
+      this.applyCurrent(false);
+      return;
+    }
+
+    this.transitioning = true;
+    this.onTransition({ active: true, progress: 0, label: 'ULTRA PROFILE', detail: 'PREPARAZIONE DELLE RISORSE AD ALTA QUALITÀ...' });
+    requestAnimationFrame(() => {
+      this.onTransition({ active: true, progress: .18, label: 'ULTRA PROFILE', detail: 'RIDIMENSIONAMENTO DEL BUFFER GRAFICO...' });
+      requestAnimationFrame(() => {
+        this.applyCurrent(false);
+        this.onTransition({ active: true, progress: .78, label: 'ULTRA PROFILE', detail: 'RICOSTRUZIONE TEXTURE E RIFLESSI...' });
+        requestAnimationFrame(() => {
+          this.onTransition({ active: true, progress: 1, label: 'ULTRA READY', detail: 'PROFILO ULTRA APPLICATO · SINCRONIZZAZIONE COMPLETATA' });
+          setTimeout(() => {
+            this.transitioning = false;
+            this.onTransition({ active: false });
+          }, 260);
+        });
+      });
+    });
   }
 
   applyCurrent(initial) {

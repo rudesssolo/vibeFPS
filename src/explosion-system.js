@@ -1,68 +1,10 @@
 import * as THREE from 'three';
+import { instancedBufferAttribute, smoothstep, uv } from 'three/tsl';
 
 const MAX_ADDITIVE = 720;
 const MAX_SMOKE = 360;
 const MAX_DEBRIS = 144;
 const MAX_SHOCKWAVES = 12;
-
-const ParticleShader = {
-  vertexShader: `
-    attribute float aSize;
-    attribute float aOpacity;
-    attribute vec3 aColor;
-    varying float vOpacity;
-    varying vec3 vColor;
-    void main(){
-      vec4 mvPosition=modelViewMatrix*vec4(position,1.0);
-      gl_Position=projectionMatrix*mvPosition;
-      gl_PointSize=aSize*(300.0/max(1.0,-mvPosition.z));
-      vOpacity=aOpacity;
-      vColor=aColor;
-    }`,
-  fragmentShader: `
-    varying float vOpacity;
-    varying vec3 vColor;
-    void main(){
-      vec2 p=gl_PointCoord-.5;
-      float d=length(p)*2.0;
-      float core=1.0-smoothstep(.12,1.0,d);
-      float halo=1.0-smoothstep(.42,1.0,d);
-      float alpha=(core*.72+halo*.28)*vOpacity;
-      if(alpha<.003)discard;
-      gl_FragColor=vec4(vColor,alpha);
-    }`
-};
-
-export const ShockwaveShader = {
-  name: 'ExplosionShockwave',
-  uniforms: {
-    tDiffuse: { value: null },
-    center: { value: new THREE.Vector2(.5, .5) },
-    progress: { value: 1 },
-    strength: { value: 0 },
-    aspect: { value: 1 }
-  },
-  vertexShader: `varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
-  fragmentShader: `
-    uniform sampler2D tDiffuse;
-    uniform vec2 center;
-    uniform float progress;
-    uniform float strength;
-    uniform float aspect;
-    varying vec2 vUv;
-    void main(){
-      vec2 delta=vUv-center;
-      delta.x*=aspect;
-      float radius=length(delta);
-      float ring=smoothstep(.055,.0,abs(radius-progress*.42));
-      vec2 dir=radius>.0001?delta/radius:vec2(0.0);
-      dir.x/=aspect;
-      vec2 displaced=vUv-dir*ring*strength*(1.0-progress);
-      vec3 color=texture2D(tDiffuse,displaced).rgb;
-      color+=ring*vec3(.08,.16,.2)*(1.0-progress);
-      gl_FragColor=vec4(color,1.0);
-    }`
-};
 
 class ParticlePool {
   constructor(scene, maximum, blending) {
@@ -81,24 +23,39 @@ class ParticlePool {
       drag: 0
     }));
     this.cursor = 0;
-    const geometry = new THREE.BufferGeometry();
     this.positions = new Float32Array(maximum * 3);
     this.colors = new Float32Array(maximum * 3);
     this.sizes = new Float32Array(maximum);
     this.opacities = new Float32Array(maximum);
-    geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3).setUsage(THREE.DynamicDrawUsage));
-    geometry.setAttribute('aColor', new THREE.BufferAttribute(this.colors, 3).setUsage(THREE.DynamicDrawUsage));
-    geometry.setAttribute('aSize', new THREE.BufferAttribute(this.sizes, 1).setUsage(THREE.DynamicDrawUsage));
-    geometry.setAttribute('aOpacity', new THREE.BufferAttribute(this.opacities, 1).setUsage(THREE.DynamicDrawUsage));
-    const material = new THREE.ShaderMaterial({
-      vertexShader: ParticleShader.vertexShader,
-      fragmentShader: ParticleShader.fragmentShader,
+    this.activeCount = 0;
+    const positionAttribute = new THREE.InstancedBufferAttribute(this.positions, 3).setUsage(THREE.DynamicDrawUsage);
+    const colorAttribute = new THREE.InstancedBufferAttribute(this.colors, 3).setUsage(THREE.DynamicDrawUsage);
+    const sizeAttribute = new THREE.InstancedBufferAttribute(this.sizes, 1).setUsage(THREE.DynamicDrawUsage);
+    const opacityAttribute = new THREE.InstancedBufferAttribute(this.opacities, 1).setUsage(THREE.DynamicDrawUsage);
+    this.attributes = [positionAttribute, colorAttribute, sizeAttribute, opacityAttribute];
+
+    const pointUv = uv().sub(.5);
+    const distance = pointUv.length().mul(2);
+    const core = smoothstep(.12, 1, distance).oneMinus();
+    const halo = smoothstep(.42, 1, distance).oneMinus();
+    const radialOpacity = core.mul(.72).add(halo.mul(.28));
+    const material = new THREE.PointsNodeMaterial({
+      positionNode: instancedBufferAttribute(positionAttribute),
+      colorNode: instancedBufferAttribute(colorAttribute),
+      // Gli sprite WebGPU non hanno il limite hardware di gl_PointSize: una
+      // scala in unità prospettiche evita quad grandi migliaia di pixel.
+      sizeNode: instancedBufferAttribute(sizeAttribute).mul(.065),
+      opacityNode: radialOpacity.mul(instancedBufferAttribute(opacityAttribute)),
+      sizeAttenuation: true,
       transparent: true,
       depthWrite: false,
       blending,
-      toneMapped: false
+      toneMapped: false,
+      alphaTest: .003,
+      alphaToCoverage: true
     });
-    this.points = new THREE.Points(geometry, material);
+    this.points = new THREE.Sprite(material);
+    this.points.count = maximum;
     this.points.frustumCulled = false;
     scene.add(this.points);
   }
@@ -117,6 +74,7 @@ class ParticlePool {
       particle = this.particles[this.cursor];
       this.cursor = (this.cursor + 1) % this.maximum;
     }
+    if (!particle.active) this.activeCount++;
     particle.active = true;
     particle.position.copy(options.position);
     particle.velocity.copy(options.velocity || new THREE.Vector3());
@@ -130,6 +88,7 @@ class ParticlePool {
   }
 
   update(delta, smoke = false) {
+    if (this.activeCount === 0) return;
     for (let i = 0; i < this.maximum; i++) {
       const particle = this.particles[i];
       const offset = i * 3;
@@ -155,9 +114,12 @@ class ParticlePool {
       this.colors[offset + 2] = particle.color.b;
       this.sizes[i] = THREE.MathUtils.lerp(particle.sizeStart, particle.sizeEnd, t);
       this.opacities[i] = smoke ? Math.sin(Math.PI * t) * .52 : (1 - t) ** 1.5;
-      if (t >= 1) particle.active = false;
+      if (t >= 1) {
+        particle.active = false;
+        this.activeCount--;
+      }
     }
-    for (const attribute of Object.values(this.points.geometry.attributes)) attribute.needsUpdate = true;
+    for (const attribute of this.attributes) attribute.needsUpdate = true;
   }
 }
 
@@ -181,6 +143,7 @@ export class ExplosionSystem {
       scale: 1
     }));
     this.debrisCursor = 0;
+    this.activeDebris = 0;
     this.debrisMesh = new THREE.InstancedMesh(
       new THREE.IcosahedronGeometry(.11, 0),
       new THREE.MeshStandardMaterial({ color: 0x59636d, metalness: .9, roughness: .32, envMapIntensity: 1.4 }),
@@ -192,12 +155,21 @@ export class ExplosionSystem {
     this.matrix = new THREE.Matrix4();
     this.quaternion = new THREE.Quaternion();
     this.scaleVector = new THREE.Vector3();
+    this.scaleVector.setScalar(0);
+    for (let i = 0; i < MAX_DEBRIS; i++) {
+      this.matrix.compose(this.debris[i].position, this.quaternion, this.scaleVector);
+      this.debrisMesh.setMatrixAt(i, this.matrix);
+    }
+    this.debrisMesh.instanceMatrix.needsUpdate = true;
 
     this.shockwaves = [];
+    this.warmupPending = true;
     for (let i = 0; i < MAX_SHOCKWAVES; i++) {
       const material = new THREE.MeshBasicMaterial({ color: 0x8df7ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
       const mesh = new THREE.Mesh(new THREE.RingGeometry(.28, .43, 42), material);
-      mesh.visible = false;
+      // Resta nel render graph con opacity 0: così la pipeline non viene compilata
+      // durante la prima esplosione, causando uno stallo visibile.
+      mesh.visible = true;
       scene.add(mesh);
       this.shockwaves.push({ mesh, material, active: false, age: 0, life: .55 });
     }
@@ -205,14 +177,13 @@ export class ExplosionSystem {
     this.lights = [];
     for (let i = 0; i < 8; i++) {
       const light = new THREE.PointLight(0xffa05c, 0, 18, 2);
-      light.visible = false;
+      light.visible = i < this.lightLimit;
+      light.userData.active = false;
       light.userData.age = 0;
       light.userData.life = .45;
-      if (i === 0) {
-        light.castShadow = true;
-        light.shadow.mapSize.set(512, 512);
-        light.shadow.bias = -.001;
-      }
+      // Le ombre cubiche di una PointLight richiedono sei passaggi completi e
+      // provocavano il blocco più evidente in Ultra al primo scoppio.
+      light.castShadow = false;
       scene.add(light);
       this.lights.push(light);
     }
@@ -221,7 +192,21 @@ export class ExplosionSystem {
   setQuality(profile) {
     this.particleScale = profile.particleScale;
     this.lightLimit = profile.dynamicLights;
-    this.lights[0].castShadow = profile.dynamicLights >= 8;
+    this.lights.forEach((light, index) => {
+      light.visible = index < this.lightLimit;
+      if (!light.visible) {
+        light.userData.active = false;
+        light.intensity = 0;
+      }
+    });
+  }
+
+  finishWarmup() {
+    if (!this.warmupPending) return;
+    this.warmupPending = false;
+    for (const wave of this.shockwaves) {
+      if (!wave.active) wave.mesh.visible = false;
+    }
   }
 
   randomDirection(speed, verticalBias = 0) {
@@ -294,6 +279,7 @@ export class ExplosionSystem {
       }
     }
     if (!debris) debris = this.debris[this.debrisCursor++ % MAX_DEBRIS];
+    if (!debris.active) this.activeDebris++;
     debris.active = true;
     debris.position.copy(position);
     debris.velocity.copy(this.randomDirection(7, .28));
@@ -316,20 +302,21 @@ export class ExplosionSystem {
   }
 
   spawnLight(position) {
-    const light = this.lights.slice(0, this.lightLimit).find(item => !item.visible) || this.lights[0];
+    const light = this.lights.slice(0, this.lightLimit).find(item => !item.userData.active) || this.lights[0];
     light.position.copy(position);
     light.color.setHex(Math.random() < .28 ? 0x71eaff : 0xff9354);
     light.intensity = this.lightLimit >= 8 ? 48 : 32;
-    light.visible = true;
+    light.userData.active = true;
     light.userData.age = 0;
   }
 
   update(delta, camera) {
     this.additive.update(delta, false);
     this.smoke.update(delta, true);
-    for (let i = 0; i < MAX_DEBRIS; i++) {
-      const debris = this.debris[i];
-      if (debris.active) {
+    if (this.activeDebris > 0) {
+      for (let i = 0; i < MAX_DEBRIS; i++) {
+        const debris = this.debris[i];
+        if (!debris.active) continue;
         debris.age += delta;
         debris.velocity.y -= 9.82 * delta;
         debris.position.addScaledVector(debris.velocity, delta);
@@ -348,14 +335,13 @@ export class ExplosionSystem {
         this.scaleVector.setScalar(scale);
         this.matrix.compose(debris.position, this.quaternion, this.scaleVector);
         this.debrisMesh.setMatrixAt(i, this.matrix);
-        if (debris.age >= debris.life) debris.active = false;
-      } else {
-        this.scaleVector.setScalar(0);
-        this.matrix.compose(debris.position, this.quaternion.identity(), this.scaleVector);
-        this.debrisMesh.setMatrixAt(i, this.matrix);
+        if (debris.age >= debris.life) {
+          debris.active = false;
+          this.activeDebris--;
+        }
       }
+      this.debrisMesh.instanceMatrix.needsUpdate = true;
     }
-    this.debrisMesh.instanceMatrix.needsUpdate = true;
 
     for (const wave of this.shockwaves) {
       if (!wave.active) continue;
@@ -364,14 +350,14 @@ export class ExplosionSystem {
       wave.mesh.lookAt(camera.position);
       wave.mesh.scale.setScalar(1 + t * 9);
       wave.material.opacity = (1 - t) * .82;
-      if (t >= 1) { wave.active = false; wave.mesh.visible = false; }
+      if (t >= 1) { wave.active = false; wave.material.opacity = 0; wave.mesh.visible = false; }
     }
     for (const light of this.lights) {
-      if (!light.visible) continue;
+      if (!light.userData.active) continue;
       light.userData.age += delta;
       const t = light.userData.age / light.userData.life;
       light.intensity *= Math.max(0, 1 - delta * 8.5);
-      if (t >= 1) { light.visible = false; light.intensity = 0; }
+      if (t >= 1) { light.userData.active = false; light.intensity = 0; }
     }
   }
 }

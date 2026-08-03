@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test",
+    "test": "node --import ./tests/helpers/register-stubs.mjs --test",
+    "lint:tsl": "node tools/check-tsl-imports.mjs",
     "smoke": "node tools/smoke-boot.mjs"
   }
 }

@@ -81,7 +81,21 @@ async function main() {
   const failures = [];
   let browser = null;
   try {
-    browser = await playwright.chromium.launch({ headless: true, args: ['--no-sandbox'] });
+    // Senza questi flag Chromium headless non espone navigator.gpu, quindi il
+    // boot prendeva SEMPRE il ramo di fallback e uscivamo da bootGame() prima di
+    // costruire scena, materiali e sistemi di combattimento: un errore nel corpo
+    // del boot (es. un simbolo TSL non importato) restava invisibile allo smoke
+    // test. Con l'adapter software di Dawn il percorso reale viene eseguito.
+    browser = await playwright.chromium.launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--enable-unsafe-webgpu',
+        '--enable-features=Vulkan',
+        '--use-angle=swiftshader',
+        '--use-gl=angle'
+      ]
+    });
     const page = await browser.newPage();
     page.on('pageerror', error => failures.push(`pageerror: ${String(error).slice(0, 300)}`));
     page.on('console', message => {
@@ -108,6 +122,12 @@ async function main() {
 
     if (!state.adapter && !(state.gpuUnavailable && state.warningVisible)) {
       failures.push('senza adapter WebGPU il pannello di recovery non è stato mostrato');
+    }
+    // Il ramo di fallback verifica solo il pannello di recovery: NON esegue il
+    // corpo del boot. Con SMOKE_REQUIRE_WEBGPU=1 il test pretende un adapter,
+    // così in CI si può garantire che il percorso reale sia stato coperto.
+    if (process.env.SMOKE_REQUIRE_WEBGPU === '1' && !state.adapter) {
+      failures.push('SMOKE_REQUIRE_WEBGPU=1 ma nessun adapter WebGPU: il boot reale non è stato eseguito');
     }
     if (failures.length) {
       console.error('[smoke] FALLITO:');

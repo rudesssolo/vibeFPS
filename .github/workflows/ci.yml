@@ -7,7 +7,7 @@ on:
 
 jobs:
   test:
-    name: Test & syntax check
+    name: Test & static checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,13 +16,20 @@ jobs:
         with:
           node-version: 20
 
+      # `npm test` (non `node --test`): i test dei sistemi grafici hanno bisogno
+      # del loader che rimappa 'three' / 'three/tsl' sugli stub.
       - name: Unit tests
-        run: node --test
+        run: npm test
 
-      - name: Syntax check src & tests
+      # node --check valida solo la sintassi: non vede un simbolo TSL usato ma
+      # non importato, che a runtime è un ReferenceError in fase di boot.
+      - name: TSL import check
+        run: npm run lint:tsl
+
+      - name: Syntax check src, tests & tools
         run: |
           set -e
-          for f in src/*.js tests/*.js; do node --check "$f"; done
+          for f in src/*.js tests/*.js tests/helpers/*.mjs tools/*.mjs; do node --check "$f"; done
 
       - name: Syntax check inline module script in index.html
         run: |

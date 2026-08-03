@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getStoredMix, storeMix, getStoredQualityMode, storeQualityMode, getStoredMuted, storeMuted, getApexArchetype, getApexStats, APEX_ROSTER, APEX_TUNING } from '../src/config.js';
+import { getStoredMix, storeMix, getStoredQualityMode, storeQualityMode, getStoredMuted, storeMuted, getApexArchetype, getApexStats, APEX_ROSTER, APEX_TUNING, QUALITY_PROFILES } from '../src/config.js';
 
 function withStorage(initial = {}) {
   const store = new Map(Object.entries(initial));
@@ -78,6 +78,33 @@ test('mute state survives a blocked storage (N8)', () => {
   } finally {
     Object.defineProperty(globalThis, 'localStorage', { value: original, configurable: true });
   }
+});
+
+// --- Profili qualità: contratto con i sistemi che li consumano ---
+
+test('ogni profilo qualità espone tutti i parametri consumati dai sistemi', () => {
+  // ExplosionSystem.explode() ricava il numero di puff di fumo da smokePuffs:
+  // se un profilo lo omettesse, il fumo delle esplosioni spariva in silenzio.
+  const required = [
+    'name', 'pixelRatio', 'shadowSize', 'reflectorSize',
+    'gtaoSamples', 'facadeResolution', 'particleScale', 'smokePuffs', 'dynamicLights'
+  ];
+  const keys = Object.keys(QUALITY_PROFILES);
+  assert.deepEqual(keys, ['autoHigh', 'autoLow', 'ultra']);
+  for (const key of keys) {
+    const profile = QUALITY_PROFILES[key];
+    for (const field of required) {
+      assert.ok(field in profile, `${key}: manca '${field}'`);
+    }
+    assert.equal(typeof profile.name, 'string');
+    for (const field of required.filter(f => f !== 'name')) {
+      assert.ok(Number.isFinite(profile[field]), `${key}.${field} non è un numero finito`);
+    }
+    assert.ok(profile.smokePuffs > 0, `${key}: smokePuffs deve essere positivo`);
+  }
+  // Il costo del fumo deve crescere con il livello di qualità.
+  assert.ok(QUALITY_PROFILES.autoLow.smokePuffs < QUALITY_PROFILES.autoHigh.smokePuffs);
+  assert.ok(QUALITY_PROFILES.autoHigh.smokePuffs < QUALITY_PROFILES.ultra.smokePuffs);
 });
 
 // --- Apex Sentinel: roster a ciclo + tier scaling ---

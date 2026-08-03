@@ -281,3 +281,106 @@ export function makeKoreanSignCanvas(text, colorHex) {
   ctx.fillText(text, w / 2, h / 2 + 4);
   return c;
 }
+
+// Texture di fumo "realistico": un cumulo opaco con macchie di rumore e bordo
+// sfilacciato, al posto del classico puff radiale perfettamente liscio (che
+// legge come "cartoon"). Ritorna una canvas RGBA: il canale alpha ha il
+// gradiente di copertura (bordo trasparente, interno con buchi), l'RGB varia
+// leggermente per dare profondità al colore. Default 256 (256 risoluzione
+// sufficiente per lo sprite billboarded del sistema particelle).
+export function makeSmokeCanvas(size = 256, seed = 17) {
+  const s = size;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const ctx = c.getContext('2d');
+  const rand = makeRng(seed);
+  const cx = s / 2, cy = s / 2, maxR = s * 0.5;
+
+  // Envelope radiale: il fumo deve essere più denso al centro e svanire ai
+  // bordi, così lo sprite non mostra un rettangolo netto.
+  const envelope = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR);
+  envelope.addColorStop(0.0, 'rgba(255,255,255,1)');
+  envelope.addColorStop(0.55, 'rgba(255,255,255,0.85)');
+  envelope.addColorStop(0.85, 'rgba(255,255,255,0.35)');
+  envelope.addColorStop(1.0, 'rgba(255,255,255,0)');
+  ctx.fillStyle = envelope;
+  ctx.fillRect(0, 0, s, s);
+
+  // Macroscopic "grumi" di fumo: blob sovrapposti di varia forma/dimensione.
+  // Sommandosi con source-over creano un cumulo continuo con buchi e sbuffi.
+  const blobs = Math.round(46 + rand() * 14);
+  for (let i = 0; i < blobs; i++) {
+    const gx = cx + (rand() - 0.5) * s * 0.62;
+    const gy = cy + (rand() - 0.5) * s * 0.66;
+    const r = (0.08 + rand() * 0.24) * s;
+    const a = 0.05 + rand() * 0.10;
+    const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, r);
+    const shade = 250 + Math.round(rand() * 5);
+    g.addColorStop(0, `rgba(${shade},${shade},${shade},${a})`);
+    g.addColorStop(0.7, `rgba(${shade - 6},${shade - 6},${shade - 6},${a * 0.6})`);
+    g.addColorStop(1, `rgba(${shade - 12},${shade - 12},${shade - 12},0)`);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(gx, gy, r, r * (0.55 + rand() * 0.75), rand() * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Sfregi / sbuffi allungati: rompono la simmetria rotonda del puff.
+  const wisps = Math.round(18 + rand() * 8);
+  for (let i = 0; i < wisps; i++) {
+    const gx = cx + (rand() - 0.5) * s * 0.7;
+    const gy = cy + (rand() - 0.5) * s * 0.7;
+    const rx = (0.1 + rand() * 0.22) * s;
+    const ry = rx * (0.18 + rand() * 0.3);
+    const a = 0.05 + rand() * 0.08;
+    const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, rx);
+    g.addColorStop(0, `rgba(255,255,255,${a})`);
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(gx, gy, rx, ry, rand() * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Buchi: sottraggono opacità in punti casuali per un volume non uniforme.
+  // Vanno composti con 'destination-out' — con il source-over di default i
+  // gradienti neri DEPOSITANO nero semitrasparente (scurendo il fumo) invece
+  // di rimuovere copertura.
+  const holes = Math.round(30 + rand() * 12);
+  const holeCanvas = document.createElement('canvas');
+  holeCanvas.width = holeCanvas.height = s;
+  const hctx = holeCanvas.getContext('2d');
+  for (let i = 0; i < holes; i++) {
+    const hx = cx + (rand() - 0.5) * s * 0.6;
+    const hy = cy + (rand() - 0.5) * s * 0.6;
+    const hr = (0.03 + rand() * 0.09) * s;
+    const g = hctx.createRadialGradient(hx, hy, 0, hx, hy, hr);
+    g.addColorStop(0, 'rgba(0,0,0,0.35)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    hctx.fillStyle = g;
+    hctx.beginPath();
+    hctx.ellipse(hx, hy, hr, hr * (0.5 + rand() * 0.8), rand() * Math.PI, 0, Math.PI * 2);
+    hctx.fill();
+  }
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.drawImage(holeCanvas, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  return c;
+}
+
+// Halo radiale bianco per i proiettili "glowing": nucleo pieno e coda morbida
+// che si dissolve verso l'esterno. Usato come map degli sprite additivi, così
+// il bloom lo raccoglie e produce l'alone luminoso attorno al colpo.
+export function makeGlowCanvas(size = 64) {
+  const s = size;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const ctx = c.getContext('2d');
+  const cx = s / 2;
+  const g = ctx.createRadialGradient(cx, cx, 0, cx, cx, cx);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.25, 'rgba(255,255,255,0.72)');
+  g.addColorStop(0.55, 'rgba(255,255,255,0.28)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, s, s);
+  return c;
+}

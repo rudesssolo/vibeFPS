@@ -74,7 +74,10 @@ export class DroneSystem {
     if (this.apex.ring?.material) this.apex.ring.material.dispose();
     if (this.apex.afterimage?.material) this.apex.afterimage.material.dispose();
     for (const part of this.apex.parts || []) {
-      if (part.material) part.material.dispose();
+      // darkMaterial è CONDIVISO con le ali di ogni drone e con gli Apex futuri
+      // (spine, blade, lowerPlate lo riusano): disporlo qui liberava risorse GPU
+      // di un materiale ancora in scena, a ogni cambio di Apex.
+      if (part.material && part.material !== this.darkMaterial) part.material.dispose();
     }
     this.apex = null;
   }

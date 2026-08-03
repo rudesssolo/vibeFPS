@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { instancedBufferAttribute, smoothstep, uv } from 'three/tsl';
+import { VolumetricSmokeSystem } from './smoke-volume.js';
 
 const MAX_ADDITIVE = 720;
-const MAX_SMOKE = 360;
 const MAX_DEBRIS = 144;
 const MAX_SHOCKWAVES = 12;
 
@@ -92,7 +92,7 @@ class ParticlePool {
     particle.drag = options.drag || 0;
   }
 
-  update(delta, smoke = false) {
+  update(delta) {
     if (this.activeCount === 0) return;
     for (let i = 0; i < this.maximum; i++) {
       const particle = this.particles[i];
@@ -118,7 +118,7 @@ class ParticlePool {
       this.colors[offset + 1] = particle.color.g;
       this.colors[offset + 2] = particle.color.b;
       this.sizes[i] = THREE.MathUtils.lerp(particle.sizeStart, particle.sizeEnd, t);
-      this.opacities[i] = smoke ? Math.sin(Math.PI * t) * .52 : (1 - t) ** 1.5;
+      this.opacities[i] = (1 - t) ** 1.5;
       if (t >= 1) {
         particle.active = false;
         this.activeCount--;
@@ -149,7 +149,19 @@ export class ExplosionSystem {
     this.onShockwave = onShockwave || (() => {});
     this.onCameraImpulse = onCameraImpulse || (() => {});
     this.additive = new ParticlePool(scene, MAX_ADDITIVE, THREE.AdditiveBlending);
-    this.smoke = new ParticlePool(scene, MAX_SMOKE, THREE.NormalBlending);
+    // Fumo delle esplosioni: vero volume 3D raymarchato (nuvola con parallasse,
+    // illuminazione e self-shadow), invece dei puff sprite billboarded.
+    //
+    // La costruzione del materiale compila un grafo TSL non banale: un errore
+    // lì non deve impedire il boot dell'intera simulazione. Stessa politica di
+    // RenderPipelineController, che in caso di fallimento bypassa il post e
+    // tiene vivo il rendering di base.
+    try {
+      this.volumetric = new VolumetricSmokeSystem(scene);
+    } catch (error) {
+      console.error('VIBE volumetric smoke disabled', error);
+      this.volumetric = { spawn() {}, update() {}, reset() {}, setQuality() {}, puffBudget: 0 };
+    }
     this.particleScale = .72;
     this.lightLimit = 4;
     this.debris = Array.from({ length: MAX_DEBRIS }, () => ({
@@ -212,6 +224,9 @@ export class ExplosionSystem {
   setQuality(profile) {
     this.particleScale = profile.particleScale;
     this.lightLimit = profile.dynamicLights;
+    // Il fumo volumetrico costa per pixel, non per particella: ha un budget
+    // proprio nel profilo invece di seguire particleScale.
+    this.volumetric.setQuality(profile);
     this.lights.forEach((light, index) => {
       light.visible = index < this.lightLimit;
       if (!light.visible) {
@@ -231,7 +246,7 @@ export class ExplosionSystem {
 
   reset() {
     this.additive.reset();
-    this.smoke.reset();
+    this.volumetric.reset();
     this.debrisCursor = 0;
     this.activeDebris = 0;
     this.scaleVector.setScalar(0);
@@ -282,7 +297,9 @@ export class ExplosionSystem {
 
   explode(position, accent = 0x66efff) {
     const sparkCount = Math.round(48 * this.particleScale);
-    const smokeCount = Math.round(24 * this.particleScale);
+    // Il budget dei puff arriva dal profilo qualità (già scalato per tier): non
+    // va moltiplicato di nuovo per particleScale.
+    const smokeCount = this.volumetric.puffBudget ?? 0;
     const debrisCount = Math.round(14 * this.particleScale);
     this.additive.spawn({ position, color: 0xffe0a0, life: .22, sizeStart: 32, sizeEnd: 132, drag: 5 });
     this.additive.spawn({ position, color: accent, life: .34, sizeStart: 22, sizeEnd: 104, drag: 4 });
@@ -298,17 +315,24 @@ export class ExplosionSystem {
         drag: .35
       });
     }
+    // Volumi di fumo 3D: pochi puff grandi e raymarchati (il costo per pixel è
+    // alto, quindi meno puff ma più "pieni" e fotorealistici dei sprite 2D).
     for (let i = 0; i < smokeCount; i++) {
-      this.smoke.spawn({
-        position: position.clone().add(this.randomDirection(.4)),
-        velocity: this.randomDirection(1.8, .72),
-        color: Math.random() < .35 ? 0x53616b : 0x252b31,
-        life: 1.2 + Math.random() * 1.15,
-        sizeStart: 15 + Math.random() * 15,
-        sizeEnd: 70 + Math.random() * 55,
-        delay: Math.random() * .18,
-        gravity: -1.2,
-        drag: .72
+      this.volumetric.spawn({
+        position: position.clone().add(this.randomDirection(.55)),
+        velocity: this.randomDirection(1.9, .9),
+        color: Math.random() < .4 ? 0x8a93a0 : 0x5a626e,
+        life: 2.4 + Math.random() * 1.6,
+        radiusStart: .35 + Math.random() * .5,
+        radiusEnd: 2.8 + Math.random() * 2.6,
+        delay: Math.random() * .3,
+        gravity: -1.6,
+        drag: .5,
+        turbulence: .7 + Math.random() * .9,
+        phase: Math.random() * Math.PI * 2,
+        origin: position.clone(),
+        density: .9 + Math.random() * .4,
+        noiseSpeed: .55 + Math.random() * .55
       });
     }
     for (let i = 0; i < debrisCount; i++) this.spawnDebris(position);
@@ -361,8 +385,10 @@ export class ExplosionSystem {
   }
 
   update(delta, camera) {
-    this.additive.update(delta, false);
-    this.smoke.update(delta, true);
+    this.additive.update(delta);
+    // La camera serve al fumo volumetrico per sapere se si trova dentro un puff
+    // (commutazione del culling delle facce, vedi VolumetricSmokeSystem).
+    this.volumetric.update(delta, camera);
     if (this.activeDebris > 0) {
       for (let i = 0; i < MAX_DEBRIS; i++) {
         const debris = this.debris[i];

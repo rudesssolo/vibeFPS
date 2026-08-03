@@ -355,7 +355,7 @@
   <script type="module">
   import * as THREE from 'three/webgpu';
   import {
-    blendOverlay, color, dot, instancedBufferAttribute, max, mix,
+    color, dot, instancedBufferAttribute, max, mix,
     positionGeometry, reflector, smoothstep, uniform, vec3
   } from 'three/tsl';
   import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
@@ -382,7 +382,8 @@
   applyStaticStrings();
   import {
     canvasToNormalTexture, makePbrMaps, makeMetalPanelTexture, makeWoodTexture,
-    makeBrushedCanvas, makeAsphaltCanvas, makeHazardCanvas, makeKoreanSignCanvas
+    makeBrushedCanvas, makeAsphaltCanvas, makeHazardCanvas, makeKoreanSignCanvas,
+    makeSmokeCanvas, makeGlowCanvas
   } from './src/textures.js';
 
   const loadingUI = (() => {
@@ -549,7 +550,10 @@
       ]
     },
     reflectiveFloor: true,
-    reflector: { color: 0x0d1220 }
+    // `strength` moltiplica il riflesso sommato in HDR lineare. Non c'è più un
+    // colore di base: il vecchio blendOverlay su base scura schiacciava il
+    // riflesso quasi a zero.
+    reflector: { strength: 0.8 }
   };
 
   // Gruppi di collisione (bitmask)
@@ -886,7 +890,7 @@
   // al perimetro.
   let floorReflection = null;
   if (GRAPHICS.reflectiveFloor) {
-    floorReflection = reflector({ resolutionScale: .25, bounces: false, samples: 0 });
+    floorReflection = reflector({ resolutionScale: .3, bounces: false, samples: 0 });
   } else {
     const floorMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(floorSize, floorSize),
@@ -917,22 +921,15 @@
   const asphaltMaterial = floorReflection
     ? new THREE.MeshPhysicalNodeMaterial(asphaltMaterialOptions)
     : new THREE.MeshPhysicalMaterial(asphaltMaterialOptions);
-  // Materiale di continuità usato negli ultimi metri prima del muro. Evita
-  // che il render target del riflesso del pavimento venga aggiornato mentre
-  // la camera attraversa la zona di precisione più delicata del perimetro.
-  const asphaltEdgeSafeMaterial = floorReflection
-    ? new THREE.MeshPhysicalMaterial({
-      ...asphaltMaterialOptions,
-      transparent: false,
-      opacity: 1,
-      depthWrite: true
-    })
-    : null;
+  // Il pavimento NON ha più un materiale "edge safe" senza riflesso: il piano
+  // dello specchio è orizzontale, quindi la distanza dai muri non influenza la
+  // stabilità del reflector. Lo swap serviva solo a fermarne l'aggiornamento e
+  // il risultato era un riflesso che sparisce camminando lungo il perimetro.
   if (floorReflection) {
-    asphaltMaterial.emissiveNode = blendOverlay(
-      floorReflection.rgb,
-      color(GRAPHICS.reflector.color)
-    ).mul(.28);
+    // Riflesso pieno: somma diretta (HDR lineare) moltiplicata per la forza
+    // configurata. Il vecchio blendOverlay con base scura schiacciava il riflesso
+    // quasi a zero; ora neon, proiettili ed esplosioni si vedono sul pavimento.
+    asphaltMaterial.emissiveNode = floorReflection.rgb.mul(GRAPHICS.reflector.strength);
   }
   const asphaltSkin = new THREE.Mesh(
     // Il pavimento invade leggermente lo spessore dei muri: in questo modo un
@@ -962,9 +959,6 @@
       : finiteDistance < EDGE_SAFE_ENTER;
     if (next === edgeSafeMode) return;
     edgeSafeMode = next;
-    if (asphaltEdgeSafeMaterial) {
-      asphaltSkin.material = edgeSafeMode ? asphaltEdgeSafeMaterial : asphaltMaterial;
-    }
     for (const surface of wallSurfaces) {
       surface.mesh.material = edgeSafeMode ? surface.edgeSafeMaterial : surface.litMaterial;
     }
@@ -1435,11 +1429,10 @@
       const beam=new THREE.Mesh(new THREE.ConeGeometry(3.2,6.1,24,1,true),beamMat);beam.position.set(lx,3.25,lz);scene.add(beam);
     }
 
-    // Texture radiale morbida per sbuffi di vapore.
-    const smokeCanvas=document.createElement('canvas');smokeCanvas.width=smokeCanvas.height=96;
-    const sctx=smokeCanvas.getContext('2d');const grad=sctx.createRadialGradient(48,48,4,48,48,46);
-    grad.addColorStop(0,'rgba(220,240,255,.72)');grad.addColorStop(.35,'rgba(165,205,220,.24)');grad.addColorStop(1,'rgba(100,150,170,0)');sctx.fillStyle=grad;sctx.fillRect(0,0,96,96);
-    const smokeTex=new THREE.CanvasTexture(smokeCanvas);
+    // Texture di vapore: rumore di fumo (cumulo con grumi e buchi) invece del
+    // puff radiale liscio, per un aspetto più organico e meno "cartoon".
+    const smokeTex=new THREE.CanvasTexture(makeSmokeCanvas(128));
+    smokeTex.colorSpace=THREE.SRGBColorSpace;
     for(const [vx,vz] of [[-4,11],[10,4],[-13,-3]]){
       for(let i=0;i<12;i++){
         const mat=new THREE.SpriteMaterial({map:smokeTex,color:0xc9ebf3,transparent:true,opacity:0,depthWrite:false,blending:THREE.NormalBlending});
@@ -1819,6 +1812,13 @@
      7C. UNITÀ SENTINELLA, FUOCO NEMICO E LOOP A ONDATE
      ============================================================ */
   const hostileShots=[];
+  // Geometria del nucleo e materiali sono CONDIVISI (vedi shotCoreMaterial /
+  // shotTrailMaterial): l'unica risorsa privata di un colpo è la geometria del
+  // tracer, che contiene il segmento in movimento.
+  function disposeHostileShot(shot) {
+    scene.remove(shot.mesh, shot.trail);
+    shot.trail.geometry.dispose();
+  }
   const ammoPickups=[];
   const ammoPickupGeometry = new THREE.OctahedronGeometry(.22, 0);
   const ammoPickupRingGeometry = new THREE.TorusGeometry(.3, .028, 6, 18);
@@ -1875,9 +1875,10 @@
     const origin=drone.group.position.clone();
     const target=new THREE.Vector3(playerBody.position.x,playerBody.position.y+.55,playerBody.position.z);
     const dir=target.sub(origin).normalize();
-    const mesh=new THREE.Mesh(new THREE.SphereGeometry(.105,8,6),new THREE.MeshBasicMaterial({color:0xff3155}));mesh.position.copy(origin);scene.add(mesh);
+    const mesh=new THREE.Mesh(hostileShotGeometry,shotCoreMaterial(0xff3155));mesh.position.copy(origin);
+    mesh.add(makeGlowSprite(0xff3155,.5));scene.add(mesh);
     const lineGeo=new THREE.BufferGeometry();lineGeo.setAttribute('position',new THREE.Float32BufferAttribute(new Float32Array(6),3));
-    const trail=new THREE.Line(lineGeo,new THREE.LineBasicMaterial({color:0xff3155,transparent:true,opacity:.7,blending:THREE.AdditiveBlending,depthWrite:false}));scene.add(trail);
+    const trail=new THREE.Line(lineGeo,shotTrailMaterial(0xff3155,.7));scene.add(trail);
     hostileShots.push({mesh,trail,pos:origin.clone(),prev:origin.clone(),vel:dir.multiplyScalar(18+gameState.wave*.65),age:0,dmg});
     const toCam=origin.clone().project(camera);audio.enemyShot(Math.max(-.85,Math.min(.85,toCam.x)));
   }
@@ -1933,12 +1934,13 @@
 
   function spawnApexProjectile(apex,vel,color){
     const origin=apex.group.position.clone();
-    const mesh=new THREE.Mesh(new THREE.SphereGeometry(.135,8,6),new THREE.MeshBasicMaterial({color}));
+    const mesh=new THREE.Mesh(apexShotGeometry,shotCoreMaterial(color));
     mesh.position.copy(origin);
+    mesh.add(makeGlowSprite(color,.55));
     scene.add(mesh);
     const lineGeo=new THREE.BufferGeometry();
     lineGeo.setAttribute('position',new THREE.Float32BufferAttribute(new Float32Array(6),3));
-    const trail=new THREE.Line(lineGeo,new THREE.LineBasicMaterial({color,transparent:true,opacity:.75,blending:THREE.AdditiveBlending,depthWrite:false}));
+    const trail=new THREE.Line(lineGeo,shotTrailMaterial(color,.75));
     scene.add(trail);
     hostileShots.push({mesh,trail,pos:origin.clone(),prev:origin.clone(),vel:vel.clone(),age:0,dmg:apex.damage});
   }
@@ -1993,8 +1995,12 @@
       mini.anchor.set(x,position.y||2.5,z);mini.position.set(x,position.y||2.5,z);mini.group.position.copy(mini.position);
       droneSystem.drones.push(mini);
     }
+    // I rinforzi entrano nel conteggio dell'obiettivo: senza questo waveKills
+    // superava waveTargets (obiettivo "7/5" e barra di missione oltre il 100%).
+    gameState.waveTargets+=count;
     audio.apexSplit();
     toast(`<b>${t(apex.nameKey)}</b> · ${t('toast.split')}`);
+    updateHUD();
   }
 
   function summonMinions(apex){
@@ -2008,21 +2014,26 @@
       mini.anchor.set(x,apex.group.position.y,z);mini.position.set(x,apex.group.position.y,z);mini.group.position.copy(mini.position);
       droneSystem.drones.push(mini);
     }
+    // Come per spawnMinis: i minion sono bersagli aggiuntivi dell'ondata.
+    gameState.waveTargets+=count;
     audio.apexSummon();
     toast(`<b>${t(apex.nameKey)}</b> · ${t('toast.summon',{count})}`);
+    updateHUD();
   }
+
+  // Geometrie e materiali delle mine sono condivisi come per i pickup munizioni
+  // (ammoPickupGeometry): prima ogni mina allocava 2 geometrie + 2 materiali che
+  // nessuno dei tre punti di rimozione liberava.
+  const vexMineGeometry=new THREE.SphereGeometry(.2,10,8);
+  const vexMineRingGeometry=new THREE.TorusGeometry(.34,.03,6,16);
+  const vexMineMaterial=new THREE.MeshStandardMaterial({color:0xffc857,emissive:0x8a4d00,emissiveIntensity:2,metalness:.5,roughness:.3});
+  const vexMineRingMaterial=new THREE.MeshBasicMaterial({color:0xffe2a0,transparent:true,opacity:.85,blending:THREE.AdditiveBlending,depthWrite:false});
 
   function spawnVexMines(apex){
     const count=apex.tier>=2?3:APEX_TUNING.vexMineCount;
     for(let i=0;i<count;i++){
-      const mine=new THREE.Mesh(
-        new THREE.SphereGeometry(.2,10,8),
-        new THREE.MeshStandardMaterial({color:0xffc857,emissive:0x8a4d00,emissiveIntensity:2,metalness:.5,roughness:.3})
-      );
-      const ring=new THREE.Mesh(
-        new THREE.TorusGeometry(.34,.03,6,16),
-        new THREE.MeshBasicMaterial({color:0xffe2a0,transparent:true,opacity:.85,blending:THREE.AdditiveBlending,depthWrite:false})
-      );
+      const mine=new THREE.Mesh(vexMineGeometry,vexMineMaterial);
+      const ring=new THREE.Mesh(vexMineRingGeometry,vexMineRingMaterial);
       const group=new THREE.Group();
       group.add(mine,ring);
       const a=i/Math.max(1,count)*Math.PI*2+apex.random()*1.2;
@@ -2206,7 +2217,7 @@
     hostilePlayerPoint.set(playerBody.position.x,playerBody.position.y+.5,playerBody.position.z);
     for(let i=hostileShots.length-1;i>=0;i--){const s=hostileShots[i];
       if(!Number.isFinite(s.age)||!isFiniteVector3(s.pos)||!isFiniteVector3(s.prev)||!isFiniteVector3(s.vel)){
-        scene.remove(s.mesh,s.trail);s.mesh.geometry.dispose();s.mesh.material.dispose();s.trail.geometry.dispose();s.trail.material.dispose();hostileShots.splice(i,1);continue;
+        disposeHostileShot(s);hostileShots.splice(i,1);continue;
       }
       s.age+=delta;s.prev.copy(s.pos);s.pos.addScaledVector(s.vel,delta);s.mesh.position.copy(s.pos);
       const attr=s.trail.geometry.attributes.position;attr.setXYZ(0,s.prev.x,s.prev.y,s.prev.z);attr.setXYZ(1,s.pos.x,s.pos.y,s.pos.z);attr.needsUpdate=true;
@@ -2216,7 +2227,7 @@
       // il giocatore. .52 = raggio di collisione effettivo ^2 (≈0.72m).
       if(!remove){hostileSegment.start.copy(s.prev);hostileSegment.end.copy(s.pos);hostileSegment.closestPointToPoint(hostilePlayerPoint,true,hostileClosest);if(hostileClosest.distanceToSquared(hostilePlayerPoint)<CONFIG.hostileHitRadiusSq){damagePlayer(s.dmg||(CONFIG.hostileDmgBase+gameState.wave*CONFIG.hostileDmgWave));remove=true;}}
       if(!remove){hostileFrom.set(s.prev.x,s.prev.y,s.prev.z);hostileTo.set(s.pos.x,s.pos.y,s.pos.z);if(hostileRay.intersectWorld(world,{mode:CANNON.Ray.CLOSEST,result:hostileHit,from:hostileFrom,to:hostileTo,collisionFilterGroup:COLLISION.BULLET,collisionFilterMask:COLLISION.STATIC|COLLISION.CRATE}))remove=true;}
-      if(remove){scene.remove(s.mesh,s.trail);s.mesh.geometry.dispose();s.mesh.material.dispose();s.trail.geometry.dispose();s.trail.material.dispose();hostileShots.splice(i,1);}
+      if(remove){disposeHostileShot(s);hostileShots.splice(i,1);}
     }
   }
 
@@ -2324,7 +2335,14 @@
   }
 
   document.addEventListener('keydown', (e) => {
-    if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+    // Space/frecce vengono soppressi per non far scrollare la pagina, ma NON
+    // quando il focus è su un controllo del pannello settings: lì servono per
+    // regolare slider e pulsanti da tastiera.
+    const onPanelControl = e.target instanceof HTMLElement
+      && e.target.closest('input, button, .settings-panel');
+    if (!onPanelControl && ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+      e.preventDefault();
+    }
     if (e.repeat) return;
     keys[e.code] = true;
     // N2: niente input di gioco con il menu aperto o il round non attivo: il
@@ -2493,7 +2511,69 @@
      10. ARMA DA FUOCO, PROIETTILI E TRACER
      ============================================================ */
   const bulletGeo = new THREE.SphereGeometry(CONFIG.bulletRadius, 12, 10);
-  const bulletMat = new THREE.MeshBasicMaterial({ color: 0xbfefff });
+  // Nucleo del proiettile: additivo, non tone-mapped e quasi bianco, così supera
+  // la soglia del bloom (0.85) e produce un vero alone luminoso + riflesso.
+  const bulletMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff, toneMapped: false, transparent: true,
+    blending: THREE.AdditiveBlending, depthWrite: false
+  });
+  // Halo radiale condiviso per i proiettili "glowing" (nucleo + coda morbida).
+  const glowTex = new THREE.CanvasTexture(makeGlowCanvas(64));
+  // I colori in gioco sono pochi e fissi (colpo del giocatore, colpo dei droni,
+  // tinta dell'Apex corrente): i materiali vengono creati una volta per colore e
+  // riusati. Creare un SpriteMaterial per proiettile significava decine di
+  // materiali al secondo, ognuno con la propria voce nella cache delle pipeline.
+  const glowMaterials = new Map();
+  function glowMaterial(colorHex) {
+    let material = glowMaterials.get(colorHex);
+    if (!material) {
+      material = new THREE.SpriteMaterial({
+        map: glowTex, color: colorHex, transparent: true,
+        blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false
+      });
+      glowMaterials.set(colorHex, material);
+    }
+    return material;
+  }
+  function makeGlowSprite(colorHex, scale) {
+    const sprite = new THREE.Sprite(glowMaterial(colorHex));
+    sprite.scale.setScalar(scale);
+    return sprite;
+  }
+
+  // Risorse condivise dei colpi ostili (usate da spawnHostileShot e
+  // spawnApexProjectile nella sezione 7C, entrambi invocati a runtime).
+  // Prima ogni colpo allocava geometria + materiale + materiale del tracer.
+  const hostileShotGeometry = new THREE.SphereGeometry(.105, 8, 6);
+  const apexShotGeometry = new THREE.SphereGeometry(.135, 8, 6);
+  const shotCoreMaterials = new Map();
+  const shotTrailMaterials = new Map();
+  function shotCoreMaterial(colorHex) {
+    let material = shotCoreMaterials.get(colorHex);
+    if (!material) {
+      material = new THREE.MeshBasicMaterial({
+        color: colorHex, toneMapped: false, transparent: true,
+        blending: THREE.AdditiveBlending, depthWrite: false
+      });
+      shotCoreMaterials.set(colorHex, material);
+    }
+    return material;
+  }
+  function shotTrailMaterial(colorHex, opacity) {
+    // Chiave colore+opacità: due sorgenti diverse possono condividere il colore
+    // ma non l'opacità, e una cache sul solo colore restituirebbe il materiale
+    // sbagliato al secondo chiamante.
+    const key = `${colorHex}:${opacity}`;
+    let material = shotTrailMaterials.get(key);
+    if (!material) {
+      material = new THREE.LineBasicMaterial({
+        color: colorHex, transparent: true, opacity, toneMapped: false,
+        blending: THREE.AdditiveBlending, depthWrite: false
+      });
+      shotTrailMaterials.set(key, material);
+    }
+    return material;
+  }
   const bullets = [];
   const meleeOrigin = new THREE.Vector3();
   const meleeDirection = new THREE.Vector3();
@@ -2504,6 +2584,11 @@
 
   function fireBullet() {
     if (!gameState.started || gameStartLoading || gameState.dead || gameState.reloading || meleeTimer > 0) return;
+    // Il cooldown va verificato QUI e non solo nel ramo di fuoco automatico: il
+    // gestore mousedown chiamava fireBullet() senza controllarlo, quindi
+    // cliccando rapidamente si superava CONFIG.fireRate (cadenza limitata solo
+    // dalla frequenza degli eventi del mouse).
+    if (fireCooldown > 0) return;
     if (gameState.ammo <= 0) { audio.dry(); startReload(); fireCooldown = .2; return; }
     gameState.ammo--;
     gameState.shots++;
@@ -2529,15 +2614,16 @@
 
     const mesh = new THREE.Mesh(bulletGeo, bulletMat);
     mesh.position.copy(bulletOrigin);
+    // Halo luminoso additivo attaccato al proiettile: il bloom lo raccoglie e
+    // forma l'alone attorno al colpo (e compare nel riflesso del pavimento).
+    mesh.add(makeGlowSprite(0x8fe8ff, 0.55));
     scene.add(mesh);
 
-    // Tracer luminoso (segmento additivo dietro il proiettile)
+    // Tracer luminoso (segmento additivo dietro il proiettile). La geometria è
+    // per-colpo (contiene il segmento), il materiale è condiviso.
     const tracerGeo = new THREE.BufferGeometry();
     tracerGeo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(6), 3));
-    const tracer = new THREE.Line(tracerGeo, new THREE.LineBasicMaterial({
-      color: 0xe8fbff, transparent: true, opacity: 1,
-      blending: THREE.AdditiveBlending, depthWrite: false
-    }));
+    const tracer = new THREE.Line(tracerGeo, shotTrailMaterial(0xffffff, 1));
     scene.add(tracer);
 
     const bullet = {
@@ -2624,8 +2710,9 @@
 
   function disposeBullet(bullet) {
     scene.remove(bullet.mesh, bullet.tracer);
+    // bulletGeo/bulletMat, il materiale dell'halo e quello del tracer sono
+    // condivisi: l'unica risorsa privata è la geometria del tracer.
     bullet.tracer.geometry.dispose();
-    bullet.tracer.material.dispose();
     world.removeBody(bullet.body);
   }
 
@@ -2721,13 +2808,7 @@
   }
 
   function clearHostileShots() {
-    for (const shot of hostileShots) {
-      scene.remove(shot.mesh, shot.trail);
-      shot.mesh.geometry.dispose();
-      shot.mesh.material.dispose();
-      shot.trail.geometry.dispose();
-      shot.trail.material.dispose();
-    }
+    for (const shot of hostileShots) disposeHostileShot(shot);
     hostileShots.length = 0;
   }
 
@@ -2992,9 +3073,10 @@
     }
 
     // Render WebGPU/TSL con GTAO, bloom, SMAA, grana, grading, shockwave e vignetta.
-    // Negli ultimi metri dal muro disattiva solo i pass opzionali e il riflesso
-    // del pavimento: la scena base resta sempre disponibile e il movimento non
-    // può trasformare una precisione di profondità in un frame nero.
+    // Negli ultimi metri dal muro disattiva solo i pass opzionali (e alza
+    // l'emissiva delle pareti): la scena base resta sempre disponibile e il
+    // movimento non può trasformare una precisione di profondità in un frame
+    // nero. Il riflesso del pavimento invece resta SEMPRE attivo.
     updateEdgeSafeMode();
     renderPipeline.render(delta, elapsed);
     explosionSystem.finishWarmup();

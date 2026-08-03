@@ -3,30 +3,36 @@ export const QUALITY_PROFILES = Object.freeze({
     name: 'AUTO // HIGH',
     pixelRatio: 1.35,
     shadowSize: 1024,
-    reflectorSize: 512,
+    reflectorSize: 640,
     gtaoSamples: 10,
     facadeResolution: 1024,
     particleScale: 0.72,
+    // Puff di fumo volumetrico per esplosione. Il raymarch costa per pixel e i
+    // puff si sovrappongono, quindi questo è il parametro che governa davvero
+    // il costo del fumo (non particleScale).
+    smokePuffs: 7,
     dynamicLights: 4
   }),
   autoLow: Object.freeze({
     name: 'AUTO // BALANCED',
     pixelRatio: 1,
     shadowSize: 512,
-    reflectorSize: 256,
+    reflectorSize: 320,
     gtaoSamples: 8,
     facadeResolution: 1024,
     particleScale: 0.48,
+    smokePuffs: 3,
     dynamicLights: 3
   }),
   ultra: Object.freeze({
     name: 'ULTRA',
     pixelRatio: 2,
     shadowSize: 1024,
-    reflectorSize: 1024,
+    reflectorSize: 1280,
     gtaoSamples: 16,
     facadeResolution: 2048,
     particleScale: 1,
+    smokePuffs: 12,
     dynamicLights: 8
   })
 });

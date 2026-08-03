@@ -123,6 +123,20 @@ export const APEX_TUNING = Object.freeze({
   ammoDropGuaranteed: true
 });
 
+// Railgun ricompensata dal primo Apex. Ha un caricatore a colpo singolo e un
+// raggio istantaneo: il danno enorme vale per i droni semplici, mentre il
+// danno separato per gli Apex evita che l'arma annulli il combattimento boss.
+export const RAILGUN_TUNING = Object.freeze({
+  magazineSize: 1,
+  reserveAmmo: 5,
+  cooldown: 1.15,
+  reloadTime: 1.2,
+  range: 100,
+  damage: 9999,
+  apexDamage: 180,
+  pickupLifetime: 90
+});
+
 // Seleziona l'archetipo Apex per l'ondata data (ciclo + tier).
 export function getApexArchetype(wave) {
   const safeWave = Math.max(1, Math.floor(Number(wave) || 1));

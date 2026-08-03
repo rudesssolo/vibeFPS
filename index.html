@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>VIBE FPS — Cyberpunk Tech Demo</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2305060d'/%3E%3Cpath d='M3 3h3v7h4V3h3v10H3z' fill='%2300e5ff'/%3E%3C/svg%3E">
 <style>
@@ -97,7 +97,9 @@
   .loading-head { display: flex; justify-content: space-between; gap: 18px; font: 800 10px ui-monospace, monospace; letter-spacing: 2px; color: rgba(119, 246, 255, .82); }
   #loading-percent { color: rgba(255, 200, 87, .9); }
   .loading-track { position: relative; height: 6px; margin-top: 10px; overflow: hidden; border: 1px solid rgba(119, 246, 255, .24); background: rgba(3, 18, 29, .78); box-shadow: inset 0 0 14px rgba(0, 229, 255, .08), 0 0 18px rgba(0, 229, 255, .08); }
-  #loading-fill { display: block; width: 0%; height: 100%; transform-origin: left center; background: linear-gradient(90deg, #00e5ff, #77f6ff 62%, #ffc857); box-shadow: 0 0 14px rgba(0, 229, 255, .8); transition: width .24s ease-out; }
+  #loading-fill { display: block; position: relative; width: 0%; height: 100%; overflow: hidden; transform-origin: left center; background: linear-gradient(90deg, #00e5ff, #77f6ff 62%, #ffc857); box-shadow: 0 0 14px rgba(0, 229, 255, .8); transition: width .3s ease-out; }
+  #loading-fill::after { content: ''; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 25%, rgba(255,255,255,.65) 50%, transparent 75%); transform: translateX(-100%); mix-blend-mode: screen; animation: loading-sweep 1.25s ease-in-out infinite; }
+  @keyframes loading-sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
   #loading-detail { margin-top: 9px; color: rgba(182, 225, 234, .48); font: 700 9px ui-monospace, monospace; letter-spacing: 1.2px; }
   .gpu-warning {
     width: min(620px, 82vw);
@@ -253,6 +255,7 @@
   #overlay::before { content:'';position:absolute;inset:0;opacity:.16;background-image:linear-gradient(rgba(0,229,255,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,.08) 1px,transparent 1px);background-size:48px 48px;mask-image:linear-gradient(to bottom,transparent,#000 28%,#000 72%,transparent); }
   #overlay .boot { position:absolute;left:24px;top:22px;color:rgba(126,236,247,.55);font:700 9px ui-monospace,monospace;letter-spacing:2px;text-align:left;line-height:1.8; }
   #overlay .build { position:absolute;right:24px;top:22px;color:rgba(126,236,247,.45);font:700 9px ui-monospace,monospace;letter-spacing:2px; }
+  #overlay .credit { position:absolute;left:50%;bottom:14px;transform:translateX(-50%);color:rgba(126,236,247,.32);font:700 9px ui-monospace,monospace;letter-spacing:2px;white-space:nowrap; }
   #overlay h1 { font-size:clamp(44px,7vw,84px); margin-bottom:4px; line-height:.95; font-weight:900; }
   #overlay .sub { margin-bottom:26px; color:rgba(182,225,234,.6); }
   #overlay .brief { width:min(620px,82vw);padding:16px 22px;margin-bottom:25px;border-top:1px solid rgba(119,246,255,.15);border-bottom:1px solid rgba(119,246,255,.15);font-size:12px;line-height:1.7;color:rgba(207,238,242,.66);letter-spacing:.5px; }
@@ -298,19 +301,61 @@
     </div>
 
     <div class="radar-wrap"><div class="radar-tag">PROXIMITY // 20M</div><canvas id="radar" width="440" height="440"></canvas></div>
-    <div class="vitals">
-      <div class="vital-row"><span class="vital-name" data-i18n="vitals.health">HEALTH</span><span class="bar"><i id="health-fill"></i></span><b id="health-value" class="vital-value">100</b></div>
-      <div class="vital-row"><span class="vital-name" data-i18n="vitals.shield">SHIELD</span><span class="bar"><i id="shield-fill"></i></span><b id="shield-value" class="vital-value">075</b></div>
-      <div class="vital-row"><span class="vital-name" data-i18n="vitals.stamina">STAMINA</span><span class="bar"><i id="stamina-fill"></i></span><b id="stamina-value" class="vital-value">100</b></div>
+    <div class="vitals hud-panel">
+      <div class="vitals-head">
+        <div><div class="micro-label" data-i18n="vitals.title">VITAL SYSTEMS</div><strong id="vitals-state" data-i18n="vitals.state">COMBAT READY</strong></div>
+        <span class="vitals-corner">LIVE // 03</span>
+      </div>
+      <div class="vital-meter health-meter">
+        <div class="vital-meter-head"><span class="vital-name" data-i18n="vitals.health">HEALTH</span><b id="health-value" class="vital-value">100</b></div>
+        <span class="bar"><i id="health-fill"></i></span>
+      </div>
+      <div class="vital-meter shield-meter">
+        <div class="vital-meter-head"><span class="vital-name" data-i18n="vitals.shield">SHIELD</span><b id="shield-value" class="vital-value">075</b></div>
+        <span class="bar"><i id="shield-fill"></i></span>
+      </div>
+      <div class="vital-meter stamina-meter">
+        <div class="vital-meter-head"><span class="vital-name" data-i18n="vitals.stamina">STAMINA</span><b id="stamina-value" class="vital-value">100</b></div>
+        <span class="bar"><i id="stamina-fill"></i></span>
+      </div>
+      <div class="vitals-foot"><span>CORE / ARMOR / DRIVE</span><span>100%</span></div>
     </div>
     <div class="weapon-hud hud-panel">
       <div id="reload-message" class="reload-message" data-i18n="weapon.reloading">RELOADING</div>
-      <div class="weapon-head"><span class="weapon-name">VX-9 PULSE</span><span class="fire-mode">AUTO // 5.56E</span></div>
+      <div class="weapon-head"><span id="weapon-name" class="weapon-name">VX-9 PULSE</span><span id="weapon-mode" class="fire-mode">AUTO // 5.56E</span></div>
       <div class="ammo-line"><span id="ammo">30</span><span class="reserve">/ <b id="reserve">180</b></span></div>
       <div id="ammo-cells" class="ammo-cells"></div>
     </div>
     <div id="toast-stack"></div>
     <div id="sound-state">AUDIO: IMMERSIVE · <b>M</b> MUTE</div>
+  </div>
+
+  <!-- Controlli touch (solo dispositivi touch): doppio stick virtuale + pulsanti.
+       Vengono mostrati quando touchMode è attivo e la partita è in corso. -->
+  <div id="touch-controls" aria-hidden="true">
+    <div id="touch-l-joystick" class="touch-joystick touch-left">
+      <div class="touch-joystick-base"></div>
+      <div id="touch-l-thumb" class="touch-thumb"></div>
+    </div>
+    <div id="touch-r-joystick" class="touch-joystick touch-right">
+      <div class="touch-joystick-base"></div>
+      <div id="touch-r-thumb" class="touch-thumb"></div>
+    </div>
+    <div class="touch-buttons touch-buttons-right">
+      <button id="touch-btn-melee" class="touch-btn touch-btn-melee" type="button" aria-label="Melee">MELEE</button>
+      <button id="touch-btn-reload" class="touch-btn" type="button" aria-label="Reload">RELOAD</button>
+      <button id="touch-btn-weapon" class="touch-btn" type="button" aria-label="Switch weapon">SWAP</button>
+      <button id="touch-btn-jump" class="touch-btn touch-btn-jump" type="button" aria-label="Jump">JUMP</button>
+      <button id="touch-btn-fire" class="touch-btn touch-btn-fire" type="button" aria-label="Fire">FIRE</button>
+    </div>
+    <button id="touch-btn-sprint" class="touch-btn touch-btn-sprint" type="button" aria-label="Sprint">SPRINT</button>
+  </div>
+
+  <!-- Rotate-device guard: visibile solo in portrait su touch, blocca il gioco. -->
+  <div id="rotate-overlay" class="rotate-overlay" hidden>
+    <div class="rotate-icon" aria-hidden="true">📱</div>
+    <div class="rotate-title">ROTATE YOUR DEVICE</div>
+    <div class="rotate-sub">LANDSCAPE MODE REQUIRED</div>
   </div>
 
   <div id="hud" data-i18n-html="hud.hintHtml">
@@ -334,6 +379,7 @@
       <span data-i18n-html="overlay.keysHtml"><kbd>WASD</kbd> move · <kbd>SHIFT</kbd> sprint · <kbd>SPACE</kbd> jump · <kbd>R</kbd> reload · LMB fire · RMB melee</span><br>
       <span class="pad-hint" data-i18n="overlay.headphones">◆ HEADPHONES RECOMMENDED</span> <span data-i18n="overlay.audioNote">· audio engages when entering the simulation</span><span id="overlay-sound-state"></span>
     </div>
+    <div class="credit">BY RUDESSSOLO · © 2026</div>
   </div>
 
   <!-- D1: dipendenze vendored in ./vendor (three.js 0.184.0 + cannon.js 0.6.2).
@@ -369,7 +415,7 @@
   import { RenderPipelineController } from './src/render-pipeline.js';
   import { makeRng } from './src/rng.js';
   import { constrainBodyToSquare } from './src/player-collision.js';
-  import { getStoredSensitivity, storeSensitivity, APEX_TUNING } from './src/config.js';
+  import { getStoredSensitivity, storeSensitivity, getStoredQualityMode, APEX_TUNING, RAILGUN_TUNING } from './src/config.js';
   import { t, getLanguage, setLanguage } from './src/i18n.js';
 
   // L1: applica subito la lingua persistita (default inglese) ai testi statici
@@ -393,29 +439,73 @@
     const detail = document.getElementById('loading-detail');
     const fill = document.getElementById('loading-fill');
     let ready = false;
+    // Progresso "target" (impostato da update) e progresso "display" (animato):
+    // la barra insegue il target con un'ease ed esegue un auto-creep quando il
+    // carico è bloccante (es. shader warmup), così non sembra mai congelata.
+    let target = 0;
+    let display = 0;
+    let rafId = null;
+    let creeping = true; // auto-creep attivo subito: la barra "respira" anche in boot
     // Un timer lascia respirare il main thread anche quando il rendering sta
     // compilando risorse, senza dipendere dalla schedulazione di rAF.
     const nextFrame = () => new Promise(resolve => setTimeout(resolve, 0));
+
+    const render = () => {
+      fill.style.width = `${Math.round(display * 1000) / 10}%`;
+      percent.textContent = `${Math.round(display * 100)}%`;
+    };
+
+    const tick = () => {
+      let next = display;
+      if (display < target) {
+        // Ease verso il target: avanza in modo fluido e "respira".
+        next = display + (target - display) * 0.16 + 0.004;
+      } else if (creeping) {
+        // Auto-creep: movimento lento e continuo, mai oltre il 98%, così la
+        // barra resta viva anche mentre il warmup occupa il main thread.
+        next = display + 0.0035;
+      }
+      if (creeping && next > 0.98) next = Math.min(next, 0.98);
+      if (next > display) display = next;
+      render();
+      const cap = creeping ? 0.98 : target;
+      if (display < cap - 0.0005 || display < target - 0.0005) {
+        rafId = requestAnimationFrame(tick);
+      } else {
+        rafId = null;
+      }
+    };
+
+    const ensureTick = () => { if (rafId === null) rafId = requestAnimationFrame(tick); };
+
     const update = (progress, nextLabel, nextDetail) => {
-      const safeProgress = Math.max(0, Math.min(1, progress));
-      fill.style.width = `${safeProgress * 100}%`;
-      percent.textContent = `${Math.round(safeProgress * 100)}%`;
+      target = Math.max(0, Math.min(1, progress));
       if (nextLabel) label.textContent = nextLabel;
       if (nextDetail) detail.textContent = nextDetail;
+      ensureTick();
     };
     const showModal = (nextLabel, nextDetail) => {
       overlay.classList.add('is-loading');
       overlay.style.display = 'flex';
+      creeping = true;
+      // Avvia il ciclo: parte da 0 e si muove subito verso il target.
       update(0, nextLabel, nextDetail);
     };
     const hideModal = ({ hideOverlay = false } = {}) => {
       overlay.classList.remove('is-loading');
+      creeping = false;
+      if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
       if (hideOverlay) overlay.style.display = 'none';
       else if (ready) overlay.style.display = 'flex';
     };
     const finishBoot = () => {
       ready = true;
-      update(1, 'SYSTEM READY', 'LINK GRAFICO OPERATIVO · CONFIGURAZIONE PRONTA');
+      creeping = false;
+      target = 1;
+      display = 1;
+      render();
+      label.textContent = 'SYSTEM READY';
+      detail.textContent = 'LINK GRAFICO OPERATIVO · CONFIGURAZIONE PRONTA';
       overlay.classList.remove('is-loading');
       overlay.classList.add('ready');
       overlay.style.display = 'flex';
@@ -461,7 +551,7 @@
   const CONFIG = {
     arenaSize: 40,        // lato dell'arena (X/Z)
     floorMargin: 7,       // fascia di pavimento oltre i muri perimetrali
-    wallHeight: 7,        // altezza dei muri (nessuna fuga possibile)
+    wallHeight: 10.5,     // altezza dei muri: +50% rispetto all'arena originale (7m)
     wallThick: 1,
 
     playerRadius: 0.5,    // raggio del collider del giocatore
@@ -570,7 +660,7 @@
   // missing adapter must reach the menu warning instead of silently changing
   // rendering APIs.
   renderer._getFallback = null;
-  loadingUI.update(.08, 'GPU BOOT', 'INIZIALIZZAZIONE DEL DEVICE WEBGPU...');
+  loadingUI.update(.08, 'GPU BOOT', 'GPU is vibing... initializing the WebGPU device');
   let renderScale = Math.min(window.devicePixelRatio, 1.5);
   renderer.setPixelRatio(renderScale);
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -615,7 +705,7 @@
     showWebGPUUnavailable(t('gpu.noAdapter'));
     return;
   }
-  loadingUI.update(.24, 'GPU ONLINE', 'ALLOCAZIONE DEL DEVICE E DEL CANVAS COMPLETATA');
+  loadingUI.update(.24, 'GPU ONLINE', 'Device and canvas allocated — the vibe is loud and clear');
 
   if (renderer.coordinateSystem !== THREE.WebGPUCoordinateSystem) {
     detachRendererCanvas();
@@ -639,7 +729,7 @@
   camera.rotation.order = 'YXZ';
 
   const renderPipeline = new RenderPipelineController({ renderer, scene, camera, graphics: GRAPHICS });
-  loadingUI.update(.32, 'PIPELINE', 'PREPARAZIONE DI GTAO, BLOOM, SMAA E RIFLESSI...');
+  loadingUI.update(.32, 'PIPELINE', 'Preparing GTAO, bloom, SMAA and reflections...');
 
   /* ============================================================
      3. AMBIENTE NOTTURNO CYBERPUNK
@@ -807,12 +897,12 @@
 
   createNightSky();
   createStars();
-  loadingUI.update(.46, 'ATMOSPHERE', 'CIELO, STELLE E PIOGGIA IN CARICAMENTO...');
+  loadingUI.update(.46, 'ATMOSPHERE', 'Charging the sky, stars and rain...');
   createMoon();
   createLights();
   createEnvironment();
   const facadeSystem = new FacadeSystem({ scene, anisotropy: aniso, resolution: 1024, buildingCount: 56 });
-  loadingUI.update(.62, 'CITY GRID', 'GENERAZIONE DELLE FACCIATE E DELLA CITTÀ...');
+  loadingUI.update(.62, 'CITY GRID', 'Generating facades and the city grid...');
 
   // Pioggia leggera per l'atmosfera bagnata
   let rain = null;
@@ -967,7 +1057,7 @@
 
   // Corpo fisico del pavimento (senza mesh: il visual è il riflettore)
   addStaticBox(0, -0.5, 0, floorSize, 1, floorSize, null);
-  loadingUI.update(.72, 'ARENA', 'MATERIALI PBR, PAVIMENTO RIFLETTENTE E COLLISIONI...');
+  loadingUI.update(.72, 'ARENA', 'PBR materials, reflective floor and collisions...');
 
   // Griglia neon sul pavimento (geometria reale -> si riflette correttamente)
   (function createFloorGrid() {
@@ -1582,52 +1672,221 @@
   let nextFootstep = 0;
   let bobPhase = 0;
 
+  // --- MOBILE / TOUCH (rilevato presto, serve anche per il dettaglio armi) ---
+  // Rileva un dispositivo "touch-primary" (telefono/tablet), non un PC con
+  // touchscreen: basta (pointer: coarse) E (hover: none). Un portatile con
+  // touchscreen ha comunque un mouse/trackpad (hover) e non deve attivare la
+  // modalità touch né il guard di rotazione.
+  const touchMode = typeof matchMedia === 'function'
+    && matchMedia('(pointer: coarse)').matches
+    && matchMedia('(hover: none)').matches;
+  // Device "high-end": su touch consente il profilo ULTRA (heuristic CPU/RAM/DPR).
+  const highEndDevice = !!(navigator && navigator.deviceMemory && navigator.deviceMemory >= 8
+    && navigator.hardwareConcurrency && navigator.hardwareConcurrency >= 8
+    && (window.devicePixelRatio || 1) >= 2.5);
+
   /* ============================================================
      7. ARMA CYBERPUNK, MUZZLE FLASH E INPUT
      ============================================================ */
   const gun = new THREE.Group();
-  const gunMetal = new THREE.MeshPhysicalMaterial({ color: 0x1a1d24, metalness: 0.85, roughness: 0.32, clearcoat: 0.3, envMapIntensity: 1.0 });
-  const gunDark  = new THREE.MeshStandardMaterial({ color: 0x0c0e13, metalness: 0.9, roughness: 0.45, envMapIntensity: 0.8 });
-  const gunStrip = new THREE.MeshBasicMaterial({ color: 0x00e5ff });
+  const railgunView = new THREE.Group();
 
-  const gunBodyMesh = new THREE.Mesh(new RoundedBoxGeometry(0.07, 0.11, 0.42, 2, 0.012), gunMetal);
-  const gripMesh = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.15, 0.09), gunDark);
-  gripMesh.position.set(0, -0.13, 0.03);
-  gripMesh.rotation.x = 0.25;
-  const barrelMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.026, 0.34, 12), gunDark);
-  barrelMesh.rotation.x = Math.PI / 2;
-  barrelMesh.position.set(0, 0.015, -0.34);
-  const shroudMesh = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.06, 0.24), gunMetal);
-  shroudMesh.position.set(0, 0.02, -0.3);
-  const sightMesh = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.035, 0.09), gunDark);
-  sightMesh.position.set(0, 0.075, -0.05);
-  const energyStrip = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.018, 0.24), gunStrip);
-  energyStrip.position.set(0.041, 0.0, -0.05);
-  const magazineMesh = new THREE.Mesh(new RoundedBoxGeometry(.055,.13,.09,2,.01),gunDark);
-  magazineMesh.position.set(0,-.12,-.1); magazineMesh.rotation.x=-.12;
-  const triggerGuard = new THREE.Mesh(new THREE.TorusGeometry(.038,.008,7,12,Math.PI),gunMetal);
-  triggerGuard.position.set(0,-.075,-.015); triggerGuard.rotation.set(0,Math.PI/2,Math.PI/2);
-  const holoGlass = new THREE.Mesh(new THREE.PlaneGeometry(.045,.028),new THREE.MeshBasicMaterial({color:0x65f7ff,transparent:true,opacity:.42,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}));
-  holoGlass.position.set(0,.112,-.065);
-  const holoFrame = new THREE.Mesh(new THREE.TorusGeometry(.034,.006,6,16),gunDark);
-  holoFrame.position.copy(holoGlass.position); holoFrame.scale.y=.72;
-  for(const mesh of [gunBodyMesh,gripMesh,barrelMesh,shroudMesh,sightMesh,magazineMesh,triggerGuard,holoFrame]) mesh.castShadow=true;
-  gun.add(gunBodyMesh, gripMesh, barrelMesh, shroudMesh, sightMesh, energyStrip, magazineMesh, triggerGuard, holoGlass, holoFrame);
-  gun.position.set(0.25, -0.21, -0.45);
-  camera.add(gun);
+  // Livello di dettaglio delle armi: su ULTRA i modelli diventano molto più
+  // ricchi geometricamente e graficamente. Il valore iniziale viene letto dalla
+  // persistenza (ma solo se il dispositivo lo consente) e, se l'utente cambia
+  // profilo a runtime, i modelli vengono ricostruiti (vedi applyProfile).
+  let weaponDetailUltra = (getStoredQualityMode() === 'ultra') && !(touchMode && !highEndDevice);
 
-  // Flash di sparo (additivo, raccolto dal bloom)
+  // Helper per costruire un pezzo con pos/rot/scale e ombra cast.
+  function part(geometry, material, position, rotation, scale, noShadow) {
+    const mesh = new THREE.Mesh(geometry, material);
+    if (position) mesh.position.set(position[0], position[1], position[2]);
+    if (rotation) mesh.rotation.set(rotation[0], rotation[1], rotation[2]);
+    if (scale) mesh.scale.set(scale[0], scale[1], scale[2]);
+    if (!noShadow) mesh.castShadow = true;
+    return mesh;
+  }
+
+  // --- VX-9 PULSE RIFLE -----------------------------------------------------
+  function buildPulseGun(ultra) {
+    if (!ultra) return buildPulseGunLite();
+    return buildPulseGunUltra();
+  }
+  function buildPulseGunLite() {
+    const meshes = [];
+    const metal = new THREE.MeshPhysicalMaterial({ color: 0x1a1d24, metalness: 0.85, roughness: 0.32, clearcoat: 0.3, envMapIntensity: 1.0 });
+    const dark  = new THREE.MeshStandardMaterial({ color: 0x0c0e13, metalness: 0.9, roughness: 0.45, envMapIntensity: 0.8 });
+    const strip = new THREE.MeshBasicMaterial({ color: 0x00e5ff });
+    meshes.push(
+      part(new RoundedBoxGeometry(0.07, 0.11, 0.42, 2, 0.012), metal),
+      part(new THREE.BoxGeometry(0.05, 0.15, 0.09), dark, [0, -0.13, 0.03], [0.25, 0, 0]),
+      part(new THREE.CylinderGeometry(0.02, 0.026, 0.34, 12), dark, [0, 0.015, -0.34], [Math.PI / 2, 0, 0]),
+      part(new THREE.BoxGeometry(0.05, 0.06, 0.24), metal, [0, 0.02, -0.3]),
+      part(new THREE.BoxGeometry(0.02, 0.035, 0.09), dark, [0, 0.075, -0.05]),
+      part(new THREE.BoxGeometry(0.012, 0.018, 0.24), strip, [0.041, 0.0, -0.05]),
+      part(new RoundedBoxGeometry(.055, .13, .09, 2, .01), dark, [0, -0.12, -0.1], [-0.12, 0, 0]),
+      part(new THREE.TorusGeometry(.038, .008, 7, 12, Math.PI), metal, [0, -0.075, -0.015], [0, Math.PI / 2, Math.PI / 2]),
+      part(new THREE.PlaneGeometry(.045, .028), new THREE.MeshBasicMaterial({ color: 0x65f7ff, transparent: true, opacity: .42, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }), [0, .112, -0.065], null, null, true),
+      part(new THREE.TorusGeometry(.034, .006, 6, 16), dark, [0, .112, -0.065], null, [1, .72, 1])
+    );
+    return meshes;
+  }
+
+  // VX-9 dettagliato (solo ULTRA): più parti, sfaccettature e accent luminosi.
+  function buildPulseGunUltra() {
+    const meshes = [];
+    const metal = new THREE.MeshPhysicalMaterial({ color: 0x23262e, metalness: 0.9, roughness: 0.24, clearcoat: 0.55, clearcoatRoughness: 0.18, envMapIntensity: 1.4, sheen: 0.4, sheenColor: 0x334455 });
+    const bronze = new THREE.MeshPhysicalMaterial({ color: 0x4a3520, metalness: 0.95, roughness: 0.2, clearcoat: 0.4, envMapIntensity: 1.2 });
+    const dark = new THREE.MeshPhysicalMaterial({ color: 0x0a0d12, metalness: 0.92, roughness: 0.4, clearcoat: 0.2, envMapIntensity: 1.0 });
+    const strip = new THREE.MeshBasicMaterial({ color: 0x00e5ff, toneMapped: false });
+    const stripHot = new THREE.MeshBasicMaterial({ color: 0x7df6ff, toneMapped: false, blending: THREE.AdditiveBlending });
+    const glass = new THREE.MeshBasicMaterial({ color: 0x65f7ff, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+
+    meshes.push(part(new RoundedBoxGeometry(0.075, 0.1, 0.44, 3, 0.014), metal, [0, 0.01, 0.0]));
+    meshes.push(part(new THREE.BoxGeometry(0.012, 0.06, 0.3), dark, [0.045, 0.02, 0.02]));
+    meshes.push(part(new THREE.BoxGeometry(0.06, 0.045, 0.3), dark, [0, -0.045, 0.04]));
+    for (let i = 0; i < 7; i++) {
+      meshes.push(part(new THREE.BoxGeometry(0.015, 0.012, 0.012), dark, [0, 0.062, -0.02 + i * 0.045]));
+    }
+    meshes.push(part(new THREE.CylinderGeometry(0.02, 0.02, 0.4, 20), dark, [0, 0.025, -0.36], [Math.PI / 2, 0, 0]));
+    meshes.push(part(new THREE.CylinderGeometry(0.03, 0.03, 0.05, 20), bronze, [0, 0.025, -0.56], [Math.PI / 2, 0, 0]));
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2;
+      meshes.push(part(new THREE.BoxGeometry(0.006, 0.012, 0.02), dark, [Math.cos(a) * 0.03, 0.025 + Math.sin(a) * 0.03, -0.56], [0, 0, a], null, true));
+    }
+    meshes.push(part(new THREE.BoxGeometry(0.05, 0.05, 0.26), metal, [0, 0.005, -0.32]));
+    for (let i = 0; i < 5; i++) {
+      meshes.push(part(new THREE.BoxGeometry(0.004, 0.03, 0.012), dark, [0.026, 0.005, -0.4 + i * 0.05]));
+    }
+    meshes.push(part(new THREE.CylinderGeometry(0.028, 0.036, 0.16, 8), metal, [0, -0.13, 0.03], [0.2, 0, 0], [1, 1, 0.9]));
+    meshes.push(part(new THREE.BoxGeometry(0.05, 0.14, 0.05), dark, [0, -0.13, 0.011], [0.2, 0, 0]));
+    meshes.push(part(new RoundedBoxGeometry(0.056, 0.14, 0.1, 3, 0.012), dark, [0, -0.13, -0.1], [-0.12, 0, 0]));
+    meshes.push(part(new THREE.BoxGeometry(0.06, 0.02, 0.11), bronze, [0, -0.205, -0.1], [-0.12, 0, 0]));
+    meshes.push(part(new THREE.BoxGeometry(0.02, 0.05, 0.006), stripHot, [0, -0.13, -0.05], [-0.12, 0, 0], null, true));
+    meshes.push(part(new THREE.TorusGeometry(0.04, 0.009, 8, 20, Math.PI), metal, [0, -0.08, -0.015], [0, Math.PI / 2, Math.PI / 2], null, true));
+    meshes.push(part(new THREE.BoxGeometry(0.012, 0.03, 0.02), bronze, [0, -0.055, -0.015]));
+    meshes.push(part(new THREE.BoxGeometry(0.02, 0.02, 0.06), dark, [0.045, 0.045, 0.14]));
+    meshes.push(part(new THREE.TorusGeometry(0.036, 0.007, 8, 24), dark, [0, 0.115, -0.06], null, [1, 0.7, 1], true));
+    meshes.push(part(new THREE.PlaneGeometry(0.05, 0.03), glass, [0, 0.115, -0.06], null, null, true));
+    meshes.push(part(new THREE.BoxGeometry(0.012, 0.018, 0.26), strip, [0.041, 0.0, -0.05], null, null, true));
+    meshes.push(part(new THREE.BoxGeometry(0.012, 0.018, 0.26), stripHot, [-0.041, 0.0, -0.05], null, null, true));
+    meshes.push(part(new THREE.CylinderGeometry(0.014, 0.014, 0.2, 16), stripHot, [0.05, 0.0, 0.0], [Math.PI / 2, 0, 0], null, true));
+    for (const [x, y, z] of [[0, 0.05, 0.1], [0, 0.05, -0.1], [0.03, -0.02, 0.15]]) {
+      meshes.push(part(new THREE.CylinderGeometry(0.006, 0.006, 0.012, 8), bronze, [x, y, z], [Math.PI / 2, 0, 0]));
+    }
+    return meshes;
+  }
+
+  // --- RAILGUN ---------------------------------------------------------------
+  function buildRailgun(ultra) {
+    if (!ultra) return buildRailgunLite();
+    return buildRailgunUltra();
+  }
+  function buildRailgunLite() {
+    const meshes = [];
+    const railMetal = new THREE.MeshPhysicalMaterial({ color: 0x263746, metalness: .94, roughness: .2, clearcoat: .65, emissive: 0x062e44, emissiveIntensity: .45 });
+    const railDark = new THREE.MeshStandardMaterial({ color: 0x080f18, metalness: .96, roughness: .28 });
+    const railGlow = new THREE.MeshBasicMaterial({ color: 0x7df6ff, toneMapped: false, blending: THREE.AdditiveBlending });
+    meshes.push(part(new RoundedBoxGeometry(.13, .16, .48, 3, .018), railMetal));
+    meshes.push(part(new THREE.BoxGeometry(.1, .17, .2), railDark, [0, -.12, .13], [.18, 0, 0]));
+    for (const x of [-.075, .075]) {
+      meshes.push(part(new THREE.BoxGeometry(.035, .045, .68), railDark, [x, .025, -.48]));
+    }
+    for (const [z, idx] of [[-.3, 0], [-.53, 1], [-.76, 2]]) {
+      meshes.push(part(new THREE.TorusGeometry(.072, .012, 8, 18), idx === 1 ? railGlow : railMetal, [0, .025, z], [Math.PI / 2, 0, 0], [1, .62, 1]));
+    }
+    meshes.push(part(new THREE.BoxGeometry(.018, .018, .72), railGlow, [0, .045, -.48], null, null, true));
+    meshes.push(part(new THREE.BoxGeometry(.018, .04, .12), railGlow, [0, .13, -.06], null, null, true));
+    return meshes;
+  }
+
+  // RAILGUN dettagliato (solo ULTRA): doppia rotaia segmentata, bobine alternate,
+  // conduit di rame, nucleo energetico, alette di raffreddamento e accent luminosi.
+  function buildRailgunUltra() {
+    const meshes = [];
+    const railMetal = new THREE.MeshPhysicalMaterial({ color: 0x2a3a4a, metalness: .95, roughness: .18, clearcoat: .8, clearcoatRoughness: .15, emissive: 0x062e44, emissiveIntensity: .5, envMapIntensity: 1.5 });
+    const railDark = new THREE.MeshPhysicalMaterial({ color: 0x070d14, metalness: .96, roughness: .25, clearcoat: .3, envMapIntensity: 1.2 });
+    const copper = new THREE.MeshPhysicalMaterial({ color: 0x9a5a1a, metalness: .98, roughness: .22, clearcoat: .5, envMapIntensity: 1.4 });
+    const railGlow = new THREE.MeshBasicMaterial({ color: 0x7df6ff, toneMapped: false, blending: THREE.AdditiveBlending });
+    const railGlowHot = new THREE.MeshBasicMaterial({ color: 0xd5f9ff, toneMapped: false, blending: THREE.AdditiveBlending });
+
+    meshes.push(part(new RoundedBoxGeometry(.14, .17, .5, 3, .02), railMetal));
+    meshes.push(part(new THREE.BoxGeometry(.12, .02, .42), railDark, [0, .09, -.02]));
+    meshes.push(part(new THREE.BoxGeometry(.02, .04, .3), railDark, [0, .06, -.05]));
+    for (const x of [-.08, .08]) {
+      for (let i = 0; i < 6; i++) {
+        meshes.push(part(new THREE.BoxGeometry(.02, .028, .09), railDark, [x, .035, -.02 - i * .13]));
+      }
+      meshes.push(part(new THREE.CylinderGeometry(.012, .012, .7, 12), copper, [x, .02, -.48], [Math.PI / 2, 0, 0]));
+    }
+    for (let i = 0; i < 6; i++) {
+      const z = -.12 - i * .13;
+      const glow = i % 2 === 0 ? railGlowHot : railGlow;
+      meshes.push(part(new THREE.TorusGeometry(.078, .014, 10, 24), glow, [0, .035, z], [Math.PI / 2, 0, 0], [1, .62, 1], true));
+    }
+    meshes.push(part(new THREE.CylinderGeometry(.02, .02, .72, 16), railGlowHot, [0, .05, -.48], [Math.PI / 2, 0, 0], null, true));
+    meshes.push(part(new THREE.BoxGeometry(.04, .05, .03), railDark, [0, .13, .18]));
+    meshes.push(part(new THREE.BoxGeometry(.02, .05, .02), railGlowHot, [0, .13, .18], null, null, true));
+    meshes.push(part(new THREE.BoxGeometry(.02, .05, .12), railGlow, [0, .14, -.06], null, null, true));
+    meshes.push(part(new THREE.BoxGeometry(.1, .18, .22), railDark, [0, -.14, .14], [.18, 0, 0]));
+    meshes.push(part(new THREE.BoxGeometry(.08, .03, .06), railMetal, [0, -.24, .15], [.18, 0, 0]));
+    for (let i = 0; i < 5; i++) {
+      meshes.push(part(new THREE.BoxGeometry(.17, .012, .03), railDark, [0, .065, -.5 - i * .08]));
+    }
+    meshes.push(part(new THREE.CylinderGeometry(.03, .04, .15, 8), railDark, [0, -.15, .05], [.2, 0, 0]));
+    meshes.push(part(new THREE.BoxGeometry(.012, .02, .4), railGlow, [.075, 0, -.05], null, null, true));
+    meshes.push(part(new THREE.BoxGeometry(.012, .02, .4), railGlow, [-.075, 0, -.05], null, null, true));
+    for (const [x, y, z] of [[.05, .08, .1], [-.05, .08, .1], [.05, .08, -.1], [-.05, .08, -.1]]) {
+      meshes.push(part(new THREE.CylinderGeometry(.006, .006, .014, 8), copper, [x, y, z], [Math.PI / 2, 0, 0]));
+    }
+    return meshes;
+  }
+
+  // Flash di sparo (additivo, raccolto dal bloom) — tenuti separati dai modelli
+  // così i riferimenti restano stabili tra una ricostruzione e l'altra.
   const flashMat = new THREE.MeshBasicMaterial({
     color: 0xaef4ff, transparent: true, opacity: 0,
     blending: THREE.AdditiveBlending, depthWrite: false
   });
   const flashMesh = new THREE.Mesh(new THREE.OctahedronGeometry(0.06), flashMat);
   flashMesh.position.set(0, 0.015, -0.52);
-  gun.add(flashMesh);
+  const railFlashMat = new THREE.MeshBasicMaterial({
+    color: 0xff8c00, transparent: true, opacity: 0,
+    blending: THREE.AdditiveBlending, depthWrite: false
+  });
+  const railFlashMesh = new THREE.Mesh(new THREE.OctahedronGeometry(.1), railFlashMat);
+  railFlashMesh.position.set(0, .045, -1.02);
 
   const muzzleLight = new THREE.PointLight(0x9ff5ff, 0, 14, 2);
   muzzleLight.position.set(0.25, -0.18, -0.9);
-  camera.add(muzzleLight);
+
+  // Ricostruisce i modelli in base al livello di dettaglio corrente.
+  function disposeMesh(mesh) {
+    if (mesh.geometry) mesh.geometry.dispose();
+    if (mesh.material) {
+      if (Array.isArray(mesh.material)) mesh.material.forEach(m => m.dispose());
+      else mesh.material.dispose();
+    }
+  }
+  function applyWeaponDetail() {
+    const ultra = weaponDetailUltra;
+    for (const child of [...gun.children]) {
+      if (child !== flashMesh) { gun.remove(child); disposeMesh(child); }
+    }
+    for (const child of [...railgunView.children]) {
+      if (child !== railFlashMesh) { railgunView.remove(child); disposeMesh(child); }
+    }
+    gun.add(flashMesh);
+    railgunView.add(railFlashMesh);
+    gun.add(...buildPulseGun(ultra));
+    railgunView.add(...buildRailgun(ultra));
+  }
+
+  gun.position.set(0.25, -0.21, -0.45);
+  railgunView.position.set(.25, -.21, -.45);
+  railgunView.visible = false;
+  applyWeaponDetail();
+  camera.add(gun, railgunView, muzzleLight);
   const weaponFillLight = new THREE.PointLight(0x91bfff, 1.2, 2.4, 2);
   weaponFillLight.position.set(-.15, .12, .12);
   camera.add(weaponFillLight);
@@ -1660,6 +1919,8 @@
   const gameState = {
     health: CONFIG.maxHealth, shield: CONFIG.maxShield, stamina: CONFIG.maxStamina,
     ammo: CONFIG.magazineSize, reserve: CONFIG.reserveAmmo,
+    weapon: 'pulse', railgunUnlocked: false,
+    railgunAmmo: 0, railgunReserve: 0,
     reloading: false, reloadTimer: 0,
     score: 0, combo: 1, comboTimer: 0,
     wave: 1, waveKills: 0, waveTargets: 5, waveDelay: 0,
@@ -1697,8 +1958,32 @@
     hudController.renderBoss(droneSystem.apex);
   }
 
+  function setWeapon(nextWeapon, announce = true) {
+    const next = nextWeapon === 'railgun' ? 'railgun' : 'pulse';
+    if (next === 'railgun' && !gameState.railgunUnlocked) {
+      if (announce) toast(`<b>ARMORY</b> · ${t('toast.weaponLocked')}`);
+      return false;
+    }
+    if (gameState.weapon === next) {
+      gun.visible = next === 'pulse';
+      railgunView.visible = next === 'railgun';
+      return true;
+    }
+    gameState.weapon = next;
+    gameState.reloading = false;
+    gameState.reloadTimer = 0;
+    gun.visible = next === 'pulse';
+    railgunView.visible = next === 'railgun';
+    if (announce) {
+      toast(`<b>${t(next === 'railgun' ? 'weapon.railgun' : 'weapon.pulse')}</b> · ${t(next === 'railgun' ? 'toast.railgunReady' : 'toast.pulseReady')}`);
+      audio.ui();
+    }
+    updateHUD();
+    return true;
+  }
+
   function syncHudVisibility() {
-    const visible = locked && gameState.started;
+    const visible = isGameplayActive();
     if (hudVisibility === visible) return;
     hudVisibility = visible;
     crosshairEl.style.display = visible ? 'block' : 'none';
@@ -1707,6 +1992,10 @@
     targetLayerEl.style.display = visible ? 'block' : 'none';
     // La barra del boss segue la visibilità dell'HUD (orologio di pausa).
     bossBarEl.style.display = visible ? '' : 'none';
+    // I controlli touch compaiono solo durante l'azione su dispositivi touch.
+    if (touchMode) touchControlsEl.classList.toggle('active', visible);
+    // Nasconde la barra del mouse su touch.
+    if (touchMode) crosshairEl.style.display = visible ? 'none' : 'none';
   }
 
   // L1: copy dell'overlay di pausa/reset centralizzato, così il cambio lingua
@@ -1732,15 +2021,33 @@
     updateHUD();
     hudController.setMuted(audio.muted);
     settingsPanelRef?.syncLanguage?.(next);
-    if (!locked) applyOverlayStateCopy(false);
+    if (!isGameplayActive()) applyOverlayStateCopy(false);
   }
 
   function startReload(){
-    if(!gameState.started||gameState.reloading||gameState.ammo===CONFIG.magazineSize||gameState.reserve<=0||gameState.dead)return;
-    gameState.reloading=true;gameState.reloadTimer=CONFIG.reloadTime;audio.reload();toast(`<b>VX-9</b> · ${t('toast.reload')}`);updateHUD();
+    if(!gameState.started||gameState.reloading||gameState.dead)return;
+    if (gameState.weapon === 'railgun') {
+      if (!gameState.railgunUnlocked || gameState.railgunAmmo >= RAILGUN_TUNING.magazineSize || gameState.railgunReserve <= 0) return;
+      gameState.reloading = true;
+      gameState.reloadTimer = RAILGUN_TUNING.reloadTime;
+      audio.reload();
+      toast(`<b>${t('weapon.railgun')}</b> · ${t('toast.reload')}`);
+      updateHUD();
+      return;
+    }
+    if(gameState.ammo===CONFIG.magazineSize||gameState.reserve<=0)return;
+    gameState.reloading=true;gameState.reloadTimer=CONFIG.reloadTime;audio.reload();toast(`<b>${t('weapon.pulse')}</b> · ${t('toast.reload')}`);updateHUD();
   }
   function completeReload(){
-    const needed=CONFIG.magazineSize-gameState.ammo,taken=Math.min(needed,gameState.reserve);gameState.ammo+=taken;gameState.reserve-=taken;gameState.reloading=false;audio.ui();updateHUD();
+    if (gameState.weapon === 'railgun') {
+      const needed = RAILGUN_TUNING.magazineSize - gameState.railgunAmmo;
+      const taken = Math.min(needed, gameState.railgunReserve);
+      gameState.railgunAmmo += taken;
+      gameState.railgunReserve -= taken;
+    } else {
+      const needed=CONFIG.magazineSize-gameState.ammo,taken=Math.min(needed,gameState.reserve);gameState.ammo+=taken;gameState.reserve-=taken;
+    }
+    gameState.reloading=false;audio.ui();updateHUD();
   }
 
   const explosionSystem = new ExplosionSystem({
@@ -1750,7 +2057,7 @@
       cameraDamageKick = Math.min(.2, cameraDamageKick + amount);
     }
   });
-  loadingUI.update(.84, 'COMBAT SYSTEMS', 'PARTICELLE, DRONI E SISTEMI DI IMPATTO...');
+  loadingUI.update(.84, 'COMBAT SYSTEMS', 'Particles, drones and impact systems...');
 
   const reflectionBufferSize = new THREE.Vector2();
   function updateReflectionQuality(profile) {
@@ -1761,7 +2068,8 @@
   }
 
   const graphicsManager = new GraphicsManager({
-    applyProfile(profile, { initial }) {
+    allowUltra: !(touchMode && !highEndDevice),
+    applyProfile(profile, { mode, initial }) {
       renderScale = Math.min(window.devicePixelRatio, profile.pixelRatio);
       renderer.setPixelRatio(renderScale);
       renderer.setSize(window.innerWidth, window.innerHeight);
@@ -1773,6 +2081,11 @@
       renderPipeline.setQuality(profile);
       facadeSystem.setQuality(profile);
       explosionSystem.setQuality(profile);
+      // Ricostruisce i modelli delle armi quando si passa da/a ULTRA.
+      if (mode === 'ultra' !== weaponDetailUltra) {
+        weaponDetailUltra = mode === 'ultra';
+        applyWeaponDetail();
+      }
       if (!initial) toast(`<b>${t('toast.renderLabel')}</b> · ${profile.name}`);
     },
     onStatus(status) { hudController.setGraphicsStatus(`${rendererBackend} · ${status}`); },
@@ -1781,18 +2094,19 @@
         loadingUI.showModal(state.label, state.detail);
         loadingUI.update(state.progress, state.label, state.detail);
       } else {
-        loadingUI.hideModal({ hideOverlay: locked && gameState.started });
+        loadingUI.hideModal({ hideOverlay: isGameplayActive() });
         syncHudVisibility();
       }
     }
   });
   graphicsManager.init();
-  loadingUI.update(.92, 'FINAL CHECK', 'SINCRONIZZAZIONE HUD E PROFILI GRAFICI...');
+  loadingUI.update(.92, 'FINAL CHECK', 'Syncing HUD and graphics profiles...');
   const settingsPanelRef = hudController.mountSettings(overlayEl, {
     qualityMode: graphicsManager.mode,
     language: getLanguage(),
     mix: audio.mix,
     sensitivity: mouseSensitivity,
+    allowUltra: !(touchMode && !highEndDevice),
     onLanguage: lang => applyLanguage(lang),
     onQuality: mode => {
       graphicsManager.setMode(mode);
@@ -1830,6 +2144,22 @@
     color: 0xffe2a0, transparent: true, opacity: .82,
     blending: THREE.AdditiveBlending, depthWrite: false
   });
+  // Drop unico del primo Apex: visuale distinta dal normale rifornimento, con
+  // rotaie parallele e bobine energetiche in stile railgun arena shooter.
+  const railgunPickups=[];
+  const railgunPickupBodyGeometry = new RoundedBoxGeometry(.14,.18,1.08,3,.02);
+  const railgunPickupRailGeometry = new THREE.BoxGeometry(.035,.045,1.2);
+  const railgunPickupCoilGeometry = new THREE.TorusGeometry(.105,.018,8,18);
+  const railgunPickupBodyMaterial = new THREE.MeshStandardMaterial({
+    color: 0x243746, emissive: 0x063a52, emissiveIntensity: 1.25,
+    metalness: .92, roughness: .2
+  });
+  const railgunPickupRailMaterial = new THREE.MeshBasicMaterial({
+    color: 0x9efaff, toneMapped: false, blending: THREE.AdditiveBlending
+  });
+  const railgunPickupCoilMaterial = new THREE.MeshBasicMaterial({
+    color: 0x00e5ff, toneMapped: false, blending: THREE.AdditiveBlending
+  });
   const playerTarget = new THREE.Vector3();
   const hostilePlayerPoint = new THREE.Vector3();
   const hostileFrom = new CANNON.Vec3();
@@ -1841,6 +2171,7 @@
   const hostileClosest = new THREE.Vector3();
   let aliveEnemyCount = 0;
   let apexSpawned = false;
+  let railgunDropSpawned = false;
   const droneSystem = new DroneSystem({
     scene,
     camera,
@@ -1916,6 +2247,9 @@
       gameState.health+=healed;
       spawnAmmoDrop(impactPosition);
       spawnAmmoDrop({x:impactPosition.x+(apex.random()>.5?1.4:-1.4),y:impactPosition.y,z:impactPosition.z+(apex.random()>.5?1.2:-1.2)});
+      // Il boss dell'ondata 1 è la ricompensa di progressione: lascia una
+      // railgun persistente, raccolta dal giocatore entrando nel suo raggio.
+      if(gameState.wave===1)spawnRailgunDrop(impactPosition);
       explosionSystem.explode(impactPosition,apex.coreMaterial.emissive.getHex());
       // Secondo scoppio più ampio per la kill speciale (post-frame).
       window.setTimeout(()=>{
@@ -2125,6 +2459,72 @@
     ammoPickups.push({ mesh, age: 0, startY, baseY: .42, phase: Math.random() * Math.PI * 2 });
   }
 
+  function spawnRailgunDrop(position) {
+    if (gameState.wave !== 1 || gameState.railgunUnlocked || railgunDropSpawned) return;
+    const group = new THREE.Group();
+    const body = new THREE.Mesh(railgunPickupBodyGeometry, railgunPickupBodyMaterial);
+    const rails = [-.105, .105].map(x => {
+      const rail = new THREE.Mesh(railgunPickupRailGeometry, railgunPickupRailMaterial);
+      rail.position.set(x, .055, 0);
+      return rail;
+    });
+    const coils = [-.28, 0, .28].map(z => {
+      const coil = new THREE.Mesh(railgunPickupCoilGeometry, railgunPickupCoilMaterial);
+      coil.rotation.x = Math.PI / 2;
+      coil.position.set(0, .055, z);
+      coil.scale.y = .62;
+      return coil;
+    });
+    group.add(body, ...rails, ...coils);
+    group.rotation.y = Math.PI * .25;
+    group.rotation.z = -.16;
+    const startY = Math.max(.85, Number.isFinite(position?.y) ? position.y : .85);
+    group.position.set(
+      Number.isFinite(position?.x) ? position.x : playerBody.position.x,
+      startY,
+      Number.isFinite(position?.z) ? position.z : playerBody.position.z
+    );
+    group.traverse(object => { if (object.isMesh) object.castShadow = true; });
+    scene.add(group);
+    railgunPickups.push({ group, coils, age: 0, startY, baseY: .68, phase: Math.random() * Math.PI * 2 });
+    railgunDropSpawned = true;
+    toast(`<b>${t('weapon.railgun')}</b> · ${t('toast.railgunDrop')}`);
+  }
+
+  function updateRailgunPickups(delta, time) {
+    for (let i = railgunPickups.length - 1; i >= 0; i--) {
+      const pickup = railgunPickups[i];
+      pickup.age += delta;
+      const settle = Math.min(1, pickup.age / .65);
+      pickup.group.position.y = THREE.MathUtils.lerp(pickup.startY, pickup.baseY, settle)
+        + Math.sin(time * 3.1 + pickup.phase) * .1;
+      pickup.group.rotation.y += delta * 1.5;
+      for (const coil of pickup.coils) coil.rotation.z += delta * 4.2;
+
+      if (pickup.group.position.distanceToSquared(playerBody.position) <= 1.65 * 1.65) {
+        gameState.railgunUnlocked = true;
+        gameState.railgunAmmo = RAILGUN_TUNING.magazineSize;
+        gameState.railgunReserve = RAILGUN_TUNING.reserveAmmo;
+        scene.remove(pickup.group);
+        railgunPickups.splice(i, 1);
+        setWeapon('railgun', false);
+        audio.railgunPickup();
+        toast(`<b>${t('weapon.railgun')}</b> · ${t('toast.railgunReady')}`);
+        updateHUD();
+        continue;
+      }
+      if (pickup.age >= RAILGUN_TUNING.pickupLifetime) {
+        scene.remove(pickup.group);
+        railgunPickups.splice(i, 1);
+      }
+    }
+  }
+
+  function clearRailgunPickups() {
+    for (const pickup of railgunPickups) scene.remove(pickup.group);
+    railgunPickups.length = 0;
+  }
+
   function updateAmmoPickups(delta, time) {
     for (let i = ammoPickups.length - 1; i >= 0; i--) {
       const pickup = ammoPickups[i];
@@ -2136,6 +2536,19 @@
       pickup.mesh.children[1].rotation.z += delta * 3.7;
 
       if (pickup.mesh.position.distanceToSquared(playerBody.position) <= 1.15 * 1.15) {
+        // Quando la railgun è in possesso, ogni rifornimento di munizioni vale
+        // 1 sparo della railgun e va alla riserva (da cui si ricarica il colpo).
+        // Anche qui vale B8: a riserva piena il pickup resta a terra.
+        if (gameState.railgunUnlocked) {
+          if (gameState.railgunReserve >= RAILGUN_TUNING.reserveAmmo) continue;
+          gameState.railgunReserve += 1;
+          audio.pickup();
+          toast(`<b>${t('weapon.railgun')}</b> · ${t('toast.ammo',{amount:1})}`);
+          updateHUD();
+          scene.remove(pickup.mesh);
+          ammoPickups.splice(i, 1);
+          continue;
+        }
         const amount = Math.min(CONFIG.ammoDropAmount, CONFIG.reserveAmmo - gameState.reserve);
         // B8: a riserva piena il pickup NON viene consumato (resta a terra finché
         // non serve); nessun toast spam finché il giocatore resta sopra il drop.
@@ -2193,14 +2606,14 @@
   }
 
   function updateDrones(delta,time){
-    if (!gameState.started && !locked) return;
+    if (!gameState.started && !isGameplayActive()) return;
     // N7: gli spawn dei minion/split aggiungono droni durante la run; il flag
     // apexSpawned evita che ogni frame provi a ri-generare l'Apex dell'ondata.
-    aliveEnemyCount=droneSystem.update(delta,time,{active:locked&&gameState.started,dead:gameState.dead});
-    const apexAlive=droneSystem.updateApex(delta,time,{active:locked&&gameState.started,dead:gameState.dead});
+    aliveEnemyCount=droneSystem.update(delta,time,{active:isGameplayActive(),dead:gameState.dead});
+    const apexAlive=droneSystem.updateApex(delta,time,{active:isGameplayActive(),dead:gameState.dead});
     // Carica VANGUARD: danno da contatto mentre è in carica.
     const apex=droneSystem.apex;
-    if(apex&&apex.alive&&apex.state==='charge'&&apex.chargeDir&&locked&&gameState.started&&!gameState.dead){
+    if(apex&&apex.alive&&apex.state==='charge'&&apex.chargeDir&&isGameplayActive()&&!gameState.dead){
       const dx=apex.group.position.x-playerBody.position.x;
       const dz=apex.group.position.z-playerBody.position.z;
       if(dx*dx+dz*dz<(apex.radius+.75)*(apex.radius+.75))damagePlayer(APEX_TUNING.chargeContactDmg);
@@ -2271,7 +2684,7 @@
   }
 
   spawnWave(false);
-  loadingUI.update(.94, 'SHADER WARMUP', 'PRECOMPILAZIONE DELLE PIPELINE GRAFICHE...');
+  loadingUI.update(.94, 'SHADER WARMUP', 'Precompiling graphics pipelines...');
   // G1: precompila le pipeline WebGPU di tutti i materiali in scena e della
   // catena di post-processing durante il loading, così il primo frame, il
   // primo colpo e la prima esplosione non pagano la compilazione shader.
@@ -2285,7 +2698,7 @@
   } catch (error) {
     console.warn('VIBE pipeline warmup skipped', error);
   }
-  loadingUI.update(.96, 'BOOT COMPLETE', 'SINCRONIZZAZIONE FINALE DELLA SCENA...');
+  loadingUI.update(.96, 'BOOT COMPLETE', 'Final scene sync...');
   loadingUI.finishBoot();
 
   /* ============================================================
@@ -2298,39 +2711,76 @@
   let triggerDown = false;
   let fireCooldown = 0;
 
+  // --- MOBILE / TOUCH ---------------------------------------------------------
+  // touchMode/highEndDevice sono rilevati in alto (danno anche il dettaglio armi).
+  let playing = false;
+  // Spazio di input touch: verrà consumato da updatePlayer / fire loop / HUD.
+  const touchInput = {
+    moveX: 0, moveZ: 0,   // joystick sinistro (movimento)
+    aimX: 0, aimY: 0,     // joystick destro (mira)
+    fire: false, jump: false, melee: false, reload: false, sprint: false, weapon: false
+  };
+  // True quando la simulazione è attiva (desktop: pointer lock; touch: playing).
+  const isGameplayActive = () => (touchMode ? playing : locked) && gameState.started && !gameStartLoading;
+  // Input attivo (solo pointer lock / playing, senza gameState.started né
+  // gameStartLoading): usato dal flusso di avvio, che è proprio ciò che imposta
+  // gameState.started = true e che tiene gameStartLoading = true durante l'asincrono.
+  const isInputActive = () => (touchMode ? playing : locked);
+  // Elementi DOM dei controlli touch.
+  const touchControlsEl = document.getElementById('touch-controls');
+  const touchLStickEl = document.getElementById('touch-l-joystick');
+  const touchRStickEl = document.getElementById('touch-r-joystick');
+  const touchLThumbEl = document.getElementById('touch-l-thumb');
+  const touchRThumbEl = document.getElementById('touch-r-thumb');
+  const touchBtnFire = document.getElementById('touch-btn-fire');
+  const touchBtnMelee = document.getElementById('touch-btn-melee');
+  const touchBtnReload = document.getElementById('touch-btn-reload');
+  const touchBtnWeapon = document.getElementById('touch-btn-weapon');
+  const touchBtnJump = document.getElementById('touch-btn-jump');
+  const touchBtnSprint = document.getElementById('touch-btn-sprint');
+  const rotateOverlayEl = document.getElementById('rotate-overlay');
+  // Stato per-josystick (tracciato per touch.identifier).
+  const leftStick = { id: null, anchorX: 0, anchorY: 0 };
+  const rightStick = { id: null, anchorX: 0, anchorY: 0 };
+  const STICK_RADIUS = 46; // raggio (px) dello stick virtuale
+  const AIM_SENSITIVITY = 0.0044;
+
   async function beginSimulationStart() {
     if (gameStartLoading || gameState.started) return;
     gameStartLoading = true;
-    loadingUI.showModal('LINK STARTUP', 'PREPARAZIONE DELLA SIMULAZIONE...');
+    loadingUI.showModal('LINK STARTUP', 'Preparing the simulation...');
     try {
       await loadingUI.nextFrame();
-      if (!locked) return;
+      if (!isInputActive()) return;
       try {
         await audio.start();
       } catch (error) {
         console.warn('VIBE audio startup skipped', error);
       }
-      loadingUI.update(.32, 'AUDIO LINK', 'ATTIVAZIONE DEL MOTORE AUDIO PROCEDURALE...');
+      loadingUI.update(.32, 'AUDIO LINK', 'Activating the procedural audio engine...');
       await loadingUI.nextFrame();
-      if (!locked) return;
-      loadingUI.update(.64, 'COMBAT READY', 'SINCRONIZZAZIONE FISICA, HUD E SISTEMI TATTICI...');
+      if (!isInputActive()) return;
+      loadingUI.update(.64, 'COMBAT READY', 'Syncing physics, HUD and tactical systems...');
       await loadingUI.nextFrame();
-      if (!locked) return;
-      loadingUI.update(.86, 'FINAL SYNC', 'APERTURA DEL CANALE DI COMBATTIMENTO...');
+      if (!isInputActive()) return;
+      loadingUI.update(.86, 'FINAL SYNC', 'Opening the combat channel...');
       await new Promise(resolve => setTimeout(resolve, 110));
-      if (!locked) return;
+      if (!isInputActive()) return;
       gameState.started = true;
       syncHudVisibility();
       hudController.beginOnboardingFade();
       showWave();
       toast(`<b>${t('toast.missionLabel')}</b> · ${t('toast.mission')}`);
-      loadingUI.update(1, 'LINK ACTIVE', 'SIMULAZIONE OPERATIVA');
+      loadingUI.update(1, 'LINK ACTIVE', 'Simulation operational');
       await loadingUI.nextFrame();
       await new Promise(resolve => setTimeout(resolve, 180));
       loadingUI.hideModal({ hideOverlay: true });
     } finally {
       gameStartLoading = false;
       if (!gameState.started) loadingUI.hideModal();
+      // La visibilità HUD dipende da !gameStartLoading: va ricalcolata solo ora
+      // che il flag è stato azzerato, altrimenti l'HUD resterebbe nascosto.
+      syncHudVisibility();
     }
   }
 
@@ -2349,15 +2799,19 @@
     // salto in coda e la ricarica partono solo a simulazione effettivamente
     // in corso (prima un Space in pausa saltava al rientro, R ricaricava a
     // simulazione congelata).
-    const gameplayInput = locked && gameState.started && !gameStartLoading;
+    const gameplayInput = isGameplayActive();
     if (e.code === 'Space' && gameplayInput) jumpQueued = true;
     if (e.code === 'KeyR' && gameplayInput) startReload();
+    if (e.code === 'KeyQ' && gameplayInput && gameState.railgunUnlocked) setWeapon(gameState.weapon === 'railgun' ? 'pulse' : 'railgun');
+    // Scorrimento armi con i numeri da 1 in avanti sulla tastiera.
+    if (e.code === 'Digit1' && gameplayInput) setWeapon('pulse');
+    if (e.code === 'Digit2' && gameplayInput && gameState.railgunUnlocked) setWeapon('railgun');
     if (e.code === 'KeyM') audio.toggle();
   });
   document.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
   document.addEventListener('mousemove', (e) => {
-    if (!locked) return;
+    if (touchMode || !locked) return;
     const movementX = Number.isFinite(e.movementX) ? e.movementX : 0;
     const movementY = Number.isFinite(e.movementY) ? e.movementY : 0;
     yaw   -= movementX * 0.0022 * mouseSensitivity;
@@ -2367,7 +2821,7 @@
   });
 
   document.addEventListener('mousedown', (e) => {
-    if (!locked || !gameState.started || gameStartLoading) return;
+    if (touchMode || !locked || !gameState.started || gameStartLoading) return;
     if (e.button === 2) {
       e.preventDefault();
       meleeAttack();
@@ -2382,14 +2836,38 @@
   });
   document.addEventListener('contextmenu', (e) => e.preventDefault());
 
-  overlayEl.addEventListener('click', event => {
-    if(event.target.closest('.settings-panel'))return;
+  // Scorrimento delle armi con la rotella del mouse: cicla tra le armi
+  // effettivamente disponibili (la railgun solo se sbloccata).
+  function cycleWeapon(direction) {
+    const available = gameState.railgunUnlocked ? ['pulse', 'railgun'] : ['pulse'];
+    const idx = available.indexOf(gameState.weapon);
+    const next = available[(idx + direction + available.length) % available.length];
+    setWeapon(next);
+  }
+  document.addEventListener('wheel', (e) => {
+    if (touchMode || !locked || !gameState.started || gameStartLoading || e.deltaY === 0) return;
+    cycleWeapon(e.deltaY > 0 ? 1 : -1);
+  }, { passive: true });
+
+  // Avvio simulazione: su desktop chiede il pointer lock; su touch imposta
+  // "playing" (niente pointer lock) e blocca l'orientamento in landscape.
+  function startGame(event) {
+    if (event.target.closest('.settings-panel')) return;
     audio.start().catch(error => console.warn('VIBE audio startup skipped', error));
-    const req = document.body.requestPointerLock();
-    if (req && typeof req.catch === 'function') req.catch(() => {});
-  });
+    if (touchMode) {
+      playing = true;
+      requestLandscape();
+      syncHudVisibility();
+      beginSimulationStart();
+    } else {
+      const req = document.body.requestPointerLock();
+      if (req && typeof req.catch === 'function') req.catch(() => {});
+    }
+  }
+  overlayEl.addEventListener('click', startGame);
 
   document.addEventListener('pointerlockchange', () => {
+    if (touchMode) return;
     locked = document.pointerLockElement === document.body;
     overlayEl.style.display = locked && gameState.started ? 'none' : 'flex';
     syncHudVisibility();
@@ -2404,6 +2882,134 @@
       applyOverlayStateCopy(false);
     }
   });
+
+  // --- Orientamento obbligatorio landscape (solo touch) ----------------------
+  function isPortrait() {
+    return typeof window.orientation === 'number'
+      ? Math.abs(window.orientation) === 90 ? false : true
+      : (window.innerHeight > window.innerWidth);
+  }
+  function updateRotateGuard() {
+    if (!touchMode) return;
+    const portrait = isPortrait();
+    rotateOverlayEl.hidden = !portrait;
+    document.body.classList.toggle('rotate-blocked', portrait);
+    // Se il gioco è in corsa e il dispositivo torna in portrait, metti in pausa.
+    if (portrait && playing && gameState.started) {
+      playing = false;
+      clearPlayerInput();
+      syncHudVisibility();
+      overlayEl.style.display = 'flex';
+      applyOverlayStateCopy(false);
+    }
+  }
+  function requestLandscape() {
+    if (typeof screen !== 'undefined' && screen.orientation && screen.orientation.lock) {
+      screen.orientation.lock('landscape').catch(() => {});
+    }
+    if (document.documentElement.requestFullscreen) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    }
+  }
+  window.addEventListener('orientationchange', updateRotateGuard);
+  window.addEventListener('resize', updateRotateGuard);
+  updateRotateGuard();
+
+  // --- Gestione touch: doppio stick + pulsanti ------------------------------
+  document.addEventListener('touchstart', (e) => {
+    if (!touchMode || !isGameplayActive()) return;
+    e.preventDefault();
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const t = e.changedTouches[i];
+      // Mira (joystick destro): tocco sulla metà destra dello schermo.
+      if (t.clientX > window.innerWidth * 0.5 && rightStick.id === null) {
+        rightStick.id = t.identifier;
+        rightStick.anchorX = t.clientX;
+        rightStick.anchorY = t.clientY;
+        touchRStickEl.style.left = `${t.clientX}px`;
+        touchRStickEl.style.top = `${t.clientY}px`;
+        touchRStickEl.classList.add('active');
+        touchRThumbEl.style.transform = 'translate(0,0)';
+        continue;
+      }
+      // Movimento (joystick sinistro): tocco sulla metà sinistra dello schermo.
+      if (t.clientX <= window.innerWidth * 0.5 && leftStick.id === null) {
+        leftStick.id = t.identifier;
+        leftStick.anchorX = t.clientX;
+        leftStick.anchorY = t.clientY;
+        touchLStickEl.style.left = `${t.clientX}px`;
+        touchLStickEl.style.top = `${t.clientY}px`;
+        touchLStickEl.classList.add('active');
+        touchLThumbEl.style.transform = 'translate(0,0)';
+        touchInput.moveX = 0;
+        touchInput.moveZ = 0;
+        continue;
+      }
+    }
+  }, { passive: false });
+
+  document.addEventListener('touchmove', (e) => {
+    if (!touchMode || !isGameplayActive()) return;
+    e.preventDefault();
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const t = e.changedTouches[i];
+      if (t.identifier === leftStick.id) {
+        let dx = t.clientX - leftStick.anchorX;
+        let dy = t.clientY - leftStick.anchorY;
+        const d = Math.hypot(dx, dy);
+        const mag = Math.min(1, d / STICK_RADIUS);
+        if (d > 0.001) { dx /= d; dy /= d; }
+        touchInput.moveX = dx * mag;
+        touchInput.moveZ = dy * mag;
+        touchLThumbEl.style.transform = `translate(${dx * mag * STICK_RADIUS}px, ${dy * mag * STICK_RADIUS}px)`;
+      } else if (t.identifier === rightStick.id) {
+        const dx = t.clientX - rightStick.anchorX;
+        const dy = t.clientY - rightStick.anchorY;
+        const d = Math.hypot(dx, dy);
+        const mag = Math.min(1, d / STICK_RADIUS);
+        // Mira: il delta viene convertito in rotazione camera.
+        yaw   -= dx * AIM_SENSITIVITY * mouseSensitivity;
+        pitch -= dy * AIM_SENSITIVITY * mouseSensitivity;
+        const limit = Math.PI / 2 - 0.01;
+        pitch = Math.max(-limit, Math.min(limit, pitch));
+        touchRThumbEl.style.transform = `translate(${dx * mag}px, ${dy * mag}px)`;
+      }
+    }
+  }, { passive: false });
+
+  function endTouch(e) {
+    if (!touchMode) return;
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const t = e.changedTouches[i];
+      if (t.identifier === leftStick.id) {
+        leftStick.id = null;
+        touchLStickEl.classList.remove('active');
+        touchInput.moveX = 0;
+        touchInput.moveZ = 0;
+      } else if (t.identifier === rightStick.id) {
+        rightStick.id = null;
+        touchRStickEl.classList.remove('active');
+      }
+    }
+  }
+  document.addEventListener('touchend', endTouch);
+  document.addEventListener('touchcancel', endTouch);
+
+  // Arma: tieni premuto per il fuoco automatico (come il mouse).
+  touchBtnFire.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); if (isGameplayActive()) { triggerDown = true; fireBullet(); } }, { passive: false });
+  touchBtnFire.addEventListener('touchend', (e) => { e.preventDefault(); e.stopPropagation(); triggerDown = false; }, { passive: false });
+  touchBtnFire.addEventListener('touchcancel', (e) => { triggerDown = false; });
+  // Melee: tap singolo.
+  touchBtnMelee.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); if (isGameplayActive()) meleeAttack(); }, { passive: false });
+  // Ridica e cambio arma: tap singolo.
+  touchBtnReload.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); if (isGameplayActive()) startReload(); }, { passive: false });
+  touchBtnWeapon.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); if (isGameplayActive()) cycleWeapon(1); }, { passive: false });
+  // Salto: tap singolo.
+  touchBtnJump.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); if (isGameplayActive()) jumpQueued = true; }, { passive: false });
+  // Sprint: tieni premuto per correre.
+  touchBtnSprint.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); if (isGameplayActive()) touchInput.sprint = true; }, { passive: false });
+  touchBtnSprint.addEventListener('touchend', (e) => { e.preventDefault(); e.stopPropagation(); touchInput.sprint = false; }, { passive: false });
+  touchBtnSprint.addEventListener('touchcancel', (e) => { touchInput.sprint = false; });
 
   window.addEventListener('blur', () => {
     clearPlayerInput();
@@ -2423,6 +3029,18 @@
     jumpQueued = false;
     triggerDown = false;
     isSprinting = false;
+    touchInput.moveX = 0;
+    touchInput.moveZ = 0;
+    touchInput.fire = false;
+    touchInput.jump = false;
+    touchInput.melee = false;
+    touchInput.reload = false;
+    touchInput.sprint = false;
+    touchInput.weapon = false;
+    leftStick.id = null;
+    rightStick.id = null;
+    touchLStickEl?.classList.remove('active');
+    touchRStickEl?.classList.remove('active');
   }
 
   /* ============================================================
@@ -2448,7 +3066,7 @@
   }
 
   function updatePlayer(delta) {
-    if (gameState.dead || !locked || !gameState.started || gameStartLoading) {
+    if (gameState.dead || !isGameplayActive()) {
       playerBody.velocity.x = 0; playerBody.velocity.z = 0; jumpQueued = false; isSprinting = false;
       return;
     }
@@ -2472,15 +3090,22 @@
     if (keys['KeyS'] || keys['ArrowDown'])  { mx -= fx; mz -= fz; }
     if (keys['KeyD'] || keys['ArrowRight']) { mx += rx; mz += rz; }
     if (keys['KeyA'] || keys['ArrowLeft'])  { mx -= rx; mz -= rz; }
+    // Joystick sinistro (touch): il pollice verso l'alto avanza, a destra straface.
+    // moveX = orizzontale (destra +), moveZ = verticale (su = -). Si somma ai tasti.
+    if (touchMode) {
+      mx += -touchInput.moveZ * fx + touchInput.moveX * rx;
+      mz += -touchInput.moveZ * fz + touchInput.moveX * rz;
+    }
     const len = Math.hypot(mx, mz);
     if (len > 0) { mx /= len; mz /= len; }
-    isSprinting = !!(keys['ShiftLeft'] || keys['ShiftRight']) && len > 0 && onGround && gameState.stamina > 1;
+    const sprintHeld = (keys['ShiftLeft'] || keys['ShiftRight']) || touchInput.sprint;
+    isSprinting = sprintHeld && len > 0 && onGround && gameState.stamina > 1;
     const targetSpeed = isSprinting ? CONFIG.sprintSpeed : CONFIG.moveSpeed;
     playerBody.velocity.x = mx * targetSpeed;
     playerBody.velocity.z = mz * targetSpeed;
     if (isSprinting) gameState.stamina = Math.max(0, gameState.stamina - delta * CONFIG.sprintDrain);
     else gameState.stamina = Math.min(CONFIG.maxStamina, gameState.stamina + delta * (onGround ? CONFIG.staminaRegenGround : CONFIG.staminaRegenAir));
-    if (onGround && len > 0 && locked && elapsed >= nextFootstep) {
+    if (onGround && len > 0 && isGameplayActive() && elapsed >= nextFootstep) {
       audio.playFootstep({ sprint: isSprinting });
       nextFootstep = elapsed + (isSprinting ? .31 : .43);
     }
@@ -2574,6 +3199,83 @@
     }
     return material;
   }
+  // Traccia della railgun: un raggio arancione luminoso e persistente per 1
+  // secondo. Core (linea brillante) + alone volumetrico (cilindro additivo) +
+  // sprite di impatto condividono il ciclo di vita e decadono insieme.
+  const railBeamPositionAttribute = new THREE.Float32BufferAttribute(new Float32Array(6), 3);
+  const railBeamGeometry = new THREE.BufferGeometry();
+  railBeamGeometry.setAttribute('position', railBeamPositionAttribute);
+  const railBeamMaterial = new THREE.LineBasicMaterial({ color: 0xffd9a0, transparent: true, opacity: 0, toneMapped: false, blending: THREE.AdditiveBlending, depthWrite: false });
+  const railBeamGlowMaterial = new THREE.LineBasicMaterial({ color: 0xff8c00, transparent: true, opacity: 0, toneMapped: false, blending: THREE.AdditiveBlending, depthWrite: false });
+  const railBeam = new THREE.Line(railBeamGeometry, railBeamMaterial);
+  const railBeamGlow = new THREE.Line(railBeamGeometry, railBeamGlowMaterial);
+  // Alone volumetrico del raggio: cilindro additivo orientato lungo la direzione.
+  const railBeamCylinder = new THREE.Mesh(
+    new THREE.CylinderGeometry(.05, .05, 1, 12, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0xff6a00, transparent: true, opacity: 0, toneMapped: false, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
+  );
+  railBeamCylinder.visible = false;
+  const railImpactSprite = makeGlowSprite(0xffa040, .72);
+  railBeam.visible = false;
+  railBeamGlow.visible = false;
+  railImpactSprite.visible = false;
+  scene.add(railBeamGlow, railBeam, railBeamCylinder, railImpactSprite);
+  let railBeamTimer = 0;
+  const RAIL_BEAM_DURATION = 1.0;
+  const railCylinderUp = new THREE.Vector3(0, 1, 0);
+  const railCylinderDir = new THREE.Vector3();
+  const railCylinderQuat = new THREE.Quaternion();
+  function showRailBeam(start, end) {
+    railBeamPositionAttribute.setXYZ(0, start.x, start.y, start.z);
+    railBeamPositionAttribute.setXYZ(1, end.x, end.y, end.z);
+    railBeamPositionAttribute.needsUpdate = true;
+    railBeamMaterial.opacity = 1;
+    railBeamGlowMaterial.opacity = .85;
+    railBeam.visible = true;
+    railBeamGlow.visible = true;
+    // Orienta il cilindro da start a end lungo la direzione del raggio.
+    railCylinderDir.copy(end).sub(start);
+    const len = railCylinderDir.length();
+    railBeamCylinder.position.copy(start).addScaledVector(railCylinderDir, 0.5);
+    railBeamCylinder.scale.set(1, len, 1);
+    railCylinderQuat.setFromUnitVectors(railCylinderUp, railCylinderDir.normalize());
+    railBeamCylinder.quaternion.copy(railCylinderQuat);
+    railBeamCylinder.material.opacity = .5;
+    railBeamCylinder.visible = true;
+    railImpactSprite.position.copy(end);
+    railImpactSprite.visible = true;
+    railImpactSprite.material.opacity = 1;
+    railImpactSprite.scale.setScalar(.72);
+    railBeamTimer = RAIL_BEAM_DURATION;
+  }
+  function updateRailBeam(delta) {
+    if (railBeamTimer <= 0) return;
+    railBeamTimer = Math.max(0, railBeamTimer - delta);
+    const fade = Math.min(1, railBeamTimer / RAIL_BEAM_DURATION);
+    railBeamMaterial.opacity = fade;
+    railBeamGlowMaterial.opacity = fade * .85;
+    railBeamCylinder.material.opacity = fade * .5;
+    railImpactSprite.material.opacity = fade;
+    railImpactSprite.scale.setScalar(.38 + fade * .34);
+    if (railBeamTimer <= 0) {
+      railBeam.visible = false;
+      railBeamGlow.visible = false;
+      railBeamCylinder.visible = false;
+      railImpactSprite.visible = false;
+      railImpactSprite.material.opacity = 1;
+    }
+  }
+  function clearRailBeam() {
+    railBeamTimer = 0;
+    railBeam.visible = false;
+    railBeamGlow.visible = false;
+    railBeamCylinder.visible = false;
+    railImpactSprite.visible = false;
+    railBeamMaterial.opacity = 0;
+    railBeamGlowMaterial.opacity = 0;
+    railBeamCylinder.material.opacity = 0;
+    railImpactSprite.material.opacity = 1;
+  }
   const bullets = [];
   const meleeOrigin = new THREE.Vector3();
   const meleeDirection = new THREE.Vector3();
@@ -2584,6 +3286,10 @@
 
   function fireBullet() {
     if (!gameState.started || gameStartLoading || gameState.dead || gameState.reloading || meleeTimer > 0) return;
+    if (gameState.weapon === 'railgun') {
+      fireRailgun();
+      return;
+    }
     // Il cooldown va verificato QUI e non solo nel ramo di fuoco automatico: il
     // gestore mousedown chiamava fireBullet() senza controllarlo, quindi
     // cliccando rapidamente si superava CONFIG.fireRate (cadenza limitata solo
@@ -2646,7 +3352,7 @@
   }
 
   function meleeAttack() {
-    if (!locked || !gameState.started || gameStartLoading || gameState.dead || meleeCooldown > 0) return;
+    if (!isGameplayActive() || gameState.dead || meleeCooldown > 0) return;
     meleeCooldown = CONFIG.meleeCooldown;
     meleeTimer = CONFIG.meleeDuration;
     audio.melee();
@@ -2694,18 +3400,113 @@
 
   const bulletRay = new CANNON.Ray();
   const bulletHit = new CANNON.RaycastResult();
+  const railRay = new CANNON.Ray();
+  const railHit = new CANNON.RaycastResult();
+  const railFrom = new CANNON.Vec3();
+  const railTo = new CANNON.Vec3();
   const bulletSegment = new THREE.Line3();
   const bulletClosest = new THREE.Vector3();
   // C4: temp vector riusati per direzione e origine del colpo (niente allocazioni
   // per colpo nel percorso caldo di fireBullet).
   const bulletDir = new THREE.Vector3();
   const bulletOrigin = new THREE.Vector3();
+  const railDirection = new THREE.Vector3();
+  const railOrigin = new THREE.Vector3();
+  const railEnd = new THREE.Vector3();
+  const railTargetPoint = new THREE.Vector3();
+  const railTargetOffset = new THREE.Vector3();
 
   function isFiniteVector3(value) {
     return Boolean(value)
       && Number.isFinite(value.x)
       && Number.isFinite(value.y)
       && Number.isFinite(value.z);
+  }
+
+  function fireRailgun() {
+    if (!gameState.started || gameStartLoading || gameState.dead || gameState.reloading || meleeTimer > 0) return;
+    if (fireCooldown > 0) return;
+    if (gameState.railgunAmmo <= 0) {
+      audio.dry();
+      startReload();
+      fireCooldown = .2;
+      return;
+    }
+
+    gameState.railgunAmmo--;
+    gameState.shots++;
+    fireCooldown = RAILGUN_TUNING.cooldown;
+    camera.getWorldDirection(railDirection);
+    railOrigin.copy(camera.position);
+    railEnd.copy(railOrigin).addScaledVector(railDirection, RAILGUN_TUNING.range);
+
+    // Il raggio si ferma sulla prima parete/cassa, come un colpo reale: il
+    // controllo è istantaneo e non crea un body fisico da aggiornare.
+    railFrom.set(railOrigin.x, railOrigin.y, railOrigin.z);
+    railTo.set(railEnd.x, railEnd.y, railEnd.z);
+    const blocked = railRay.intersectWorld(world, {
+      mode: CANNON.Ray.CLOSEST,
+      result: railHit,
+      from: railFrom,
+      to: railTo,
+      collisionFilterGroup: COLLISION.BULLET,
+      collisionFilterMask: COLLISION.STATIC | COLLISION.CRATE
+    });
+    let maxRange = RAILGUN_TUNING.range;
+    if (blocked && isFiniteVector3(railHit.hitPointWorld)) {
+      maxRange = Math.min(maxRange, Math.hypot(
+        railHit.hitPointWorld.x - railOrigin.x,
+        railHit.hitPointWorld.y - railOrigin.y,
+        railHit.hitPointWorld.z - railOrigin.z
+      ));
+      railEnd.copy(railDirection).multiplyScalar(maxRange).add(railOrigin);
+    }
+
+    let closestDrone = null;
+    let closestApex = null;
+    let closestDistance = maxRange;
+    for (const drone of drones) {
+      if (!drone.alive) continue;
+      railTargetOffset.copy(drone.position).sub(railOrigin);
+      const along = railTargetOffset.dot(railDirection);
+      if (along <= .1 || along > closestDistance) continue;
+      const perpendicularSq = Math.max(0, railTargetOffset.lengthSq() - along * along);
+      const hitRadius = drone.radius + .2;
+      if (perpendicularSq > hitRadius * hitRadius) continue;
+      closestDrone = drone;
+      closestApex = null;
+      closestDistance = along;
+    }
+    // La railgun può ferire gli Apex, ma conserva il loro ruolo: il oneshot è
+    // riservato ai droni semplici sopra, mentre qui usa un danno dedicato.
+    const apexTarget = droneSystem.apex;
+    if (apexTarget && apexTarget.alive) {
+      railTargetOffset.copy(apexTarget.position).sub(railOrigin);
+      const along = railTargetOffset.dot(railDirection);
+      if (along > .1 && along <= closestDistance) {
+        const perpendicularSq = Math.max(0, railTargetOffset.lengthSq() - along * along);
+        if (perpendicularSq <= (apexTarget.radius + .24) ** 2) {
+          closestApex = apexTarget;
+          closestDrone = null;
+          closestDistance = along;
+        }
+      }
+    }
+
+    if (closestDrone || closestApex) {
+      railTargetPoint.copy(railOrigin).addScaledVector(railDirection, closestDistance);
+      railEnd.copy(railTargetPoint);
+      if (closestDrone) damageDrone(closestDrone, RAILGUN_TUNING.damage, railTargetPoint.clone());
+      else damageApex(closestApex, RAILGUN_TUNING.apexDamage, railTargetPoint.clone());
+    }
+    audio.railgun(panForWorld(railEnd));
+    showRailBeam(railOrigin, railEnd);
+    explosionSystem.sparkBurst(railEnd, closestDrone || closestApex ? 0xffb347 : 0xff8c00, 24);
+    crosshairFireTimer = .18;
+    gunRecoil = .11;
+    railFlashMesh.material.opacity = .98;
+    railFlashMesh.scale.setScalar(1.8);
+    updateHUD();
   }
 
   function disposeBullet(bullet) {
@@ -2818,6 +3619,8 @@
     clearBullets();
     clearHostileShots();
     clearAmmoPickups();
+    clearRailgunPickups();
+    clearRailBeam();
     explosionSystem.reset();
     renderPipeline.reset();
 
@@ -2826,6 +3629,10 @@
     gameState.stamina = CONFIG.maxStamina;
     gameState.ammo = CONFIG.magazineSize;
     gameState.reserve = CONFIG.reserveAmmo;
+    gameState.weapon = 'pulse';
+    gameState.railgunUnlocked = false;
+    gameState.railgunAmmo = 0;
+    gameState.railgunReserve = 0;
     gameState.reloading = false;
     gameState.reloadTimer = 0;
     gameState.score = 0;
@@ -2841,6 +3648,7 @@
     gameState.shots = 0;
     gameState.hits = 0;
     gameState.started = wasStarted;
+    railgunDropSpawned = false;
 
     elapsed = 0;
     accumulator = 0;
@@ -2860,6 +3668,9 @@
     gunRecoil = 0;
     muzzleLight.intensity = 0;
     flashMesh.material.opacity = 0;
+    railFlashMesh.material.opacity = 0;
+    gun.visible = true;
+    railgunView.visible = false;
     clearVexMines();
     for (const s of apexShockwaves) { scene.remove(s.mesh); s.mesh.geometry.dispose(); s.mesh.material.dispose(); }
     apexShockwaves.length = 0;
@@ -2870,7 +3681,7 @@
     if (wasStarted) {
       showWave(t('overlay.title.reset'), t('wave.reset.sub'));
       toast(`<b>${t('toast.system')}</b> · ${t('toast.reset')}`);
-      if (!locked) applyOverlayStateCopy(true);
+      if (!isGameplayActive()) applyOverlayStateCopy(true);
     }
   }
 
@@ -2909,7 +3720,7 @@
     // Con il menu di pausa aperto il gioco è davvero sospeso: niente step fisici,
     // niente droni, niente colpi in volo, niente timer di gioco. Rendering, camera,
     // HUD, pioggia/vapore e musica restano attivi.
-    const gameplayActive = locked && gameState.started && !gameStartLoading;
+    const gameplayActive = isGameplayActive();
     if (gameplayActive) {
       // Correggi subito eventuali residui dello step precedente prima che il
       // movimento e il raycast del terreno li possano riutilizzare.
@@ -2948,6 +3759,7 @@
 
       updateDrones(delta, elapsed);
       updateAmmoPickups(delta, elapsed);
+      updateRailgunPickups(delta, elapsed);
       updateBullets(delta);
       updateHostileShots(delta);
       updateGameplay(delta, elapsed);
@@ -2964,8 +3776,9 @@
     }
 
     explosionSystem.update(delta,camera);
+    updateRailBeam(delta);
     // A1: mix attenuato con il menu di pausa aperto (dirty-check interno).
-    audio.setMenuDuck(!locked && gameState.started);
+    audio.setMenuDuck(!isGameplayActive() && gameState.started);
     audio.update({
       aliveEnemies:aliveEnemyCount,
       wave:gameState.wave,
@@ -3021,6 +3834,7 @@
     muzzleLight.intensity = Math.max(0, muzzleLight.intensity - delta * 200);
     flashMesh.material.opacity = Math.max(0, flashMesh.material.opacity - delta * 14);
     flashMesh.scale.multiplyScalar(Math.max(0, 1 - delta * 14));
+    railFlashMesh.scale.multiplyScalar(Math.max(0, 1 - delta * 14));
     gunRecoil = Math.max(0, gunRecoil - delta * 0.35);
     gun.position.z = -0.45 + gunRecoil;
     gun.position.x = 0.25 + Math.cos(bobPhase * .5) * bobAmp * .85;
@@ -3033,6 +3847,10 @@
     gun.rotation.x = -meleeSwing * 1.12 - reloadDip * .55;
     gun.rotation.y = meleeSwing * .38;
     gun.rotation.z = Math.cos(bobPhase * .5) * bobAmp * .65 + meleeSwing * .18;
+    railgunView.position.x = gun.position.x;
+    railgunView.position.y = gun.position.y;
+    railgunView.position.z = gun.position.z;
+    railgunView.rotation.copy(gun.rotation);
     // N7: dirty-check — le classi DOM si aggiornano solo quando lo stato cambia.
     if (hudSprinting !== isSprinting) { hudSprinting = isSprinting; gameHudEl.classList.toggle('sprinting', isSprinting); }
     crosshairFireTimer = Math.max(0, crosshairFireTimer - delta);
@@ -3060,10 +3878,10 @@
       p.mat.rotation = elapsed * .08 + p.phase;
     }
 
-    if (locked && gameState.started) updateTargetMarkers();
+    if (isGameplayActive()) updateTargetMarkers();
     if (gameState.started) audio.updateDroneHums(drones,camera);
     radarTimer -= delta;
-    if (locked && gameState.started && radarTimer <= 0) { updateRadar(elapsed); radarTimer = .075; }
+    if (isGameplayActive() && radarTimer <= 0) { updateRadar(elapsed); radarTimer = .075; }
     fpsFrames++; fpsTimer += delta;
     if (fpsTimer >= .5) {
       const measuredFps = Math.round(fpsFrames / fpsTimer);

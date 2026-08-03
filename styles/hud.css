@@ -210,3 +210,157 @@
 .target-marker.apex-marker .target-health i { background: var(--pink, #ff2d95); box-shadow: 0 0 8px var(--pink, #ff2d95); }
 .target-marker.apex-marker::after { top: 55px; color: rgba(255,170,199,.9); font: 800 9px ui-monospace,monospace; }
 
+/* Vital HUD: pannello a strati in basso a sinistra, con valori e barre
+   abbastanza grandi da restare leggibili durante movimento e combattimento. */
+.vitals {
+  left: var(--hud-safe);
+  bottom: var(--hud-safe);
+  width: clamp(360px, 28vw, 470px);
+  padding: 18px 22px 16px;
+  display: grid;
+  gap: 13px;
+  border-left: 3px solid rgba(119,246,255,.72);
+}
+.radar-wrap { bottom: 330px; }
+.vitals-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 5px; border-bottom: 1px solid rgba(119,246,255,.16); }
+.vitals-head strong { display: block; margin-top: 3px; color: rgba(230,253,255,.92); font: 900 14px/1 ui-monospace, monospace; letter-spacing: 2px; }
+.vitals-corner, .vitals-foot { color: rgba(194,235,242,.48); font: 800 9px ui-monospace, monospace; letter-spacing: 1.5px; }
+.vital-meter { display: grid; gap: 6px; }
+.vital-meter-head { display: flex; justify-content: space-between; align-items: baseline; }
+.vital-name { font-size: 13px; letter-spacing: 2.8px; color: rgba(218,247,250,.78); }
+.vital-value { color: #effeff; font: 900 clamp(30px, 2.35vw, 42px)/.82 ui-monospace, monospace; letter-spacing: -2px; text-shadow: 0 0 14px rgba(119,246,255,.28); }
+.bar { display: block; height: 13px; transform: skewX(-18deg); background: rgba(255,255,255,.09); border: 1px solid rgba(255,255,255,.08); overflow: hidden; }
+.bar > i { display: block; height: 100%; transition: width .18s; box-shadow: 0 0 13px currentColor; }
+.vitals .health-meter .bar > i { background: linear-gradient(90deg,#ff304e,#ff957a); color: #ff465f; }
+.vitals .shield-meter .bar > i { background: linear-gradient(90deg,#116cff,#6ff5ff); color: #40dfff; }
+.vitals .stamina-meter .bar > i { background: linear-gradient(90deg,#e99a28,#fff08a); color: #ffc857; }
+.vitals-foot { display: flex; justify-content: space-between; padding-top: 2px; border-top: 1px solid rgba(255,255,255,.08); }
+.weapon-hud #weapon-name { min-width: 0; }
+
+@media (max-width: 900px) {
+  .vitals { width: 340px; padding: 15px 18px 14px; }
+  .vital-value { font-size: 32px; }
+}
+@media (max-width: 720px) {
+  .vitals { left: 12px; bottom: 20px; width: min(52vw, 300px); padding: 12px 14px; gap: 8px; }
+  .vitals-head strong { font-size: 10px; }
+  .vitals-corner, .vitals-foot { font-size: 7px; }
+  .vital-name { font-size: 9px; letter-spacing: 1.6px; }
+  .vital-value { font-size: 25px; }
+  .bar { height: 9px; }
+}
+
+/* ============================================================
+   MODALITÀ SMARTPHONE (touch)
+   ============================================================ */
+/* Contenitore dei controlli touch: visibile solo in touch e durante il gioco. */
+#touch-controls {
+  position: fixed; inset: 0;
+  z-index: 20;
+  pointer-events: none;
+  display: none;
+  touch-action: none;
+  -webkit-user-select: none; user-select: none;
+}
+#touch-controls.active { display: block; }
+
+/* Joystick virtuali: base + pollice. */
+.touch-joystick {
+  position: absolute;
+  width: 92px; height: 92px;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+.touch-joystick.active { opacity: 1; }
+.touch-joystick-base {
+  position: absolute; inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(125, 246, 255, .35);
+  background: radial-gradient(circle, rgba(125,246,255,.06), rgba(255,255,255,.02) 60%, transparent 70%);
+  box-shadow: inset 0 0 18px rgba(125,246,255,.12), 0 0 14px rgba(0,0,0,.4);
+}
+.touch-thumb {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 44px; height: 44px;
+  margin: -22px 0 0 -22px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, rgba(214,252,255,.9), rgba(125,246,255,.35) 60%, rgba(0,229,255,.15));
+  border: 1px solid rgba(125,246,255,.6);
+  box-shadow: 0 0 16px rgba(125,246,255,.5), 0 4px 10px rgba(0,0,0,.5);
+}
+
+/* Pulsanti touch: colonna a destra (fuoco, salto, ecc.) + sprint a sinistra. */
+.touch-buttons-right {
+  position: absolute;
+  right: 22px; bottom: 120px;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 14px;
+  pointer-events: none;
+}
+.touch-btn {
+  pointer-events: auto;
+  width: 68px; height: 68px;
+  border-radius: 50%;
+  border: 2px solid rgba(125, 246, 255, .5);
+  background: radial-gradient(circle at 35% 30%, rgba(20,60,70,.85), rgba(3,9,17,.7));
+  color: rgba(226,251,255,.95);
+  font: 900 11px ui-monospace, monospace;
+  letter-spacing: 1px;
+  box-shadow: inset 0 0 14px rgba(125,246,255,.18), 0 6px 16px rgba(0,0,0,.45);
+  -webkit-user-select: none; user-select: none;
+  touch-action: none;
+}
+.touch-btn:active { transform: scale(.94); background: radial-gradient(circle at 35% 30%, rgba(40,120,140,.9), rgba(3,9,17,.8)); }
+.touch-btn-fire {
+  width: 92px; height: 92px;
+  border-color: rgba(255,120,80,.7);
+  background: radial-gradient(circle at 35% 30%, rgba(120,30,20,.85), rgba(40,8,6,.75));
+  box-shadow: inset 0 0 20px rgba(255,120,80,.3), 0 8px 20px rgba(0,0,0,.5);
+  font-size: 13px;
+}
+.touch-btn-fire:active { background: radial-gradient(circle at 35% 30%, rgba(200,60,30,.9), rgba(60,12,8,.8)); }
+.touch-btn-jump { width: 76px; height: 76px; }
+.touch-btn-melee { width: 60px; height: 60px; font-size: 10px; }
+#touch-btn-sprint {
+  position: absolute;
+  left: 22px; bottom: 120px;
+  width: 76px; height: 76px;
+}
+
+/* Rotate-device guard: overlay full-screen in portrait su touch. */
+.rotate-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+  background: radial-gradient(circle at 50% 40%, rgba(8,18,28,.98), rgba(2,6,12,.99));
+  color: rgba(226,251,255,.95);
+  text-align: center;
+}
+/* L'attributo hidden deve davvero nascondere l'overlay: senza questa regola il
+   display:flex qui sopra avrebbe la precedenza sul display:none di default di
+   [hidden] (foglio UA), e l'overlay resterebbe visibile anche su desktop. */
+.rotate-overlay[hidden] { display: none; }
+.rotate-icon { font-size: 56px; animation: rotate-device 1.6s ease-in-out infinite; }
+@keyframes rotate-device {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(90deg); }
+}
+.rotate-title { font: 900 22px ui-monospace, monospace; letter-spacing: 3px; text-shadow: 0 0 20px rgba(125,246,255,.6); }
+.rotate-sub { font: 700 12px ui-monospace, monospace; letter-spacing: 2px; color: rgba(125,246,255,.7); }
+
+/* Su touch: nasconde l'HUD di default e regola il layout per il landscape. */
+@media (pointer: coarse) {
+  #hud, .keys { display: none; }
+  .crosshair { display: none; }
+  .radar-wrap { display: none; }
+  .vitals { left: 10px; bottom: 10px; width: min(240px, 34vw); padding: 10px 12px; gap: 6px; }
+  .weapon-hud { right: 10px; bottom: 10px; width: min(240px, 34vw); padding: 10px 12px; }
+  #toast-stack { right: 10px; top: 10px; width: 260px; }
+  #sound-state { display: none; }
+  .hud-top { top: 6px; left: 10px; right: 10px; }
+  .mission-card { width: min(300px, 42vw); padding: 10px 12px; }
+  .telemetry { display: none; }
+  /* I controlli touch non devono interferire con i bottoni del pannello. */
+  .settings-panel { font-size: 13px; }
+}

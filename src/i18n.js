@@ -11,13 +11,19 @@ import { getStoredLanguage, storeLanguage } from './config.js';
 
 const en = {
   // HUD statico
-  'hud.hintHtml': '<kbd>WASD</kbd> MOVE · <kbd>SHIFT</kbd> SPRINT · <kbd>SPACE</kbd> JUMP · <kbd>R</kbd> RELOAD · <kbd>RMB</kbd> MELEE · <kbd>M</kbd> AUDIO · <kbd>ESC</kbd> PAUSE',
+  'hud.hintHtml': '<kbd>WASD</kbd> MOVE · <kbd>SHIFT</kbd> SPRINT · <kbd>SPACE</kbd> JUMP · <kbd>R</kbd> RELOAD · <kbd>Q</kbd> SWITCH WEAPON · <kbd>RMB</kbd> MELEE · <kbd>M</kbd> AUDIO · <kbd>ESC</kbd> PAUSE',
   'mission.label': 'ACTIVE OBJECTIVE',
   'mission.objective': 'NEUTRALIZE THE DRONES',
   'vitals.health': 'HEALTH',
   'vitals.shield': 'SHIELD',
   'vitals.stamina': 'STAMINA',
+  'vitals.title': 'VITAL SYSTEMS',
+  'vitals.state': 'COMBAT READY',
   'weapon.reloading': 'RELOADING',
+  'weapon.pulse': 'VX-9 PULSE',
+  'weapon.pulseMode': 'AUTO // 5.56E',
+  'weapon.railgun': 'RAILGUN',
+  'weapon.railgunMode': 'INSTANT // SINGULARITY',
   'hud.wave': 'WAVE {wave}',
 
   // Audio / mute
@@ -99,6 +105,10 @@ const en = {
   'toast.phase': 'CRITICAL PHASE ENGAGED',
   'toast.split': 'CORE FRAGMENTED · MINI UNITS SPAWNED',
   'toast.summon': '{count} REINFORCEMENTS DEPLOYED',
+  'toast.railgunDrop': 'RAILGUN CACHE LOCATED',
+  'toast.railgunReady': 'RAILGUN ONLINE · Q TO SWITCH',
+  'toast.pulseReady': 'PULSE ONLINE',
+  'toast.weaponLocked': 'RAILGUN NOT RECOVERED',
 
   // Pannello settings
   'settings.title': 'SIMULATION SETTINGS',
@@ -113,13 +123,19 @@ const en = {
 
 const it = {
   // HUD statico
-  'hud.hintHtml': '<kbd>WASD</kbd> MUOVI · <kbd>SHIFT</kbd> SCATTO · <kbd>SPAZIO</kbd> SALTA · <kbd>R</kbd> RICARICA · <kbd>MOUSE DX</kbd> MELEE · <kbd>M</kbd> AUDIO · <kbd>ESC</kbd> PAUSA',
+  'hud.hintHtml': '<kbd>WASD</kbd> MUOVI · <kbd>SHIFT</kbd> SCATTO · <kbd>SPAZIO</kbd> SALTA · <kbd>R</kbd> RICARICA · <kbd>Q</kbd> CAMBIA ARMA · <kbd>MOUSE DX</kbd> MELEE · <kbd>M</kbd> AUDIO · <kbd>ESC</kbd> PAUSA',
   'mission.label': 'OBIETTIVO ATTIVO',
   'mission.objective': 'NEUTRALIZZA I DRONI',
   'vitals.health': 'VITA',
   'vitals.shield': 'SCUDO',
   'vitals.stamina': 'ENERGIA',
+  'vitals.title': 'SISTEMI VITALI',
+  'vitals.state': 'COMBATTIMENTO PRONTO',
   'weapon.reloading': 'RICARICA IN CORSO',
+  'weapon.pulse': 'VX-9 PULSE',
+  'weapon.pulseMode': 'AUTO // 5.56E',
+  'weapon.railgun': 'RAILGUN',
+  'weapon.railgunMode': 'ISTANTANEA // SINGOLARITÀ',
   'hud.wave': 'ONDATA {wave}',
 
   // Audio / mute
@@ -201,6 +217,10 @@ const it = {
   'toast.phase': 'FASE CRITICA ATTIVATA',
   'toast.split': 'NUCLEO FRAMMENTATO · UNITÀ MINI SCHIERATE',
   'toast.summon': '{count} RINFORZI SCHIERATI',
+  'toast.railgunDrop': 'CACHE RAILGUN LOCALIZZATA',
+  'toast.railgunReady': 'RAILGUN ONLINE · Q PER CAMBIARE',
+  'toast.pulseReady': 'PULSE ONLINE',
+  'toast.weaponLocked': 'RAILGUN NON RECUPERATA',
 
   // Pannello settings
   'settings.title': 'SIMULATION SETTINGS',

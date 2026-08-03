@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getStoredMix, storeMix, getStoredQualityMode, storeQualityMode, getStoredMuted, storeMuted, getApexArchetype, getApexStats, APEX_ROSTER, APEX_TUNING, QUALITY_PROFILES } from '../src/config.js';
+import { getStoredMix, storeMix, getStoredQualityMode, storeQualityMode, getStoredMuted, storeMuted, getApexArchetype, getApexStats, APEX_ROSTER, APEX_TUNING, RAILGUN_TUNING, QUALITY_PROFILES } from '../src/config.js';
 
 function withStorage(initial = {}) {
   const store = new Map(Object.entries(initial));
@@ -45,6 +45,13 @@ test('getStoredMix falls back to defaults when localStorage access throws', () =
   } finally {
     Object.defineProperty(globalThis, 'localStorage', { value: original, configurable: true });
   }
+});
+
+test('railgun tuning guarantees a single-shot standard-drone kill', () => {
+  assert.equal(RAILGUN_TUNING.magazineSize, 1);
+  assert.ok(RAILGUN_TUNING.damage > 100 + 1 * 12);
+  assert.ok(RAILGUN_TUNING.range >= 40);
+  assert.ok(RAILGUN_TUNING.cooldown > 0);
 });
 
 test('quality mode defaults to auto and persists ultra', () => {

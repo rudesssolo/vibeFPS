@@ -1,11 +1,12 @@
 import { QUALITY_PROFILES, getStoredQualityMode, storeQualityMode } from './config.js';
 
 export class GraphicsManager {
-  constructor({ applyProfile, onStatus, onTransition }) {
+  constructor({ applyProfile, onStatus, onTransition, allowUltra = true }) {
     this.applyProfile = applyProfile;
     this.onStatus = onStatus || (() => {});
     this.onTransition = onTransition || (() => {});
-    this.mode = getStoredQualityMode();
+    this.allowUltra = allowUltra;
+    this.mode = allowUltra ? getStoredQualityMode() : 'auto';
     this.autoTier = 'autoHigh';
     this.lowWindows = 0;
     this.highWindows = 0;
@@ -20,7 +21,8 @@ export class GraphicsManager {
   }
 
   setMode(mode) {
-    const nextMode = mode === 'ultra' ? 'ultra' : 'auto';
+    // Su dispositivi touch non high-end ULTRA non è disponibile: forza AUTO.
+    const nextMode = mode === 'ultra' && this.allowUltra ? 'ultra' : 'auto';
     if (this.transitioning || nextMode === this.mode) return;
     this.mode = nextMode;
     this.autoTier = 'autoHigh';

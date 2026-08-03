@@ -12,6 +12,8 @@ export class HudController {
       ammo: document.getElementById('ammo'),
       reserve: document.getElementById('reserve'),
       ammoCells: document.getElementById('ammo-cells'),
+      weaponName: document.getElementById('weapon-name'),
+      weaponMode: document.getElementById('weapon-mode'),
       reload: document.getElementById('reload-message'),
       score: document.getElementById('score'),
       combo: document.getElementById('combo'),
@@ -61,15 +63,29 @@ export class HudController {
       this.ui.staminaValue.textContent = String(Math.ceil(stamina)).padStart(3, '0');
       last.stamina = stamina;
     }
-    if (last.ammo !== state.ammo) {
-      this.ui.ammo.textContent = String(state.ammo).padStart(2, '0');
-      const cells = this.ui.ammoCells.children;
-      for (let i = 0; i < cells.length; i++) cells[i].classList.toggle('empty', i * 2 >= state.ammo);
-      last.ammo = state.ammo;
+    const railgunActive = state.weapon === 'railgun';
+    const ammo = railgunActive ? (state.railgunAmmo ?? 0) : state.ammo;
+    const reserve = railgunActive ? (state.railgunReserve ?? 0) : state.reserve;
+    const weaponName = t(railgunActive ? 'weapon.railgun' : 'weapon.pulse');
+    const weaponMode = t(railgunActive ? 'weapon.railgunMode' : 'weapon.pulseMode');
+    if (last.weaponName !== weaponName) {
+      this.ui.weaponName.textContent = weaponName;
+      last.weaponName = weaponName;
     }
-    if (last.reserve !== state.reserve) {
-      this.ui.reserve.textContent = String(state.reserve).padStart(3, '0');
-      last.reserve = state.reserve;
+    if (last.weaponMode !== weaponMode) {
+      this.ui.weaponMode.textContent = weaponMode;
+      last.weaponMode = weaponMode;
+    }
+    if (last.ammo !== ammo || last.railgunActive !== railgunActive) {
+      this.ui.ammo.textContent = String(ammo).padStart(railgunActive ? 1 : 2, '0');
+      const cells = this.ui.ammoCells.children;
+      for (let i = 0; i < cells.length; i++) cells[i].classList.toggle('empty', railgunActive ? i >= ammo : i * 2 >= ammo);
+      last.ammo = ammo;
+      last.railgunActive = railgunActive;
+    }
+    if (last.reserve !== reserve) {
+      this.ui.reserve.textContent = String(reserve).padStart(3, '0');
+      last.reserve = reserve;
     }
     if (last.reloading !== state.reloading) {
       this.ui.reload.classList.toggle('active', state.reloading);
@@ -176,7 +192,7 @@ export class HudController {
     this.onboardingTimer = setTimeout(() => document.getElementById('hud').classList.add('onboarding-hidden'), 6000);
   }
 
-  mountSettings(overlay, { qualityMode, language = 'en', mix, sensitivity = 1, onQuality, onLanguage = () => {}, onMix, onSensitivity = () => {}, onReset = () => {} }) {
+  mountSettings(overlay, { qualityMode, language = 'en', mix, sensitivity = 1, allowUltra = true, onQuality, onLanguage = () => {}, onMix, onSensitivity = () => {}, onReset = () => {} }) {
     const panel = document.createElement('div');
     panel.className = 'settings-panel';
     // Le label usano data-i18n: al cambio lingua (L1) applyStaticStrings() in
@@ -186,7 +202,7 @@ export class HudController {
       <div class="panel-toggles">
         <div class="quality-toggle" role="group" aria-label="${t('settings.qualityAria')}">
           <button type="button" data-quality="auto">AUTO</button>
-          <button type="button" data-quality="ultra">ULTRA</button>
+          <button type="button" data-quality="ultra" ${allowUltra ? '' : 'disabled title="Unavailable on this device"'}">ULTRA</button>
         </div>
         <div class="quality-toggle lang-toggle" role="group" aria-label="${t('settings.langAria')}">
           <button type="button" data-lang="it">IT</button>

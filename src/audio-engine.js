@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 import { getStoredMix, storeMix, getStoredMuted, storeMuted } from './config.js';
 
+// Il cursore musica arriva a 1.0: il gain massimo effettivo è il 150% del
+// vecchio .55, mantenendo invariati SFX e ambiente.
+const MUSIC_OUTPUT_GAIN = 0.825;
+
 /**
  * Pure procedural audio engine. Every sound is synthesized at runtime with
  * WebAudio nodes; the game never fetches or decodes an audio asset.
@@ -368,12 +372,12 @@ export class AudioEngine {
     const musicDuck = this.menuDucked ? .42 : 1;
     const ambienceDuck = this.menuDucked ? .5 : 1;
     const sfxDuck = this.menuDucked ? .82 : 1;
-    // Livelli base rialzati (review demo): master .72→.9; SFX con boost
-    // dedicato ×1.3; musica ×.55 (richiesta demo: più presente); ambiente
-    // ×.62. Il compressore sul master gestisce i picchi.
+    // Livelli base rialzati: master .72→.9; SFX con boost dedicato ×1.3;
+    // musica ×.825 (150% del precedente .55); ambiente ×.62. Il compressore
+    // sul master gestisce i picchi.
     this.master.gain.setTargetAtTime(this.muted ? 0 : .9, now, .025);
     this.sfx.gain.setTargetAtTime(this.mix.sfx * 1.3 * sfxDuck, now, .025);
-    this.music.gain.setTargetAtTime(this.mix.music * .55 * musicDuck, now, .035);
+    this.music.gain.setTargetAtTime(this.mix.music * MUSIC_OUTPUT_GAIN * musicDuck, now, .035);
     this.ambience.gain.setTargetAtTime(this.mix.ambience * .62 * ambienceDuck, now, .035);
   }
 
@@ -583,6 +587,21 @@ export class AudioEngine {
     noiseSource.stop(start + .16);
     this.duckMusic(.12, .1);
     return output;
+  }
+
+  /** Railgun: scarica istantanea, arco ad alta frequenza e sub-bass d'impatto. */
+  railgun(pan = 0) {
+    if (!this.started) return;
+    const time = this.ctx.currentTime;
+    this.tone(1480, 260, .34, .18, 'sawtooth', time, this.sfx, pan);
+    this.tone(230, 52, .3, .16, 'sine', time, this.sfx, pan);
+    this.noise(.16, .16, 6800, 'highpass', pan, time, this.sfx, 1.4);
+    this.duckMusic(.22, .24);
+  }
+
+  railgunPickup() {
+    this.tone(260, 1040, .28, .1, 'triangle');
+    this.tone(780, 1560, .2, .08, 'sine', (this.ctx?.currentTime || 0) + .08);
   }
 
   /** Dry metallic hit with a short resonant transient. */

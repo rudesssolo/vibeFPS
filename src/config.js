@@ -108,3 +108,20 @@ export function storeMix(mix) {
     }
   }
 }
+
+// Sensibilità del mouse (M3): persistita in localStorage come il mix.
+export const SENSITIVITY_DEFAULT = 1;
+
+export function getStoredSensitivity() {
+  const raw = readStorage(safeStorage(), 'vibefps.sensitivity');
+  const value = raw === null || raw === '' ? Number.NaN : Number(raw);
+  return Number.isFinite(value) ? Math.max(.25, Math.min(3, value)) : SENSITIVITY_DEFAULT;
+}
+
+export function storeSensitivity(value) {
+  try {
+    safeStorage()?.setItem('vibefps.sensitivity', String(Math.max(.25, Math.min(3, value))));
+  } catch {
+    // Non essenziale: resta in memoria.
+  }
+}

@@ -10,7 +10,11 @@ function canvasTexture(canvas, { color = false, anisotropy = 1 } = {}) {
   return texture;
 }
 
-function heightToNormal(heightCanvas, strength, anisotropy) {
+// B9: la conversione height→normal a 2048px è un loop su ~4,2M pixel che altrimenti
+// blocca il main thread per centinaia di ms. Cedi il frame ogni CHUNK_ROWS righe.
+const CHUNK_ROWS = 48;
+
+async function heightToNormal(heightCanvas, strength, anisotropy) {
   const width = heightCanvas.width;
   const height = heightCanvas.height;
   const source = heightCanvas.getContext('2d').getImageData(0, 0, width, height).data;
@@ -29,6 +33,7 @@ function heightToNormal(heightCanvas, strength, anisotropy) {
       output[offset + 2] = (nz * .5 + .5) * 255;
       output[offset + 3] = 255;
     }
+    if (y % CHUNK_ROWS === CHUNK_ROWS - 1) await new Promise(resolve => setTimeout(resolve, 0));
   }
   const canvas = document.createElement('canvas');
   canvas.width = width; canvas.height = height;
@@ -36,7 +41,7 @@ function heightToNormal(heightCanvas, strength, anisotropy) {
   return canvasTexture(canvas, { anisotropy });
 }
 
-function createFacadeMaps(resolution, anisotropy) {
+async function createFacadeMaps(resolution, anisotropy) {
   const width = resolution;
   const height = resolution;
   const albedo = document.createElement('canvas');
@@ -135,7 +140,7 @@ function createFacadeMaps(resolution, anisotropy) {
   const maps = {
     map: canvasTexture(albedo, { color: true, anisotropy }),
     roughnessMap: canvasTexture(roughness, { anisotropy }),
-    normalMap: heightToNormal(heightMap, 2.4, anisotropy),
+    normalMap: await heightToNormal(heightMap, 2.4, anisotropy),
     emissiveMap: canvasTexture(emissive, { color: true, anisotropy })
   };
   return maps;
@@ -202,13 +207,27 @@ export class FacadeSystem {
     this.materials = [];
     this.maps = null;
     this.numberTextures = [];
+    // B9: token di generazione per scartare un rebuild obsoleto se un setQuality
+    // più recente parte mentre la ricostruzione async è ancora in corso.
+    this.buildGeneration = 0;
     scene.add(this.group);
-    this.rebuildMaterials(resolution);
+  }
+
+  // B9: la costruzione dei materiali è async (chunked); chiamato con await
+  // da index.html durante il boot, dopo il quale la città viene costruita.
+  async init() {
+    await this.rebuildMaterials(this.resolution);
     this.buildCity();
   }
 
-  rebuildMaterials(resolution) {
-    const nextMaps = createFacadeMaps(resolution, this.anisotropy);
+  async rebuildMaterials(resolution) {
+    const generation = ++this.buildGeneration;
+    const nextMaps = await createFacadeMaps(resolution, this.anisotropy);
+    // Un rebuild più recente è partito nel frattempo: scarta questo risultato.
+    if (generation !== this.buildGeneration) {
+      disposeMaps(nextMaps);
+      return;
+    }
     if (!this.materials.length) {
       const colors = [0xd7e1e8, 0xaab9c7, 0xc4c8c9, 0x8fa7b5];
       for (const color of colors) {
@@ -239,9 +258,9 @@ export class FacadeSystem {
     this.resolution = resolution;
   }
 
-  setQuality(profile) {
+  async setQuality(profile) {
     if (!profile || profile.facadeResolution === this.resolution) return;
-    this.rebuildMaterials(profile.facadeResolution);
+    await this.rebuildMaterials(profile.facadeResolution);
   }
 
   buildCity() {

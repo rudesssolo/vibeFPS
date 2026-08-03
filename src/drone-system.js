@@ -24,6 +24,7 @@ export class DroneSystem {
     this.temp2 = new THREE.Vector3();
     this.steering = new THREE.Vector3();
     this.separationOffset = new THREE.Vector3();
+    this.markerProjected = new THREE.Vector3();
     this.lookHelper = new THREE.Object3D();
     this.coreGeometry = new RoundedBoxGeometry(.86, .54, .94, 4, .12);
     this.wingGeometry = new RoundedBoxGeometry(.62, .11, .38, 3, .045);
@@ -119,6 +120,10 @@ export class DroneSystem {
     marker.className = 'target-marker';
     marker.innerHTML = '<span class="target-health"><i></i></span><span class="target-state"></span>';
     this.targetLayer.appendChild(marker);
+    // B6: cache dei riferimenti figli + stato precedente per il dirty-check,
+    // così updateMarkers non fa querySelector né scritture DOM ridondanti.
+    const markerHealth = marker.querySelector('.target-health i');
+    const markerState = marker.querySelector('.target-state');
     const maxHealth = 100 + this.wave * 12;
     return {
       id: index + 1,
@@ -131,6 +136,15 @@ export class DroneSystem {
       ring,
       thrusters,
       marker,
+      markerHealth,
+      markerState,
+      // Dirty-check markers (B6): solo i valori cambiati vengono scritti al DOM.
+      lastLeft: -1,
+      lastTop: -1,
+      lastRange: '',
+      lastState: '',
+      lastHealth: -1,
+      lastOffscreen: null,
       anchor,
       position: anchor.clone(),
       velocity: new THREE.Vector3((random() - .5) * 2, 0, (random() - .5) * 2),
@@ -297,12 +311,11 @@ export class DroneSystem {
     const height = window.innerHeight;
     for (const drone of this.drones) {
       if (!drone.alive) continue;
-      const projected = drone.position.clone();
+      // B6: riuso del vettore di proiezione (niente allocazioni per frame).
+      const projected = this.markerProjected.copy(drone.position);
       const distance = projected.distanceTo(this.camera.position);
       projected.project(this.camera);
       const visible = projected.z > -1 && projected.z < 1 && Math.abs(projected.x) < .94 && Math.abs(projected.y) < .9;
-      drone.marker.style.display = 'block';
-      drone.marker.classList.toggle('offscreen', !visible);
       let screenX = projected.x;
       let screenY = projected.y;
       if (!visible) {
@@ -310,16 +323,38 @@ export class DroneSystem {
         screenX = THREE.MathUtils.clamp(screenX, -.9, .9);
         screenY = THREE.MathUtils.clamp(screenY, -.82, .82);
       }
-      const left = (screenX * .5 + .5) * width;
-      const top = (-screenY * .5 + .5) * height;
-      drone.marker.style.setProperty('--target-x', `${left}px`);
-      drone.marker.style.setProperty('--target-y', `${top}px`);
-      drone.marker.style.left = `${left}px`;
-      drone.marker.style.top = `${top}px`;
-      drone.marker.dataset.range = `${distance.toFixed(0)}M · SNT-${String(drone.id).padStart(2, '0')}`;
-      drone.marker.querySelector('.target-health i').style.width = `${Math.max(0, drone.health / drone.maxHealth * 100)}%`;
-      const state = drone.marker.querySelector('.target-state');
-      state.textContent = !visible ? 'THREAT' : drone.state === 'telegraph' ? 'EVADE' : '';
+      const left = Math.round((screenX * .5 + .5) * width);
+      const top = Math.round((-screenY * .5 + .5) * height);
+      const state = !visible ? 'THREAT' : drone.state === 'telegraph' ? 'EVADE' : '';
+      const range = `${distance.toFixed(0)}M · SNT-${String(drone.id).padStart(2, '0')}`;
+
+      // Dirty-check: scrive al DOM solo i valori realmente cambiati (B6).
+      if (drone.lastOffscreen !== !visible) {
+        drone.lastOffscreen = !visible;
+        drone.marker.classList.toggle('offscreen', !visible);
+        drone.marker.style.display = 'block';
+      }
+      if (drone.lastLeft !== left) {
+        drone.lastLeft = left;
+        drone.marker.style.left = `${left}px`;
+      }
+      if (drone.lastTop !== top) {
+        drone.lastTop = top;
+        drone.marker.style.top = `${top}px`;
+      }
+      if (drone.lastRange !== range) {
+        drone.lastRange = range;
+        drone.marker.dataset.range = range;
+      }
+      if (drone.lastState !== state) {
+        drone.lastState = state;
+        drone.markerState.textContent = state;
+      }
+      const healthPct = Math.max(0, drone.health / drone.maxHealth * 100);
+      if (drone.lastHealth !== healthPct) {
+        drone.lastHealth = healthPct;
+        drone.markerHealth.style.width = `${healthPct}%`;
+      }
     }
   }
 }

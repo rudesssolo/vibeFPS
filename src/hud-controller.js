@@ -13,6 +13,7 @@ export class HudController {
       reload: document.getElementById('reload-message'),
       score: document.getElementById('score'),
       combo: document.getElementById('combo'),
+      accuracy: document.getElementById('accuracy'),
       fps: document.getElementById('fps'),
       objective: document.getElementById('objective-text'),
       missionFill: document.getElementById('mission-progress-fill'),
@@ -25,6 +26,7 @@ export class HudController {
     }
     this.last = {};
     this.graphicsStatus = 'AUTO // HIGH';
+    this.maxShield = 75; // valore massimo scudo (M2); allineato in index.html con CONFIG.maxShield
     this.onboardingTimer = null;
   }
 
@@ -42,7 +44,8 @@ export class HudController {
       last.health = health;
     }
     if (last.shield !== shield) {
-      this.ui.shieldFill.style.width = `${shield / 75 * 100}%`;
+      const maxShield = this.maxShield > 0 ? this.maxShield : 75;
+      this.ui.shieldFill.style.width = `${shield / maxShield * 100}%`;
       this.ui.shieldValue.textContent = String(Math.ceil(shield)).padStart(3, '0');
       last.shield = shield;
     }
@@ -72,6 +75,13 @@ export class HudController {
     if (last.combo !== state.combo) {
       this.ui.combo.textContent = `x${state.combo.toFixed(1)}`;
       last.combo = state.combo;
+    }
+    const accuracy = state.shots > 0
+      ? `${Math.round(state.hits / state.shots * 100)}%`
+      : '--';
+    if (last.accuracy !== accuracy) {
+      this.ui.accuracy.textContent = accuracy;
+      last.accuracy = accuracy;
     }
     const objective = `${state.waveKills}/${state.waveTargets}`;
     if (last.objective !== objective) {
@@ -118,7 +128,7 @@ export class HudController {
     this.onboardingTimer = setTimeout(() => document.getElementById('hud').classList.add('onboarding-hidden'), 6000);
   }
 
-  mountSettings(overlay, { qualityMode, mix, onQuality, onMix, onReset = () => {} }) {
+  mountSettings(overlay, { qualityMode, mix, sensitivity = 1, onQuality, onMix, onSensitivity = () => {}, onReset = () => {} }) {
     const panel = document.createElement('div');
     panel.className = 'settings-panel';
     panel.innerHTML = `
@@ -130,6 +140,7 @@ export class HudController {
       <label><span>MUSICA</span><input data-mix="music" type="range" min="0" max="1" step="0.01" value="${mix.music}"></label>
       <label><span>EFFETTI</span><input data-mix="sfx" type="range" min="0" max="1" step="0.01" value="${mix.sfx}"></label>
       <label><span>AMBIENTE</span><input data-mix="ambience" type="range" min="0" max="1" step="0.01" value="${mix.ambience}"></label>
+      <label><span>SENSIBILITÀ</span><input data-sensitivity type="range" min="0.25" max="3" step="0.05" value="${sensitivity}"></label>
       <button type="button" class="reset-level" data-reset-level>RESET LIVELLO</button>`;
     panel.addEventListener('click', event => event.stopPropagation());
     panel.addEventListener('pointerdown', event => event.stopPropagation());
@@ -144,6 +155,9 @@ export class HudController {
     panel.querySelectorAll('[data-mix]').forEach(input => input.addEventListener('input', () => {
       onMix({ [input.dataset.mix]: Number(input.value) });
     }));
+    panel.querySelector('[data-sensitivity]')?.addEventListener('input', event => {
+      onSensitivity(Number(event.target.value));
+    });
     panel.querySelector('[data-reset-level]')?.addEventListener('click', onReset);
     overlay.appendChild(panel);
     // Espone un setter per riallineare la selezione visiva allo stato reale del

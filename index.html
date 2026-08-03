@@ -291,6 +291,7 @@
         <div class="micro-label">COMBAT TELEMETRY</div>
         <div class="telemetry-row"><span>SCORE</span><b id="score">000000</b></div>
         <div class="telemetry-row"><span>COMBO</span><b id="combo">x1.0</b></div>
+        <div class="telemetry-row"><span>ACCURACY</span><b id="accuracy">--</b></div>
         <div class="telemetry-row"><span>RENDER</span><b id="fps">-- FPS</b></div>
       </div>
     </div>
@@ -365,6 +366,7 @@
   import { RenderPipelineController } from './src/render-pipeline.js';
   import { makeRng } from './src/rng.js';
   import { constrainBodyToSquare } from './src/player-collision.js';
+  import { getStoredSensitivity, storeSensitivity } from './src/config.js';
 
   const loadingUI = (() => {
     const overlay = document.getElementById('overlay');
@@ -474,7 +476,27 @@
     bulletDamage: 34,
 
     spawnPos: { x: 0, y: 2, z: 8 },
-    gravity: -9.82
+    gravity: -9.82,
+
+    // Salute, scudo ed energia (M2: costanti condivise tra logica e HUD)
+    maxHealth: 100,
+    maxShield: 75,
+    maxStamina: 100,
+    shieldRegen: 9,          // punti scudo al secondo fuori combattimento
+    shieldRegenDelay: 4.5,   // secondi senza subire danni prima della rigenerazione
+    sprintDrain: 25,         // energia al secondo in scatto
+    staminaRegenGround: 19,  // energia al secondo a terra
+    staminaRegenAir: 9,      // energia al secondo in aria
+    comboWindow: 3.2,        // secondi per mantenere il combo
+    comboKillStep: 0.25,     // incremento combo per kill
+    comboMax: 5,
+    killScore: 100,          // punteggio base per kill
+    impactScore: 12,         // punteggio per impatto
+    waveBonusShield: 25,     // scudo bonus al completare un'ondata
+    waveBonusAmmo: 60,       // munizioni bonus al completare un'ondata
+    hostileDmgBase: 8,       // danno base colpo nemico
+    hostileDmgWave: 1.1,     // danno extra per onda
+    hostileHitRadiusSq: 0.52 // raggio di collisione giocatore ^2 (≈0.72m)
   };
   const floorSize = CONFIG.arenaSize + CONFIG.floorMargin * 2;
 
@@ -768,6 +790,7 @@
   createLights();
   createEnvironment();
   const facadeSystem = new FacadeSystem({ scene, anisotropy: aniso, resolution: 1024, buildingCount: 56 });
+  await facadeSystem.init();
   loadingUI.update(.62, 'CITY GRID', 'GENERAZIONE DELLE FACCIATE E DELLA CITTÀ...');
 
   // Pioggia leggera per l'atmosfera bagnata
@@ -1781,6 +1804,8 @@
   }
 
   // Orientamento della camera (yaw = rotazione orizzontale, pitch = verticale)
+  // M3: la sensibilità del mouse è regolabile nel pannello settings e persistita.
+  let mouseSensitivity = getStoredSensitivity();
   let yaw = 0;
   let pitch = 0;
   let wasOnPad = false;
@@ -1862,7 +1887,7 @@
   let hudVisibility = null;
 
   const gameState = {
-    health: 100, shield: 75, stamina: 100,
+    health: CONFIG.maxHealth, shield: CONFIG.maxShield, stamina: CONFIG.maxStamina,
     ammo: CONFIG.magazineSize, reserve: CONFIG.reserveAmmo,
     reloading: false, reloadTimer: 0,
     score: 0, combo: 1, comboTimer: 0,
@@ -1872,6 +1897,7 @@
   };
 
   const hudController = new HudController();
+  hudController.maxShield = CONFIG.maxShield;
   const audio = AudioEngine.getInstance(muted => hudController.setMuted(muted));
 
   function restartClass(el,name){el.classList.remove(name);void el.offsetWidth;el.classList.add(name);}
@@ -1951,6 +1977,7 @@
   const settingsPanelRef = hudController.mountSettings(overlayEl, {
     qualityMode: graphicsManager.mode,
     mix: audio.mix,
+    sensitivity: mouseSensitivity,
     onQuality: mode => {
       graphicsManager.setMode(mode);
       // Riallinea la selezione visiva allo stato reale (setMode può ignorare la
@@ -1958,6 +1985,10 @@
       settingsPanelRef?.syncMode?.(graphicsManager.mode);
     },
     onMix: partial => audio.setMix(partial),
+    onSensitivity: value => {
+      mouseSensitivity = value;
+      storeSensitivity(value);
+    },
     onReset: resetLevel
   });
 
@@ -2074,18 +2105,18 @@
 
   function damageDrone(drone,amount,position){
     if(!drone.alive)return;
-    const result=droneSystem.applyDamage(drone,amount);gameState.hits++;gameState.comboTimer=3.2;showHitmarker(result.killed);
+    const result=droneSystem.applyDamage(drone,amount);gameState.hits++;gameState.comboTimer=CONFIG.comboWindow;showHitmarker(result.killed);
     if(result.killed){
-      gameState.waveKills++;gameState.combo=Math.min(5,gameState.combo+.25);
-      const earned=Math.round(100*gameState.combo);gameState.score+=earned;showScore(earned,'SENTINEL DOWN');audio.explode();
+      gameState.waveKills++;gameState.combo=Math.min(CONFIG.comboMax,gameState.combo+CONFIG.comboKillStep);
+      const earned=Math.round(CONFIG.killScore*gameState.combo);gameState.score+=earned;showScore(earned,'SENTINEL DOWN');audio.explode();
       const impactPosition = result.position || position || drone.group.position;
-      const healed = Math.min(CONFIG.killHeal, Math.max(0, 100 - gameState.health));
+      const healed = Math.min(CONFIG.killHeal, Math.max(0, CONFIG.maxHealth - gameState.health));
       gameState.health += healed;
       spawnAmmoDrop(impactPosition);
       explosionSystem.explode(impactPosition,drone.id%2?0xff4f9f:0x66efff);
       toast(`<b>UNITÀ ${String(drone.id).padStart(2,'0')}</b> · NEUTRALIZZATA`);
       if (healed > 0) toast(`<b>RECOVERY</b> · VITA +${healed}`);
-    }else{gameState.score+=Math.round(12*gameState.combo);showScore(Math.round(12*gameState.combo),'IMPATTO');audio.playImpact();}
+    }else{gameState.score+=Math.round(CONFIG.impactScore*gameState.combo);showScore(Math.round(CONFIG.impactScore*gameState.combo),'IMPATTO');audio.playImpact();}
     updateHUD();
   }
 
@@ -2098,7 +2129,7 @@
   }
 
   function respawnPlayer(){
-    gameState.health=100;gameState.shield=75;gameState.stamina=100;gameState.dead=false;resetPlayerBody();showWave('LINK RESTORED','SISTEMI DI COMBATTIMENTO OPERATIVI');
+    gameState.health=CONFIG.maxHealth;gameState.shield=CONFIG.maxShield;gameState.stamina=CONFIG.maxStamina;gameState.dead=false;resetPlayerBody();showWave('LINK RESTORED','SISTEMI DI COMBATTIMENTO OPERATIVI');
   }
 
   function updateDrones(delta,time){
@@ -2119,7 +2150,7 @@
       // Hit test sweep segmento→punto (B4): traduce il movimento del colpo tra
       // prev e pos in un segmento, così a FPS bassi il proiettile non salta sopra
       // il giocatore. .52 = raggio di collisione effettivo ^2 (≈0.72m).
-      if(!remove){hostileSegment.start.copy(s.prev);hostileSegment.end.copy(s.pos);hostileSegment.closestPointToPoint(hostilePlayerPoint,true,hostileClosest);if(hostileClosest.distanceToSquared(hostilePlayerPoint)<.52){damagePlayer(8+gameState.wave*1.1);remove=true;}}
+      if(!remove){hostileSegment.start.copy(s.prev);hostileSegment.end.copy(s.pos);hostileSegment.closestPointToPoint(hostilePlayerPoint,true,hostileClosest);if(hostileClosest.distanceToSquared(hostilePlayerPoint)<CONFIG.hostileHitRadiusSq){damagePlayer(CONFIG.hostileDmgBase+gameState.wave*CONFIG.hostileDmgWave);remove=true;}}
       if(!remove){hostileFrom.set(s.prev.x,s.prev.y,s.prev.z);hostileTo.set(s.pos.x,s.pos.y,s.pos.z);if(hostileRay.intersectWorld(world,{mode:CANNON.Ray.CLOSEST,result:hostileHit,from:hostileFrom,to:hostileTo,collisionFilterGroup:COLLISION.BULLET,collisionFilterMask:COLLISION.STATIC|COLLISION.CRATE}))remove=true;}
       if(remove){scene.remove(s.mesh,s.trail);s.mesh.geometry.dispose();s.mesh.material.dispose();s.trail.geometry.dispose();s.trail.material.dispose();hostileShots.splice(i,1);}
     }
@@ -2144,8 +2175,8 @@
     meleeTimer=Math.max(0,meleeTimer-delta);
     if(gameState.reloading){gameState.reloadTimer-=delta;if(gameState.reloadTimer<=0)completeReload();}
     if(gameState.comboTimer>0){gameState.comboTimer-=delta;if(gameState.comboTimer<=0)gameState.combo=1;}
-    if(time-gameState.lastDamage>4.5&&gameState.shield<75&&!gameState.dead)gameState.shield=Math.min(75,gameState.shield+delta*9);
-    if(gameState.waveDelay>0){gameState.waveDelay-=delta;if(gameState.waveDelay<=0){gameState.wave++;gameState.shield=Math.min(75,gameState.shield+25);gameState.reserve=Math.min(CONFIG.reserveAmmo,gameState.reserve+60);spawnWave(true);}}
+    if(time-gameState.lastDamage>CONFIG.shieldRegenDelay&&gameState.shield<CONFIG.maxShield&&!gameState.dead)gameState.shield=Math.min(CONFIG.maxShield,gameState.shield+delta*CONFIG.shieldRegen);
+    if(gameState.waveDelay>0){gameState.waveDelay-=delta;if(gameState.waveDelay<=0){gameState.wave++;gameState.shield=Math.min(CONFIG.maxShield,gameState.shield+CONFIG.waveBonusShield);gameState.reserve=Math.min(CONFIG.reserveAmmo,gameState.reserve+CONFIG.waveBonusAmmo);toast(`<b>ONDATA ${String(gameState.wave).padStart(2,'0')}</b> · SCUDO +${CONFIG.waveBonusShield} · MUNIZIONI +${CONFIG.waveBonusAmmo}`);spawnWave(true);}}
     if(gameState.dead){gameState.respawnTimer-=delta;if(gameState.respawnTimer<=0)respawnPlayer();}
     updateHUD();
   }
@@ -2214,8 +2245,8 @@
     if (!locked) return;
     const movementX = Number.isFinite(e.movementX) ? e.movementX : 0;
     const movementY = Number.isFinite(e.movementY) ? e.movementY : 0;
-    yaw   -= movementX * 0.0022;
-    pitch -= movementY * 0.0022;
+    yaw   -= movementX * 0.0022 * mouseSensitivity;
+    pitch -= movementY * 0.0022 * mouseSensitivity;
     const limit = Math.PI / 2 - 0.01;
     pitch = Math.max(-limit, Math.min(limit, pitch));
   });
@@ -2330,8 +2361,8 @@
     const targetSpeed = isSprinting ? CONFIG.sprintSpeed : CONFIG.moveSpeed;
     playerBody.velocity.x = mx * targetSpeed;
     playerBody.velocity.z = mz * targetSpeed;
-    if (isSprinting) gameState.stamina = Math.max(0, gameState.stamina - delta * 25);
-    else gameState.stamina = Math.min(100, gameState.stamina + delta * (onGround ? 19 : 9));
+    if (isSprinting) gameState.stamina = Math.max(0, gameState.stamina - delta * CONFIG.sprintDrain);
+    else gameState.stamina = Math.min(CONFIG.maxStamina, gameState.stamina + delta * (onGround ? CONFIG.staminaRegenGround : CONFIG.staminaRegenAir));
     if (onGround && len > 0 && locked && elapsed >= nextFootstep) {
       audio.playFootstep({ sprint: isSprinting });
       nextFootstep = elapsed + (isSprinting ? .31 : .43);
@@ -2382,19 +2413,23 @@
     crosshairFireTimer = .1;
     crosshairEl.classList.add('firing');
     updateHUD();
-    const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-    const origin = camera.position.clone().addScaledVector(dir, 0.6);
+    bulletDir.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    bulletOrigin.copy(camera.position).addScaledVector(bulletDir, 0.6);
+    // C5: clamp dell'origine entro i limiti dell'arena (come camera e corpi), così
+    // un colpo sparato con la schiena al muro non nasce dentro/oltre la parete.
+    bulletOrigin.x = THREE.MathUtils.clamp(bulletOrigin.x, -arenaInnerFace + .2, arenaInnerFace - .2);
+    bulletOrigin.z = THREE.MathUtils.clamp(bulletOrigin.z, -arenaInnerFace + .2, arenaInnerFace - .2);
 
     const body = new CANNON.Body({ mass: CONFIG.bulletMass, material: matBullet, allowSleep: false });
     body.addShape(new CANNON.Sphere(CONFIG.bulletRadius));
-    body.position.set(origin.x, origin.y, origin.z);
-    body.velocity.set(dir.x * CONFIG.bulletSpeed, dir.y * CONFIG.bulletSpeed, dir.z * CONFIG.bulletSpeed);
+    body.position.set(bulletOrigin.x, bulletOrigin.y, bulletOrigin.z);
+    body.velocity.set(bulletDir.x * CONFIG.bulletSpeed, bulletDir.y * CONFIG.bulletSpeed, bulletDir.z * CONFIG.bulletSpeed);
     body.collisionFilterGroup = COLLISION.BULLET;
     body.collisionFilterMask = COLLISION.STATIC | COLLISION.CRATE;
     world.addBody(body);
 
     const mesh = new THREE.Mesh(bulletGeo, bulletMat);
-    mesh.position.copy(origin);
+    mesh.position.copy(bulletOrigin);
     scene.add(mesh);
 
     // Tracer luminoso (segmento additivo dietro il proiettile)
@@ -2412,7 +2447,7 @@
       hit: false,
       impactSet: false,
       impact: new CANNON.Vec3(),
-      prev: new CANNON.Vec3(origin.x, origin.y, origin.z),
+      prev: new CANNON.Vec3(bulletOrigin.x, bulletOrigin.y, bulletOrigin.z),
       targetHit: false
     };
     body.addEventListener('collide', () => { bullet.hit = true; });
@@ -2457,6 +2492,10 @@
   const bulletHit = new CANNON.RaycastResult();
   const bulletSegment = new THREE.Line3();
   const bulletClosest = new THREE.Vector3();
+  // C4: temp vector riusati per direzione e origine del colpo (niente allocazioni
+  // per colpo nel percorso caldo di fireBullet).
+  const bulletDir = new THREE.Vector3();
+  const bulletOrigin = new THREE.Vector3();
 
   function isFiniteVector3(value) {
     return Boolean(value)
@@ -2574,9 +2613,9 @@
     explosionSystem.reset();
     renderPipeline.reset();
 
-    gameState.health = 100;
-    gameState.shield = 75;
-    gameState.stamina = 100;
+    gameState.health = CONFIG.maxHealth;
+    gameState.shield = CONFIG.maxShield;
+    gameState.stamina = CONFIG.maxStamina;
     gameState.ammo = CONFIG.magazineSize;
     gameState.reserve = CONFIG.reserveAmmo;
     gameState.reloading = false;

@@ -97,9 +97,14 @@
   .loading-head { display: flex; justify-content: space-between; gap: 18px; font: 800 10px ui-monospace, monospace; letter-spacing: 2px; color: rgba(119, 246, 255, .82); }
   #loading-percent { color: rgba(255, 200, 87, .9); }
   .loading-track { position: relative; height: 6px; margin-top: 10px; overflow: hidden; border: 1px solid rgba(119, 246, 255, .24); background: rgba(3, 18, 29, .78); box-shadow: inset 0 0 14px rgba(0, 229, 255, .08), 0 0 18px rgba(0, 229, 255, .08); }
+  /* Shimmer su tutto il track (non solo sul fill): così la barra mostra movimento
+     anche quando il fill è a 0% (es. durante l'iinit WebGPU lento su mobile). */
+  .loading-track::after { content: ''; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 30%, rgba(125,246,255,.28) 50%, transparent 70%); transform: translateX(-100%); animation: loading-sweep 1.3s ease-in-out infinite; }
   #loading-fill { display: block; position: relative; width: 0%; height: 100%; overflow: hidden; transform-origin: left center; background: linear-gradient(90deg, #00e5ff, #77f6ff 62%, #ffc857); box-shadow: 0 0 14px rgba(0, 229, 255, .8); transition: width .3s ease-out; }
-  #loading-fill::after { content: ''; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 25%, rgba(255,255,255,.65) 50%, transparent 75%); transform: translateX(-100%); mix-blend-mode: screen; animation: loading-sweep 1.25s ease-in-out infinite; }
+  /* Riflesso brillante dentro il fill, visibile una volta che la barra avanza. */
+  #loading-fill::after { content: ''; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 25%, rgba(255,255,255,.7) 50%, transparent 75%); transform: translateX(-100%); mix-blend-mode: screen; animation: loading-fill-sweep 1.1s ease-in-out infinite; }
   @keyframes loading-sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+  @keyframes loading-fill-sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
   #loading-detail { margin-top: 9px; color: rgba(182, 225, 234, .48); font: 700 9px ui-monospace, monospace; letter-spacing: 1.2px; }
   .gpu-warning {
     width: min(620px, 82vw);
@@ -459,11 +464,11 @@
       let next = display;
       if (display < target) {
         // Ease verso il target: avanza in modo fluido e "respira".
-        next = display + (target - display) * 0.16 + 0.004;
+        next = display + (target - display) * 0.18 + 0.006;
       } else if (creeping) {
         // Auto-creep: movimento lento e continuo, mai oltre il 98%, così la
         // barra resta viva anche mentre il warmup occupa il main thread.
-        next = display + 0.0035;
+        next = display + 0.006;
       }
       if (creeping && next > 0.98) next = Math.min(next, 0.98);
       if (next > display) display = next;
@@ -510,6 +515,9 @@
       overlay.classList.add('ready');
       overlay.style.display = 'flex';
     };
+    // Avvia subito il ciclo di auto-creep: la barra "respira" fin dal primo
+    // frame, anche prima del primo update, così non resta mai statica a 0%.
+    ensureTick();
     return { nextFrame, update, showModal, hideModal, finishBoot };
   })();
 

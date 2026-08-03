@@ -800,7 +800,6 @@
   createLights();
   createEnvironment();
   const facadeSystem = new FacadeSystem({ scene, anisotropy: aniso, resolution: 1024, buildingCount: 56 });
-  await facadeSystem.init();
   loadingUI.update(.62, 'CITY GRID', 'GENERAZIONE DELLE FACCIATE E DELLA CITTÀ...');
 
   // Pioggia leggera per l'atmosfera bagnata
@@ -2655,7 +2654,26 @@
   if (!webGPUAvailable) {
     showWebGPUUnavailable('Questo browser non espone navigator.gpu.');
   } else {
-    await bootGame();
+    // Watchdog: se il boot non completa entro il timeout (es. un errore silenzioso
+    // o una risorsa che non risolve), mostra il pannello di recovery invece di
+    // lasciare la barra di caricamento bloccata.
+    let bootFinished = false;
+    const bootWatchdog = setTimeout(() => {
+      if (!bootFinished) {
+        console.warn('VIBE boot watchdog: timeout durante l\'inizializzazione');
+        showRendererFailure('BOOT TIMEOUT · INIZIALIZZAZIONE NON COMPLETATA. RICARICA LA PAGINA.');
+      }
+    }, 120000);
+    try {
+      await bootGame();
+      bootFinished = true;
+      clearTimeout(bootWatchdog);
+    } catch (error) {
+      bootFinished = true;
+      clearTimeout(bootWatchdog);
+      console.error('VIBE boot error', error);
+      showRendererFailure('BOOT ERROR · INIZIALIZZAZIONE INTERROTTA. RICARICA LA PAGINA.');
+    }
   }
   </script>
 </body>

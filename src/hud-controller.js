@@ -22,7 +22,11 @@ export class HudController {
       waveLabel: document.getElementById('wave-label'),
       toasts: document.getElementById('toast-stack'),
       sound: document.getElementById('sound-state'),
-      overlaySound: document.getElementById('overlay-sound-state')
+      overlaySound: document.getElementById('overlay-sound-state'),
+      bossBar: document.getElementById('boss-bar'),
+      bossName: document.getElementById('boss-name'),
+      bossFill: document.getElementById('boss-fill'),
+      bossState: document.getElementById('boss-state')
     };
     if (!this.ui.ammoCells.children.length) {
       for (let i = 0; i < 15; i++) this.ui.ammoCells.appendChild(document.createElement('i'));
@@ -124,6 +128,31 @@ export class HudController {
   // numerici non sono cambiati: si azzera la cache del dirty-check.
   invalidateCache() {
     this.last = {};
+  }
+
+  // Barra del boss Apex: visibile solo quando un Apex è vivo, con dirty-check.
+  renderBoss(apex) {
+    const visible = !!apex && apex.alive;
+    if (visible !== this.last.bossVisible) {
+      this.ui.bossBar.classList.toggle('show', visible);
+      this.last.bossVisible = visible;
+    }
+    if (!visible) return;
+    const name = t(apex.nameKey);
+    if (this.last.bossName !== name) {
+      this.ui.bossName.textContent = name;
+      this.last.bossName = name;
+    }
+    const state = `T-${apex.tier}`;
+    if (this.last.bossState !== state) {
+      this.ui.bossState.textContent = state;
+      this.last.bossState = state;
+    }
+    const pct = Math.max(0, Math.min(100, apex.health / apex.maxHealth * 100));
+    if (this.last.bossPct !== pct) {
+      this.ui.bossFill.style.width = `${pct}%`;
+      this.last.bossPct = pct;
+    }
   }
 
   toast(message) {

@@ -70,3 +70,19 @@ test('en/it dictionaries expose identical key sets (no missing translations)', (
   const itKeys = Object.keys(STRINGS.it).sort();
   assert.deepEqual(itKeys, enKeys);
 });
+
+test('apex strings resolve in both languages (L1)', () => {
+  const restore = withStorage({});
+  try {
+    assert.equal(t('apex.title', { name: t('apex.vanguard'), tier: 1 }), 'APEX VANGUARD · T1');
+    assert.ok(t('apex.subtitle').length > 0);
+    assert.ok(t('toast.apexDown').length > 0);
+    assert.ok(t('toast.armor').length > 0);
+    assert.ok(t('toast.phase').length > 0);
+    assert.ok(t('toast.split').length > 0);
+    setLanguage('it');
+    assert.equal(t('apex.title', { name: t('apex.sentinel'), tier: 2 }), 'APEX SENTINEL PRIME · T2');
+    assert.equal(t('score.apex'), 'APEX ELIMINATO');
+    setLanguage('en');
+  } finally { restore(); }
+});

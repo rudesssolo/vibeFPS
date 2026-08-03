@@ -66,6 +66,14 @@ const en = {
   'wave.restored.sub': 'COMBAT SYSTEMS OPERATIONAL',
   'wave.reset.sub': 'SIMULATION RESTARTED',
 
+  // Apex Sentinel (nemico speciale di fine ondata)
+  'apex.vanguard': 'VANGUARD',
+  'apex.wraith': 'WRAITH',
+  'apex.vex': 'VEX',
+  'apex.sentinel': 'SENTINEL PRIME',
+  'apex.title': 'APEX {name} · T{tier}',
+  'apex.subtitle': 'ELITE HOSTILE UNIT DETECTED · PRIORITY TARGET',
+
   // Toast (prefissi in grassetto restano nei call site)
   'toast.scanner': '{count} HOSTILE SIGNATURES ACQUIRED',
   'toast.ammo': '+{amount} AMMO',
@@ -84,6 +92,13 @@ const en = {
   'toast.renderLabel': 'RENDER',
   'score.kill': 'SENTINEL DOWN',
   'score.impact': 'IMPACT',
+  'score.apex': 'APEX DOWN',
+  'toast.apex': '{name} DETECTED',
+  'toast.apexDown': 'APEX FORCE TERMINATED',
+  'toast.armor': 'FRONTAL ARMOR DESTROYED',
+  'toast.phase': 'CRITICAL PHASE ENGAGED',
+  'toast.split': 'CORE FRAGMENTED · MINI UNITS SPAWNED',
+  'toast.summon': '{count} REINFORCEMENTS DEPLOYED',
 
   // Pannello settings
   'settings.title': 'SIMULATION SETTINGS',
@@ -153,6 +168,14 @@ const it = {
   'wave.restored.sub': 'SISTEMI DI COMBATTIMENTO OPERATIVI',
   'wave.reset.sub': 'SIMULAZIONE RIAVVIATA',
 
+  // Apex Sentinel (nemico speciale di fine ondata)
+  'apex.vanguard': 'VANGUARD',
+  'apex.wraith': 'WRAITH',
+  'apex.vex': 'VEX',
+  'apex.sentinel': 'SENTINEL PRIME',
+  'apex.title': 'APEX {name} · T{tier}',
+  'apex.subtitle': 'UNITÀ OSTILE ELITE RILEVATA · OBIETTIVO PRIORITARIO',
+
   // Toast
   'toast.scanner': '{count} FIRME OSTILI ACQUISITE',
   'toast.ammo': '+{amount} MUNIZIONI',
@@ -171,6 +194,13 @@ const it = {
   'toast.renderLabel': 'RENDER',
   'score.kill': 'SENTINEL DOWN',
   'score.impact': 'IMPATTO',
+  'score.apex': 'APEX ELIMINATO',
+  'toast.apex': '{name} RILEVATO',
+  'toast.apexDown': 'FORZA APEX NEUTRALIZZATA',
+  'toast.armor': 'ARMATURA FRONTALE DISTRUTTA',
+  'toast.phase': 'FASE CRITICA ATTIVATA',
+  'toast.split': 'NUCLEO FRAMMENTATO · UNITÀ MINI SCHIERATE',
+  'toast.summon': '{count} RINFORZI SCHIERATI',
 
   // Pannello settings
   'settings.title': 'SIMULATION SETTINGS',

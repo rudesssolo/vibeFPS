@@ -9,6 +9,7 @@ VIBE FPS is a browser-based cyberpunk first-person shooter tech demo. Enter a ne
 - Shader warm-up during loading (`compileAsync` + one offscreen post-chain render) so the first frame, shot, and explosion never stutter
 - Physics-based movement, jumping, a launch pad, collisions, and projectile simulation powered by Cannon.js
 - Wave-based combat against drones that patrol, engage, telegraph attacks, and evade incoming projectiles
+- **Apex units**: a unique, progressively stronger elite ends every wave — a cycling roster (VANGUARD, WRAITH, VEX, SENTINEL PRIME) with tier scaling, dedicated boss bar, and distinct attack patterns
 - Weapon feedback with muzzle shots, tracers, melee strikes, hit markers, explosions, shockwaves, reload and landing camera animation, damage effects, score, and combo tracking
 - Enemy rewards: kills restore health and create collectible ammunition drops
 - A true pause menu (simulation fully suspended, ducked audio) with a complete level reset action

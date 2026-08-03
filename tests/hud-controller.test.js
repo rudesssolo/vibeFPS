@@ -14,7 +14,17 @@ function makeElement() {
     className: '',
     textContent: '',
     innerHTML: '',
-    classList: { add() {}, remove() {}, toggle() {} },
+    classList: {
+      _set: new Set(),
+      add(c) { this._set.add(c); },
+      remove(c) { this._set.delete(c); },
+      toggle(c, force) {
+        if (force === undefined) force = !this._set.has(c);
+        if (force) this._set.add(c); else this._set.delete(c);
+        return force;
+      },
+      contains(c) { return this._set.has(c); }
+    },
     appendChild(child) { el.children.push(child); child.parent = el; return child; },
     prepend(child) { el.children.unshift(child); child.parent = el; return child; },
     remove() {
@@ -66,5 +76,21 @@ test('toast stack never exceeds the cap even in bursts (N6)', () => {
     const hud = new HudController();
     for (let i = 0; i < 40; i++) hud.toast(`<b>UNITÀ</b> · ${i}`);
     assert.equal(hud.ui.toasts.children.length, 5);
+  });
+});
+
+test('renderBoss toggles the bar only while an apex is alive', () => {
+  withFakeDom(() => {
+    const hud = new HudController();
+    const apex = { alive: true, nameKey: 'apex.vanguard', tier: 2, health: 250, maxHealth: 500 };
+    hud.renderBoss(apex);
+    assert.equal(hud.ui.bossBar.classList.contains('show'), true);
+    assert.equal(hud.ui.bossName.textContent, 'VANGUARD');
+    assert.equal(hud.ui.bossState.textContent, 'T-2');
+    assert.equal(hud.ui.bossFill.style.width, '50%');
+    // Ucciso → la barra sparisce.
+    hud.renderBoss({ alive: false, nameKey: 'apex.vanguard', tier: 2, health: 0, maxHealth: 500 });
+    assert.equal(hud.ui.bossBar.classList.contains('show'), false);
+    assert.equal(hud.renderBoss(null), undefined);
   });
 });

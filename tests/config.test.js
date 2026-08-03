@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getStoredMix, storeMix, getStoredQualityMode, storeQualityMode, getStoredMuted, storeMuted } from '../src/config.js';
+import { getStoredMix, storeMix, getStoredQualityMode, storeQualityMode, getStoredMuted, storeMuted, getApexArchetype, getApexStats, APEX_ROSTER, APEX_TUNING } from '../src/config.js';
 
 function withStorage(initial = {}) {
   const store = new Map(Object.entries(initial));
@@ -78,4 +78,53 @@ test('mute state survives a blocked storage (N8)', () => {
   } finally {
     Object.defineProperty(globalThis, 'localStorage', { value: original, configurable: true });
   }
+});
+
+// --- Apex Sentinel: roster a ciclo + tier scaling ---
+
+test('apex roster exposes the 4 archetypes with unique ids', () => {
+  assert.equal(APEX_ROSTER.length, 4);
+  const ids = APEX_ROSTER.map(a => a.id);
+  assert.deepEqual(ids, ['vanguard', 'wraith', 'vex', 'sentinel']);
+  for (const archetype of APEX_ROSTER) {
+    assert.ok(archetype.baseHp > 0);
+    assert.ok(archetype.baseSpeed > 0);
+    assert.ok(archetype.color !== undefined);
+  }
+});
+
+test('getApexArchetype cycles the roster every 4 waves and raises the tier', () => {
+  const w1 = getApexArchetype(1);
+  assert.equal(w1.archetype.id, 'vanguard');
+  assert.equal(w1.tier, 1);
+  const w2 = getApexArchetype(2);
+  assert.equal(w2.archetype.id, 'wraith');
+  const w4 = getApexArchetype(4);
+  assert.equal(w4.archetype.id, 'sentinel');
+  assert.equal(w4.tier, 1);
+  // Secondo ciclo: stesso archetipo, tier 2.
+  const w5 = getApexArchetype(5);
+  assert.equal(w5.archetype.id, 'vanguard');
+  assert.equal(w5.tier, 2);
+  const w9 = getApexArchetype(9);
+  assert.equal(w9.archetype.id, 'vanguard');
+  assert.equal(w9.tier, 3);
+});
+
+test('getApexArchetype is resilient to invalid input', () => {
+  assert.equal(getApexArchetype(NaN).tier, 1);
+  assert.equal(getApexArchetype(0).tier, 1);
+  assert.equal(getApexArchetype(-3).tier, 1);
+  assert.equal(getApexArchetype('x').archetype.id, 'vanguard');
+});
+
+test('getApexStats scales health, speed and damage with the tier', () => {
+  const t1 = getApexStats(1);
+  const t2 = getApexStats(5);
+  const multiplier = Math.pow(APEX_TUNING.tierMultiplier, 1);
+  assert.equal(t2.maxHealth, Math.round(t1.maxHealth * multiplier));
+  assert.ok(t2.speed > t1.speed);
+  assert.ok(t2.damage > t1.damage);
+  assert.equal(t2.tier, 2);
+  assert.equal(t2.nameKey, t1.nameKey);
 });

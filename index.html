@@ -273,6 +273,7 @@
 
   <div id="hitmarker"><i></i><i></i><i></i><i></i></div>
   <div id="wave-banner"><strong>WAVE 01</strong><span>HOSTILE CONTACTS DETECTED</span></div>
+  <div id="boss-bar"><span id="boss-name">APX</span><span class="boss-track"><i id="boss-fill"></i></span><span id="boss-state">T-1</span></div>
   <div id="score-pop">+100 SENTINEL DOWN</div>
   <div id="damage-vignette"></div>
   <div id="target-layer"></div>
@@ -368,7 +369,7 @@
   import { RenderPipelineController } from './src/render-pipeline.js';
   import { makeRng } from './src/rng.js';
   import { constrainBodyToSquare } from './src/player-collision.js';
-  import { getStoredSensitivity, storeSensitivity } from './src/config.js';
+  import { getStoredSensitivity, storeSensitivity, APEX_TUNING } from './src/config.js';
   import { t, getLanguage, setLanguage } from './src/i18n.js';
 
   // L1: applica subito la lingua persistita (default inglese) ai testi statici
@@ -1660,6 +1661,7 @@
   const damageVignetteEl = document.getElementById('damage-vignette');
   const radarCanvas = document.getElementById('radar');
   const radarCtx = radarCanvas.getContext('2d');
+  const bossBarEl = document.getElementById('boss-bar');
   let hudVisibility = null;
 
   const gameState = {
@@ -1699,6 +1701,7 @@
   function showScore(amount,label){scorePopEl.textContent=`+${amount} ${label}`;restartClass(scorePopEl,'show');}
   function updateHUD(){
     hudController.render(gameState);
+    hudController.renderBoss(droneSystem.apex);
   }
 
   function syncHudVisibility() {
@@ -1709,6 +1712,8 @@
     hudEl.style.display = visible ? 'block' : 'none';
     gameHudEl.style.display = visible ? 'block' : 'none';
     targetLayerEl.style.display = visible ? 'block' : 'none';
+    // La barra del boss segue la visibilità dell'HUD (orologio di pausa).
+    bossBarEl.style.display = visible ? '' : 'none';
   }
 
   // L1: copy dell'overlay di pausa/reset centralizzato, così il cambio lingua
@@ -1835,6 +1840,7 @@
   const hostileSegment = new THREE.Line3();
   const hostileClosest = new THREE.Vector3();
   let aliveEnemyCount = 0;
+  let apexSpawned = false;
   const droneSystem = new DroneSystem({
     scene,
     camera,
@@ -1844,7 +1850,13 @@
     onTelegraph: drone => {
       const projected = drone.position.clone().project(camera);
       audio.droneTelegraph(Math.max(-.9, Math.min(.9, projected.x)));
-    }
+    },
+    onApexAttack: (apex, type) => handleApexAttack(apex, type),
+    onApexContact: () => {},
+    onApexMine: apex => spawnVexMines(apex),
+    onApexSummon: apex => summonMinions(apex),
+    onApexShockwave: apex => apexShockwave(apex),
+    onApexTelegraph: apex => audio.apexTelegraph(panForWorld(apex.group.position))
   });
   const drones = droneSystem.drones;
   const hostileRay=new CANNON.Ray(),hostileHit=new CANNON.RaycastResult();
@@ -1852,21 +1864,237 @@
 
   function spawnWave(announce=true){
     const count=Math.min(4+gameState.wave,9);gameState.waveTargets=count;gameState.waveKills=0;gameState.waveDelay=0;
+    apexSpawned=false;
     aliveEnemyCount=droneSystem.spawnWave(gameState.wave,count);
     // A3: stinger audio distintivo solo per le nuove ondate annunciate.
     if(announce){showWave();audio.waveStart();}
     toast(`<b>SCANNER</b> · ${t('toast.scanner',{count})}`);updateHUD();
   }
 
-  function spawnHostileShot(drone){
+  function spawnHostileShot(drone,dmg){
     const origin=drone.group.position.clone();
     const target=new THREE.Vector3(playerBody.position.x,playerBody.position.y+.55,playerBody.position.z);
     const dir=target.sub(origin).normalize();
     const mesh=new THREE.Mesh(new THREE.SphereGeometry(.105,8,6),new THREE.MeshBasicMaterial({color:0xff3155}));mesh.position.copy(origin);scene.add(mesh);
     const lineGeo=new THREE.BufferGeometry();lineGeo.setAttribute('position',new THREE.Float32BufferAttribute(new Float32Array(6),3));
     const trail=new THREE.Line(lineGeo,new THREE.LineBasicMaterial({color:0xff3155,transparent:true,opacity:.7,blending:THREE.AdditiveBlending,depthWrite:false}));scene.add(trail);
-    hostileShots.push({mesh,trail,pos:origin.clone(),prev:origin.clone(),vel:dir.multiplyScalar(18+gameState.wave*.65),age:0});
+    hostileShots.push({mesh,trail,pos:origin.clone(),prev:origin.clone(),vel:dir.multiplyScalar(18+gameState.wave*.65),age:0,dmg});
     const toCam=origin.clone().project(camera);audio.enemyShot(Math.max(-.85,Math.min(.85,toCam.x)));
+  }
+
+  // --- Apex Sentinel: stato (mine VEX + onde d'urto) e helper ---
+  const vexMines=[];           // mine EMP di VEX (danneggiano una volta armate)
+  const apexShockwaves=[];     // anelli visivi dell'onda d'urto di VEX
+
+  function spawnApexUnit(){
+    // Crea l'Apex dell'ondata corrente: scende dall'alto, annunciato con banner dedicato.
+    const apex=droneSystem.spawnApex(gameState.wave);
+    apexSpawned=true;
+    showWave(t('apex.title',{name:t(apex.nameKey),tier:apex.tier}),t('apex.subtitle'));
+    audio.apexStart();
+    toast(`<b>APX-T${apex.tier}</b> · ${t('toast.apex',{name:t(apex.nameKey)})}`);
+    updateHUD();
+  }
+
+  function damageApex(apex,amount,position,countHit=true){
+    if(!apex||!apex.alive)return;
+    const result=droneSystem.applyApexDamage(apex,amount);
+    if(countHit)gameState.hits++;
+    gameState.comboTimer=CONFIG.comboWindow;
+    showHitmarker(result.killed);
+    const impactPosition=result.position||position||apex.group.position;
+    const apexi18n=t(apex.nameKey);
+    if(result.armorBroken){toast(`<b>${apexi18n}</b> · ${t('toast.armor')}`);audio.apexArmorBreak(panForWorld(impactPosition));}
+    if(result.phaseChanged){toast(`<b>${apexi18n}</b> · ${t('toast.phase')}`);audio.apexPhase(panForWorld(impactPosition));}
+    if(result.killed){
+      const earned=Math.round(APEX_TUNING.scoreKill*gameState.combo);
+      gameState.score+=earned;
+      showScore(earned,t('score.apex'));
+      audio.apexKill(panForWorld(impactPosition));
+      const healed=Math.min(APEX_TUNING.healKill,Math.max(0,CONFIG.maxHealth-gameState.health));
+      gameState.health+=healed;
+      spawnAmmoDrop(impactPosition);
+      spawnAmmoDrop({x:impactPosition.x+(apex.random()>.5?1.4:-1.4),y:impactPosition.y,z:impactPosition.z+(apex.random()>.5?1.2:-1.2)});
+      explosionSystem.explode(impactPosition,apex.coreMaterial.emissive.getHex());
+      // Secondo scoppio più ampio per la kill speciale (post-frame).
+      window.setTimeout(()=>{
+        if(!gameState.dead&&droneSystem.apex&&!droneSystem.apex.alive)explosionSystem.explode(impactPosition,apex.coreMaterial.emissive.getHex());
+      },60);
+      toast(`<b>${apexi18n}</b> · ${t('toast.apexDown')}`);
+      if(healed>0)toast(`<b>RECOVERY</b> · ${t('toast.heal',{amount:healed})}`);
+      if(apex.archetypeId==='vex')spawnMinis(impactPosition,apex);
+    }else{
+      gameState.score+=Math.round(CONFIG.impactScore*gameState.combo);
+      showScore(Math.round(CONFIG.impactScore*gameState.combo),t('score.impact'));
+      audio.playImpact({pan:panForWorld(impactPosition)});
+    }
+    updateHUD();
+  }
+
+  function spawnApexProjectile(apex,vel,color){
+    const origin=apex.group.position.clone();
+    const mesh=new THREE.Mesh(new THREE.SphereGeometry(.135,8,6),new THREE.MeshBasicMaterial({color}));
+    mesh.position.copy(origin);
+    scene.add(mesh);
+    const lineGeo=new THREE.BufferGeometry();
+    lineGeo.setAttribute('position',new THREE.Float32BufferAttribute(new Float32Array(6),3));
+    const trail=new THREE.Line(lineGeo,new THREE.LineBasicMaterial({color,transparent:true,opacity:.75,blending:THREE.AdditiveBlending,depthWrite:false}));
+    scene.add(trail);
+    hostileShots.push({mesh,trail,pos:origin.clone(),prev:origin.clone(),vel:vel.clone(),age:0,dmg:apex.damage});
+  }
+
+  const axisY=new THREE.Vector3(0,1,0);
+  function handleApexAttack(apex,type){
+    const color=apex.coreMaterial.emissive.getHex();
+    if(type==='charge'){audio.apexCharge();return;}
+    if(type==='radial'){
+      const count=12+Math.min(6,apex.tier*2);
+      for(let i=0;i<count;i++){
+        const a=i/count*Math.PI*2;
+        const vel=new THREE.Vector3(Math.cos(a),0,Math.sin(a)).multiplyScalar(12.5);
+        vel.y=.5;
+        spawnApexProjectile(apex,vel,color);
+      }
+      audio.apexBarrage();
+      return;
+    }
+    if(type==='burst'){
+      const base=new THREE.Vector3(
+        playerBody.position.x-apex.group.position.x,
+        (playerBody.position.y+.5)-apex.group.position.y,
+        playerBody.position.z-apex.group.position.z
+      ).normalize();
+      for(let i=-1;i<=1;i++){
+        const d=base.clone().applyAxisAngle(axisY,i*.16);
+        spawnApexProjectile(apex,d.multiplyScalar(16),color);
+      }
+      audio.apexShot(panForWorld(apex.group.position));
+      return;
+    }
+    // shot singolo a distanza
+    const dir=new THREE.Vector3(
+      playerBody.position.x-apex.group.position.x,
+      (playerBody.position.y+.5)-apex.group.position.y,
+      playerBody.position.z-apex.group.position.z
+    );
+    if(dir.lengthSq()>.0001)dir.normalize();
+    spawnApexProjectile(apex,dir.multiplyScalar(17),color);
+    audio.apexShot(panForWorld(apex.group.position));
+  }
+
+  function spawnMinis(position,apex){
+    const count=APEX_TUNING.vexSplitMinis;
+    for(let i=0;i<count;i++){
+      const mini=droneSystem.createDrone(droneSystem.drones.length,2);
+      mini.health=Math.max(40,Math.round(60+gameState.wave*6));mini.maxHealth=mini.health;
+      mini.group.scale.setScalar(.6);mini.radius=.42;
+      mini.state='engage';mini.stateTimer=0;
+      const x=position.x+(i?1:-1)*1.1,z=position.z+(i===0?0:.9);
+      mini.anchor.set(x,position.y||2.5,z);mini.position.set(x,position.y||2.5,z);mini.group.position.copy(mini.position);
+      droneSystem.drones.push(mini);
+    }
+    audio.apexSplit();
+    toast(`<b>${t(apex.nameKey)}</b> · ${t('toast.split')}`);
+  }
+
+  function summonMinions(apex){
+    const count=apex.tier>=2?4:APEX_TUNING.sentinelMinions;
+    for(let i=0;i<count;i++){
+      const mini=droneSystem.createDrone(droneSystem.drones.length,count);
+      mini.health=Math.max(80,Math.round(90+gameState.wave*10));mini.maxHealth=mini.health;
+      mini.group.scale.setScalar(.88);mini.radius=.68;
+      const a=i/count*Math.PI*2+apex.phase;
+      const x=apex.group.position.x+Math.cos(a)*2.6,z=apex.group.position.z+Math.sin(a)*2.6;
+      mini.anchor.set(x,apex.group.position.y,z);mini.position.set(x,apex.group.position.y,z);mini.group.position.copy(mini.position);
+      droneSystem.drones.push(mini);
+    }
+    audio.apexSummon();
+    toast(`<b>${t(apex.nameKey)}</b> · ${t('toast.summon',{count})}`);
+  }
+
+  function spawnVexMines(apex){
+    const count=apex.tier>=2?3:APEX_TUNING.vexMineCount;
+    for(let i=0;i<count;i++){
+      const mine=new THREE.Mesh(
+        new THREE.SphereGeometry(.2,10,8),
+        new THREE.MeshStandardMaterial({color:0xffc857,emissive:0x8a4d00,emissiveIntensity:2,metalness:.5,roughness:.3})
+      );
+      const ring=new THREE.Mesh(
+        new THREE.TorusGeometry(.34,.03,6,16),
+        new THREE.MeshBasicMaterial({color:0xffe2a0,transparent:true,opacity:.85,blending:THREE.AdditiveBlending,depthWrite:false})
+      );
+      const group=new THREE.Group();
+      group.add(mine,ring);
+      const a=i/Math.max(1,count)*Math.PI*2+apex.random()*1.2;
+      const r=3.5+apex.random()*2;
+      group.position.set(apex.group.position.x+Math.cos(a)*r,.45,apex.group.position.z+Math.sin(a)*r);
+      scene.add(group);
+      vexMines.push({group,ring,age:0,arm:1.3,exploded:false,life:25,phase:Math.random()*Math.PI*2});
+    }
+    audio.apexMine();
+  }
+
+  function updateVexMines(delta,time){
+    for(let i=vexMines.length-1;i>=0;i--){
+      const m=vexMines[i];
+      m.age+=delta;
+      m.group.rotation.y+=delta*2;
+      m.group.position.y=.45+Math.sin(time*3+m.phase)*.06;
+      // Le mine si "armano" dopo arm secondi, poi esplodono a contatto col giocatore.
+      if(m.age>=m.arm&&!m.exploded&&m.group.position.distanceToSquared(playerBody.position)<=2.2*2.2){
+        m.exploded=true;
+        const pos=m.group.position.clone();
+        scene.remove(m.group);
+        vexMines.splice(i,1);
+        damagePlayer(CONFIG.hostileDmgBase+gameState.wave*CONFIG.hostileDmgWave+6);
+        explosionSystem.explode(pos,0xffc857);
+        audio.apexMineBoom(panForWorld(pos));
+      }
+      if(m.age>=m.life){scene.remove(m.group);vexMines.splice(i,1);}
+    }
+  }
+
+  function clearVexMines(){
+    for(const m of vexMines)scene.remove(m.group);
+    vexMines.length=0;
+  }
+
+  function apexShockwave(apex){
+    // Anello visivo espanso + spinta sul giocatore + danno.
+    const geo=new THREE.RingGeometry(.5,.8,32);
+    const mat=new THREE.MeshBasicMaterial({
+      color:apex.coreMaterial.emissive.getHex(),
+      transparent:true,opacity:.85,side:THREE.DoubleSide,
+      blending:THREE.AdditiveBlending,depthWrite:false
+    });
+    const ring=new THREE.Mesh(geo,mat);
+    ring.position.copy(apex.group.position);
+    ring.position.y=1.1;
+    ring.rotation.x=-Math.PI/2;
+    scene.add(ring);
+    apexShockwaves.push({mesh:ring,age:0,life:.7});
+    const push=new CANNON.Vec3(
+      apex.group.position.x-playerBody.position.x,
+      0,
+      apex.group.position.z-playerBody.position.z
+    );
+    const len=Math.hypot(push.x,push.z);
+    if(len>.01){push.x/=len;push.z/=len;}
+    playerBody.velocity.x+=push.x*7;
+    playerBody.velocity.z+=push.z*7;
+    damagePlayer(8);
+    audio.apexShockwave();
+  }
+
+  function updateApexShockwaves(delta){
+    for(let i=apexShockwaves.length-1;i>=0;i--){
+      const s=apexShockwaves[i];
+      s.age+=delta;
+      const t=Math.min(1,s.age/s.life);
+      s.mesh.scale.setScalar(1+t*6);
+      s.mesh.material.opacity=(1-t)*.85;
+      if(t>=1){scene.remove(s.mesh);s.mesh.geometry.dispose();s.mesh.material.dispose();apexShockwaves.splice(i,1);}
+    }
   }
 
   function spawnAmmoDrop(position) {
@@ -1955,8 +2183,23 @@
 
   function updateDrones(delta,time){
     if (!gameState.started && !locked) return;
+    // N7: gli spawn dei minion/split aggiungono droni durante la run; il flag
+    // apexSpawned evita che ogni frame provi a ri-generare l'Apex dell'ondata.
     aliveEnemyCount=droneSystem.update(delta,time,{active:locked&&gameState.started,dead:gameState.dead});
-    if(aliveEnemyCount===0&&gameState.waveDelay<=0)gameState.waveDelay=2.8;
+    const apexAlive=droneSystem.updateApex(delta,time,{active:locked&&gameState.started,dead:gameState.dead});
+    // Carica VANGUARD: danno da contatto mentre è in carica.
+    const apex=droneSystem.apex;
+    if(apex&&apex.alive&&apex.state==='charge'&&apex.chargeDir&&locked&&gameState.started&&!gameState.dead){
+      const dx=apex.group.position.x-playerBody.position.x;
+      const dz=apex.group.position.z-playerBody.position.z;
+      if(dx*dx+dz*dz<(apex.radius+.75)*(apex.radius+.75))damagePlayer(APEX_TUNING.chargeContactDmg);
+    }
+    if(aliveEnemyCount===0&&gameState.waveDelay<=0){
+      if(!apexSpawned)spawnApexUnit();
+      else if(!apexAlive)gameState.waveDelay=2.8;
+    }
+    updateVexMines(delta,time);
+    updateApexShockwaves(delta);
   }
 
   function updateHostileShots(delta){
@@ -1971,7 +2214,7 @@
       // Hit test sweep segmento→punto (B4): traduce il movimento del colpo tra
       // prev e pos in un segmento, così a FPS bassi il proiettile non salta sopra
       // il giocatore. .52 = raggio di collisione effettivo ^2 (≈0.72m).
-      if(!remove){hostileSegment.start.copy(s.prev);hostileSegment.end.copy(s.pos);hostileSegment.closestPointToPoint(hostilePlayerPoint,true,hostileClosest);if(hostileClosest.distanceToSquared(hostilePlayerPoint)<CONFIG.hostileHitRadiusSq){damagePlayer(CONFIG.hostileDmgBase+gameState.wave*CONFIG.hostileDmgWave);remove=true;}}
+      if(!remove){hostileSegment.start.copy(s.prev);hostileSegment.end.copy(s.pos);hostileSegment.closestPointToPoint(hostilePlayerPoint,true,hostileClosest);if(hostileClosest.distanceToSquared(hostilePlayerPoint)<CONFIG.hostileHitRadiusSq){damagePlayer(s.dmg||(CONFIG.hostileDmgBase+gameState.wave*CONFIG.hostileDmgWave));remove=true;}}
       if(!remove){hostileFrom.set(s.prev.x,s.prev.y,s.prev.z);hostileTo.set(s.pos.x,s.pos.y,s.pos.z);if(hostileRay.intersectWorld(world,{mode:CANNON.Ray.CLOSEST,result:hostileHit,from:hostileFrom,to:hostileTo,collisionFilterGroup:COLLISION.BULLET,collisionFilterMask:COLLISION.STATIC|COLLISION.CRATE}))remove=true;}
       if(remove){scene.remove(s.mesh,s.trail);s.mesh.geometry.dispose();s.mesh.material.dispose();s.trail.geometry.dispose();s.trail.material.dispose();hostileShots.splice(i,1);}
     }
@@ -1988,6 +2231,20 @@
     function mapPoint(wx,wz){const dx=wx-playerBody.position.x,dz=wz-playerBody.position.z;return {x:(dx*Math.cos(yaw)-dz*Math.sin(yaw))*scale,y:-(-dx*Math.sin(yaw)-dz*Math.cos(yaw))*scale};}
     const pad=mapPoint(CONFIG.padPos.x,CONFIG.padPos.z);c.fillStyle='#ff2d95';c.fillRect(pad.x-4,pad.y-4,8,8);
     for(const d of drones){if(!d.alive)continue;const p=mapPoint(d.group.position.x,d.group.position.z);if(Math.hypot(p.x,p.y)>w*.44)continue;c.save();c.translate(p.x,p.y);c.rotate(Math.PI/4);c.fillStyle='#ff465f';c.shadowColor='#ff3155';c.shadowBlur=12;c.fillRect(-5,-5,10,10);c.restore();}
+    // Apex: blip più grande e pulsante sul radar.
+    const rApex=droneSystem.apex;
+    if(rApex&&rApex.alive){
+      const p=mapPoint(rApex.group.position.x,rApex.group.position.z);
+      if(Math.hypot(p.x,p.y)<=w*.46){
+        const pulse=1+.25*Math.sin(time*6);
+        const size=(5+Math.min(3,rApex.tier))*pulse;
+        c.save();c.translate(p.x,p.y);
+        c.fillStyle=droneSystem.apex.coreMaterial?('#'+rApex.coreMaterial.emissive.getHex().toString(16).padStart(6,'0')):'#ff4f5f';
+        c.shadowColor=c.fillStyle;c.shadowBlur=16;
+        c.beginPath();c.arc(0,0,size,0,Math.PI*2);c.fill();
+        c.restore();
+      }
+    }
     c.fillStyle='#8ef9ff';c.shadowColor='#00e5ff';c.shadowBlur=12;c.beginPath();c.moveTo(0,-10);c.lineTo(7,8);c.lineTo(0,5);c.lineTo(-7,8);c.closePath();c.fill();c.restore();
   }
 
@@ -2311,6 +2568,7 @@
     camera.getWorldDirection(meleeDirection);
     meleeOrigin.copy(camera.position);
     let closestDrone = null;
+    let closestApex = null;
     let closestDistance = CONFIG.meleeRange;
     const hitRadius = CONFIG.meleeRadius;
     for (const drone of drones) {
@@ -2324,7 +2582,24 @@
       closestDrone = drone;
       closestDistance = along;
     }
-    if (closestDrone) {
+    // Il melee può colpire anche l'Apex (raggio più ampio).
+    const apexTarget = droneSystem.apex;
+    if (apexTarget && apexTarget.alive) {
+      meleeTarget.copy(apexTarget.group.position).sub(meleeOrigin);
+      const along = meleeTarget.dot(meleeDirection);
+      if (along > .1 && along < CONFIG.meleeRange) {
+        const distanceSquared = Math.max(0, meleeTarget.lengthSq() - along * along);
+        const radius = hitRadius + apexTarget.radius;
+        if (distanceSquared <= radius * radius && along < closestDistance) {
+          closestDistance = along;
+          closestApex = apexTarget;
+        }
+      }
+    }
+    if (closestApex) {
+      meleeImpact.copy(meleeOrigin).addScaledVector(meleeDirection, closestDistance);
+      damageApex(closestApex, CONFIG.meleeDamage, meleeImpact, false);
+    } else if (closestDrone) {
       meleeImpact.copy(meleeOrigin).addScaledVector(meleeDirection, closestDistance);
       // N3: il melee non è un colpo esploso — non entra nel conteggio accuracy.
       damageDrone(closestDrone, CONFIG.meleeDamage, meleeImpact, false);
@@ -2383,6 +2658,15 @@
             b.hit=true;b.targetHit=true;b.impact.set(bulletClosest.x,bulletClosest.y,bulletClosest.z);b.impactSet=true;
             damageDrone(drone,CONFIG.bulletDamage,bulletClosest.clone());
             break;
+          }
+        }
+        // Sweep contro l'Apex (raggio più ampio, tier-scalato).
+        if (!b.hit && droneSystem.apex && droneSystem.apex.alive) {
+          const apexDrone = droneSystem.apex;
+          bulletSegment.closestPointToPoint(apexDrone.group.position,true,bulletClosest);
+          if (bulletClosest.distanceToSquared(apexDrone.group.position) <= apexDrone.radius * apexDrone.radius) {
+            b.hit=true;b.targetHit=true;b.impact.set(bulletClosest.x,bulletClosest.y,bulletClosest.z);b.impactSet=true;
+            damageApex(apexDrone,CONFIG.bulletDamage,bulletClosest.clone());
           }
         }
       }
@@ -2495,6 +2779,9 @@
     gunRecoil = 0;
     muzzleLight.intensity = 0;
     flashMesh.material.opacity = 0;
+    clearVexMines();
+    for (const s of apexShockwaves) { scene.remove(s.mesh); s.mesh.geometry.dispose(); s.mesh.material.dispose(); }
+    apexShockwaves.length = 0;
     resetPlayerBody();
     spawnWave(false);
     updateHUD();
@@ -2602,7 +2889,8 @@
       aliveEnemies:aliveEnemyCount,
       wave:gameState.wave,
       health:gameState.health,
-      combo:gameState.combo
+      combo:gameState.combo,
+      apexAlive:!!(droneSystem.apex && droneSystem.apex.alive)
     });
 
     // Jump pad: pulsazione soft + rotazione freccia

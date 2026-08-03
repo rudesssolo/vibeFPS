@@ -178,3 +178,35 @@
   .vitals { width: 300px; }
   .weapon-hud { width: 300px; }
 }
+
+/* Apex Sentinel — barra del boss (in alto al centro) e marker dedicato. */
+#boss-bar {
+  position: fixed; left: 50%; top: calc(var(--hud-safe) * .72);
+  transform: translateX(-50%);
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 18px; min-width: 300px; max-width: 46vw;
+  background: linear-gradient(105deg, rgba(3,9,17,.9), rgba(7,17,27,.68));
+  border: 1px solid var(--hud-border);
+  border-radius: 3px;
+  box-shadow: inset 0 0 30px rgba(255,45,149,.06), 0 12px 34px rgba(0,0,0,.3);
+  backdrop-filter: blur(10px);
+  z-index: 12; opacity: 0; pointer-events: none;
+  transition: opacity .25s ease;
+}
+#boss-bar.show { opacity: 1; }
+#boss-name { font: 900 13px ui-monospace,monospace; letter-spacing: 2px; color: var(--pink); text-shadow: 0 0 12px rgba(255,45,149,.6); white-space: nowrap; }
+.boss-track { flex: 1; height: 7px; background: rgba(255,255,255,.1); border-radius: 2px; overflow: hidden; }
+#boss-fill { display: block; height: 100%; width: 100%; background: linear-gradient(90deg,#ff2d95,#ff6b7a,#ffd166); box-shadow: 0 0 10px rgba(255,45,149,.8); transition: width .12s linear; }
+#boss-state { font: 700 10px ui-monospace,monospace; letter-spacing: 1px; color: rgba(226,251,255,.66); white-space: nowrap; }
+
+/* Marker Apex più grande e con colori dedicati. */
+.target-marker.apex-marker {
+  width: 74px; height: 52px;
+  border-left-color: var(--pink, #ff2d95);
+  border-right-color: var(--pink, #ff2d95);
+  opacity: .95;
+}
+.target-marker.apex-marker .target-health { top: -9px; height: 3px; }
+.target-marker.apex-marker .target-health i { background: var(--pink, #ff2d95); box-shadow: 0 0 8px var(--pink, #ff2d95); }
+.target-marker.apex-marker::after { top: 55px; color: rgba(255,170,199,.9); font: 800 9px ui-monospace,monospace; }
+

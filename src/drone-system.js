@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { DRONE_TUNING } from './config.js';
+import { DRONE_TUNING, APEX_TUNING, getApexStats } from './config.js';
 import { makeRng } from './rng.js';
 
 const clampLength = (vector, max) => {
@@ -9,19 +9,27 @@ const clampLength = (vector, max) => {
 };
 
 export class DroneSystem {
-  constructor({ scene, camera, targetLayer, targetProvider, onFire, onTelegraph }) {
+  constructor({ scene, camera, targetLayer, targetProvider, onFire, onTelegraph, onApexAttack, onApexContact, onApexMine, onApexSummon, onApexShockwave, onApexTelegraph }) {
     this.scene = scene;
     this.camera = camera;
     this.targetLayer = targetLayer;
     this.targetProvider = targetProvider;
     this.onFire = onFire;
     this.onTelegraph = onTelegraph || (() => {});
+    // Callback per gli attacchi/effetti speciali degli Apex.
+    this.onApexAttack = onApexAttack || (() => {});
+    this.onApexContact = onApexContact || (() => {});
+    this.onApexMine = onApexMine || (() => {});
+    this.onApexSummon = onApexSummon || (() => {});
+    this.onApexShockwave = onApexShockwave || (() => {});
+    this.onApexTelegraph = onApexTelegraph || (() => {});
     this.drones = [];
     this.wave = 1;
     this.line = new THREE.Line3();
     this.closest = new THREE.Vector3();
     this.temp = new THREE.Vector3();
     this.temp2 = new THREE.Vector3();
+    this.temp3 = new THREE.Vector3();
     this.steering = new THREE.Vector3();
     this.separationOffset = new THREE.Vector3();
     this.markerProjected = new THREE.Vector3();
@@ -33,6 +41,13 @@ export class DroneSystem {
     this.haloGeometry = new THREE.CircleGeometry(.25, 24);
     this.thrusterGeometry = new THREE.ConeGeometry(.095, .44, 12);
     this.darkMaterial = new THREE.MeshPhysicalMaterial({ color: 0x0a1017, metalness: .94, roughness: .23, clearcoat: .35, envMapIntensity: 1.6 });
+    // --- Geometrie per gli Apex (nemici speciali di fine ondata) ---
+    this.armorGeometry = new THREE.BoxGeometry(1.24, .62, .16);
+    this.bladeGeometry = new THREE.BoxGeometry(.1, .7, .34);
+    this.spikeGeometry = new THREE.ConeGeometry(.16, .5, 6);
+    this.orbitGeometry = new THREE.SphereGeometry(.2, 12, 10);
+    this.miniGeometry = new THREE.SphereGeometry(.28, 12, 10);
+    this.apex = null;
   }
 
   clear() {
@@ -46,6 +61,22 @@ export class DroneSystem {
       for (const thruster of drone.thrusters) thruster.material.dispose();
     }
     this.drones.length = 0;
+    this.clearApex();
+  }
+
+  clearApex() {
+    if (!this.apex) return;
+    if (this.apex.group) this.scene.remove(this.apex.group);
+    if (this.apex.marker) this.apex.marker.remove();
+    if (this.apex.coreMaterial) this.apex.coreMaterial.dispose();
+    if (this.apex.eye?.material) this.apex.eye.material.dispose();
+    if (this.apex.eyeHalo?.material) this.apex.eyeHalo.material.dispose();
+    if (this.apex.ring?.material) this.apex.ring.material.dispose();
+    if (this.apex.afterimage?.material) this.apex.afterimage.material.dispose();
+    for (const part of this.apex.parts || []) {
+      if (part.material) part.material.dispose();
+    }
+    this.apex = null;
   }
 
   spawnWave(wave, count) {
@@ -53,6 +84,219 @@ export class DroneSystem {
     this.wave = wave;
     for (let index = 0; index < count; index++) this.drones.push(this.createDrone(index, count));
     return this.drones.length;
+  }
+
+  /** Crea (o sostituisce) l'Apex di fine ondata per l'ondata data. */
+  spawnApex(wave) {
+    this.clearApex();
+    this.wave = wave;
+    const stats = getApexStats(wave);
+    const random = makeRng(9900 + wave * 137);
+    const angle = random() * Math.PI * 2;
+    const radius = 12 + random() * 3;
+    const anchor = new THREE.Vector3(Math.sin(angle) * radius, 14, Math.cos(angle) * radius + 4);
+    const built = this.buildApexVisual(stats);
+    const group = new THREE.Group();
+    group.add(built.visual);
+    group.position.copy(anchor);
+    this.scene.add(group);
+
+    const marker = document.createElement('div');
+    marker.className = 'target-marker apex-marker';
+    marker.innerHTML = '<span class="target-health"><i></i></span><span class="target-state"></span>';
+    this.targetLayer.appendChild(marker);
+    const markerHealth = marker.querySelector('.target-health i');
+    const markerState = marker.querySelector('.target-state');
+
+    const apex = {
+      id: 'APX',
+      archetypeId: stats.archetype.id,
+      nameKey: stats.nameKey,
+      tier: stats.tier,
+      group,
+      visual: built.visual,
+      core: built.core,
+      coreMaterial: built.coreMaterial,
+      eye: built.eye,
+      eyeHalo: built.eyeHalo,
+      ring: built.ring,
+      secondRing: built.secondRing,
+      thrusters: built.thrusters,
+      afterimage: built.afterimage,
+      parts: built.parts,
+      marker, markerHealth, markerState,
+      lastLeft: -1, lastTop: -1, lastRange: '', lastState: '', lastHealth: -1, lastOffscreen: null,
+      anchor,
+      position: anchor.clone(),
+      velocity: new THREE.Vector3(),
+      acceleration: new THREE.Vector3(),
+      desiredVelocity: new THREE.Vector3(),
+      random,
+      phase: random() * 7,
+      health: stats.maxHealth,
+      maxHealth: stats.maxHealth,
+      radius: stats.radius,
+      fireTimer: 2,
+      alive: true,
+      spawnTimer: APEX_TUNING.spawnDescent,
+      state: 'spawn',
+      stateTimer: 0,
+      attackCooldown: 1.6,
+      damage: stats.damage,
+      speed: stats.speed,
+      // Per-archetipo: armatura, blink, fasi, cariche.
+      armor: stats.archetype.id === 'vanguard' ? Math.round(stats.maxHealth * .42) : 0,
+      armorMax: stats.archetype.id === 'vanguard' ? Math.round(stats.maxHealth * .42) : 0,
+      armorBroken: false,
+      blinkCooldown: 1.2,
+      mineTimer: 2.4,
+      shockwaveTimer: 5,
+      chargeCount: 0,
+      telegraphing: false,
+      summonTimer: 6
+    };
+    this.apex = apex;
+    return apex;
+  }
+
+  /** Costruisce la silhouette visiva dell'Apex per archetipo e restituisce i riferimenti. */
+  buildApexVisual(stats) {
+    const visual = new THREE.Group();
+    const coreMaterial = new THREE.MeshPhysicalMaterial({
+      color: 0x0c111a,
+      metalness: .92,
+      roughness: .2,
+      clearcoat: .9,
+      clearcoatRoughness: .08,
+      envMapIntensity: 1.8,
+      emissive: stats.color,
+      emissiveIntensity: .55
+    });
+    const parts = [];
+    let coreScale = 1.15;
+    let afterimage = null;
+    switch (stats.archetype.id) {
+      case 'vanguard': {
+        coreScale = 1.55;
+        const armor = new THREE.Mesh(
+          this.armorGeometry,
+          new THREE.MeshPhysicalMaterial({ color: 0x141d2b, metalness: .9, roughness: .3, clearcoat: .5, envMapIntensity: 1.6 })
+        );
+        armor.position.set(0, .02, .46);
+        armor.rotation.x = .12;
+        parts.push(armor);
+        for (const x of [-.95, .95]) {
+          const spike = new THREE.Mesh(this.spikeGeometry, this.darkMaterial);
+          spike.position.set(x, .32, 0);
+          spike.rotation.z = x < 0 ? .5 : -.5;
+          spike.rotation.x = -Math.PI / 2;
+          parts.push(spike);
+        }
+        const lowerPlate = new THREE.Mesh(this.miniGeometry, this.darkMaterial);
+        lowerPlate.scale.setScalar(2.1);
+        lowerPlate.position.set(0, -.28, .1);
+        parts.push(lowerPlate);
+        break;
+      }
+      case 'wraith': {
+        coreScale = 1.25;
+        for (const x of [-.8, .8]) {
+          const blade = new THREE.Mesh(this.bladeGeometry, this.darkMaterial);
+          blade.position.set(x, 0, 0);
+          blade.rotation.z = x < 0 ? .1 : -.1;
+          blade.rotation.y = x < 0 ? .25 : -.25;
+          parts.push(blade);
+        }
+        const afterimageMat = new THREE.MeshBasicMaterial({
+          color: stats.color,
+          transparent: true,
+          opacity: 0,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        const afterCore = new THREE.Mesh(this.coreGeometry, afterimageMat);
+        afterCore.scale.setScalar(1.25);
+        afterimage = afterCore;
+        parts.push(afterimage);
+        break;
+      }
+      case 'vex': {
+        coreScale = 1.4;
+        const core = new THREE.Mesh(
+          this.orbitGeometry,
+          new THREE.MeshBasicMaterial({ color: stats.color, transparent: true, opacity: .5, blending: THREE.AdditiveBlending, depthWrite: false })
+        );
+        core.scale.setScalar(3.4);
+        parts.push(core);
+        for (let i = 0; i < 3; i++) {
+          const orb = new THREE.Mesh(this.orbitGeometry, new THREE.MeshBasicMaterial({ color: stats.color, transparent: true, opacity: .85, blending: THREE.AdditiveBlending, depthWrite: false }));
+          orb.userData.orbitIndex = i;
+          parts.push(orb);
+        }
+        break;
+      }
+      case 'sentinel': {
+        coreScale = 1.9;
+        for (let i = 0; i < 6; i++) {
+          const spike = new THREE.Mesh(this.spikeGeometry, this.darkMaterial);
+          const a = i / 6 * Math.PI * 2;
+          spike.position.set(Math.cos(a) * .62, .3, Math.sin(a) * .62);
+          spike.rotation.x = -Math.PI / 2;
+          parts.push(spike);
+        }
+        break;
+      }
+    }
+
+    // Corpo, occhio, due anelli, propulsori: comuni a tutti gli archetipi.
+    const core = new THREE.Mesh(this.coreGeometry, coreMaterial);
+    core.scale.setScalar(coreScale);
+    visual.add(core);
+    const eye = new THREE.Mesh(this.eyeGeometry, new THREE.MeshBasicMaterial({ color: stats.color }));
+    eye.position.set(0, .04, .5 * coreScale);
+    eye.scale.setScalar(1.8);
+    visual.add(eye);
+    const eyeHalo = new THREE.Mesh(
+      this.haloGeometry,
+      new THREE.MeshBasicMaterial({ color: stats.color, transparent: true, opacity: .3, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
+    );
+    eyeHalo.position.set(0, .04, .52 * coreScale);
+    eyeHalo.scale.setScalar(2);
+    visual.add(eyeHalo);
+    const ring = new THREE.Mesh(
+      this.ringGeometry,
+      new THREE.MeshBasicMaterial({ color: stats.color, transparent: true, opacity: .85, blending: THREE.AdditiveBlending, depthWrite: false })
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.scale.setScalar(1.9);
+    visual.add(ring);
+    const secondRing = new THREE.Mesh(
+      this.ringGeometry,
+      new THREE.MeshBasicMaterial({ color: stats.color, transparent: true, opacity: .4, blending: THREE.AdditiveBlending, depthWrite: false })
+    );
+    secondRing.rotation.x = Math.PI / 2;
+    secondRing.rotation.z = Math.PI / 4;
+    secondRing.scale.setScalar(2.4);
+    visual.add(secondRing);
+    parts.push({ material: secondRing.material });
+
+    const thrusters = [];
+    for (const x of [-.7, .7]) {
+      const material = new THREE.MeshBasicMaterial({ color: stats.color, transparent: true, opacity: .85, blending: THREE.AdditiveBlending, depthWrite: false });
+      const thruster = new THREE.Mesh(this.thrusterGeometry, material);
+      thruster.position.set(x, -.55, -.05);
+      thruster.scale.set(1.6, 1.6, 1.6);
+      thruster.rotation.z = Math.PI;
+      visual.add(thruster);
+      thrusters.push(thruster);
+    }
+    visual.traverse(object => {
+      if (object.isMesh && object !== eye && object !== eyeHalo && object !== ring && object !== secondRing && object !== afterimage && !thrusters.includes(object)) {
+        object.castShadow = true;
+        object.receiveShadow = true;
+      }
+    });
+    return { visual, coreMaterial, core, eye, eyeHalo, ring, secondRing, thrusters, afterimage, parts, coreScale };
   }
 
   createDrone(index, count) {
@@ -306,6 +550,299 @@ export class DroneSystem {
     return { hit: true, killed, position: drone.position.clone() };
   }
 
+  /** Aggiorna l'Apex (movimento, stati per archetipo, animazioni). Ritorna la vita. */
+  updateApex(delta, time, { active = true, dead = false } = {}) {
+    const apex = this.apex;
+    if (!apex || !apex.alive) return false;
+    const target = this.targetProvider();
+    const edge = DRONE_TUNING.arenaLimit;
+
+    // Fase di discesa: scende dall'alto senza attaccare.
+    if (apex.spawnTimer > 0) {
+      apex.spawnTimer -= delta;
+      const progress = 1 - Math.max(0, apex.spawnTimer) / APEX_TUNING.spawnDescent;
+      apex.position.y = THREE.MathUtils.lerp(16, 5.2, Math.min(1, progress));
+      apex.group.position.copy(apex.position);
+      apex.ring.rotation.z += delta * 2;
+      apex.secondRing.rotation.z -= delta * 1.4;
+      apex.eyeHalo.scale.setScalar(1 + Math.sin(time * 6 + apex.phase) * .2);
+      if (apex.spawnTimer <= 0) {
+        apex.state = 'patrol';
+        apex.velocity.set(0, 0, 0);
+      }
+      return true;
+    }
+
+    apex.attackCooldown = Math.max(0, apex.attackCooldown - delta);
+    apex.stateTimer -= delta;
+    apex.blinkCooldown = Math.max(0, apex.blinkCooldown - delta);
+    apex.mineTimer -= delta;
+    apex.shockwaveTimer -= delta;
+    apex.summonTimer -= delta;
+
+    const toTargetXZ = this.temp.copy(target).sub(apex.position);
+    toTargetXZ.y = 0;
+    const distanceXZ = toTargetXZ.length();
+
+    apex.desiredVelocity.set(0, 0, 0);
+    this.apexBehavior(apex, delta, time, target, distanceXZ, active, dead);
+
+    // Integrazione movimento comune.
+    if (apex.state === 'charge' && apex.chargeDir) {
+      apex.velocity.copy(apex.chargeDir);
+      clampLength(apex.velocity, APEX_TUNING.chargeSpeed);
+    } else {
+      apex.acceleration.copy(apex.desiredVelocity).sub(apex.velocity).multiplyScalar(2.6);
+      clampLength(apex.acceleration, 10);
+      apex.velocity.addScaledVector(apex.acceleration, delta);
+      const maxSpeed = apex.state === 'recover' ? apex.speed * .5 : apex.speed;
+      clampLength(apex.velocity, maxSpeed);
+    }
+    apex.position.addScaledVector(apex.velocity, delta);
+    apex.position.x = THREE.MathUtils.clamp(apex.position.x, -edge, edge);
+    apex.position.z = THREE.MathUtils.clamp(apex.position.z, -edge, edge);
+    apex.position.y = THREE.MathUtils.clamp(apex.position.y, 3.4, 8.5);
+    apex.group.position.copy(apex.position);
+
+    this.lookHelper.position.copy(apex.position);
+    this.lookHelper.lookAt(target);
+    apex.group.quaternion.slerp(this.lookHelper.quaternion, Math.min(1, delta * 3.5));
+    apex.ring.rotation.z += delta * 2.4;
+    apex.secondRing.rotation.z -= delta * 1.7;
+    const thrust = .8 + Math.min(1, apex.acceleration.length() / 10) * .9;
+    for (const thruster of apex.thrusters) thruster.scale.y = THREE.MathUtils.lerp(thruster.scale.y, thrust, delta * 8);
+    apex.eyeHalo.scale.setScalar(1 + Math.sin(time * 5 + apex.phase) * .16 + (apex.telegraphing ? .7 : 0));
+    apex.coreMaterial.emissiveIntensity = Math.max(.5, apex.coreMaterial.emissiveIntensity - delta * 6);
+    if (apex.afterimage) apex.afterimage.material.opacity = Math.max(0, apex.afterimage.material.opacity - delta * 2.4);
+    if (apex.archetypeId === 'vex') {
+      let orbitIndex = 0;
+      for (const part of apex.parts) {
+        if (part.userData && part.userData.orbitIndex !== undefined) {
+          const a = time * 2.2 + orbitIndex * Math.PI * 2 / 3;
+          part.position.set(Math.cos(a) * 1.15, Math.sin(a * .8) * .5, Math.sin(a) * 1.15);
+          orbitIndex++;
+        }
+      }
+    }
+    return true;
+  }
+/** Comportamento (velocità desiderata + stati d'attacco) per archetipo. */
+  apexBehavior(apex, delta, time, target, distanceXZ, active, dead) {
+    const canAct = active && !dead;
+    const toTarget = this.temp2.copy(target).sub(apex.position);
+    toTarget.y = 0;
+    if (toTarget.lengthSq() > .0001) toTarget.normalize();
+
+    switch (apex.archetypeId) {
+      case 'vanguard': {
+        if (apex.state === 'telegraph') {
+          apex.desiredVelocity.set(0, 0, 0);
+          if (apex.stateTimer <= 0) {
+            apex.state = 'charge';
+            apex.stateTimer = 1.15;
+            apex.chargeDir = toTarget.clone().multiplyScalar(APEX_TUNING.chargeSpeed);
+            apex.telegraphing = false;
+            this.onApexAttack(apex, 'charge');
+          }
+        } else if (apex.state === 'charge') {
+          if (apex.stateTimer <= 0
+            || Math.abs(apex.position.x) > DRONE_TUNING.arenaLimit - 1.5
+            || Math.abs(apex.position.z) > DRONE_TUNING.arenaLimit - 1.5) {
+            apex.state = 'recover';
+            apex.stateTimer = 1.5;
+            apex.chargeDir.set(0, 0, 0);
+            apex.velocity.set(0, 0, 0);
+          }
+        } else if (apex.state === 'recover') {
+          apex.desiredVelocity.set(0, 0, 0);
+          if (apex.stateTimer <= 0) {
+            apex.chargeCount = 0;
+            apex.state = 'patrol';
+          }
+        } else {
+          const orbitPoint = this.temp3.set(
+            target.x + Math.sin(time * .3 + apex.phase) * 3,
+            target.y,
+            target.z + Math.cos(time * .27 + apex.phase) * 2.4
+          );
+          apex.desiredVelocity.copy(orbitPoint).sub(apex.position);
+          apex.desiredVelocity.y = 0;
+          if (apex.desiredVelocity.lengthSq() > 1) apex.desiredVelocity.setLength(apex.speed * .8);
+          apex.chargeCount = 0;
+          if (canAct && distanceXZ < 20 && apex.attackCooldown <= 0) {
+            apex.state = 'telegraph';
+            apex.stateTimer = 1.15;
+            apex.attackCooldown = 4.4;
+            apex.telegraphing = true;
+            this.onApexTelegraph(apex);
+          }
+        }
+        break;
+      }
+
+      case 'wraith': {
+        if (apex.state === 'blink' || apex.state === 'burst') {
+          apex.desiredVelocity.set(0, 0, 0);
+          if (apex.state === 'blink' && apex.stateTimer <= 0) {
+            apex.state = 'burst';
+            apex.stateTimer = .6;
+          } else if (apex.state === 'burst' && apex.stateTimer <= 0) {
+            apex.state = 'patrol';
+            apex.attackCooldown = 1.6;
+          }
+        } else if (canAct && apex.blinkCooldown <= 0 && distanceXZ > 4) {
+          const side = apex.random() > .5 ? 1 : -1;
+          const blinkTarget = this.temp3.set(
+            target.x + side * (3 + apex.random() * 3),
+            target.y + 2,
+            target.z + (apex.random() - .5) * 5
+          );
+          blinkTarget.x = THREE.MathUtils.clamp(blinkTarget.x, -DRONE_TUNING.arenaLimit + 2, DRONE_TUNING.arenaLimit - 2);
+          blinkTarget.z = THREE.MathUtils.clamp(blinkTarget.z, -DRONE_TUNING.arenaLimit + 2, DRONE_TUNING.arenaLimit - 2);
+          if (apex.afterimage) apex.afterimage.material.opacity = .75;
+          apex.position.copy(blinkTarget);
+          apex.velocity.set(0, 0, 0);
+          apex.state = 'blink';
+          apex.stateTimer = .5;
+          apex.blinkCooldown = apex.tier >= 2 ? 2.4 : 3.4;
+          this.onApexContact(apex, 'blink');
+        } else {
+          const orbitPoint = this.temp3.set(
+            target.x + Math.sin(time * .55 + apex.phase) * 4,
+            target.y + 2,
+            target.z + Math.cos(time * .5 + apex.phase) * 4
+          );
+          apex.desiredVelocity.copy(orbitPoint).sub(apex.position);
+          apex.desiredVelocity.y = 0;
+          if (apex.desiredVelocity.lengthSq() > 1) apex.desiredVelocity.setLength(apex.speed * .9);
+        }
+        break;
+      }
+
+      case 'vex': {
+        const orbitPoint = this.temp3.set(
+          target.x + Math.sin(time * .4 + apex.phase) * 5,
+          target.y + 3,
+          target.z + Math.cos(time * .36 + apex.phase) * 5
+        );
+        apex.desiredVelocity.copy(orbitPoint).sub(apex.position);
+        apex.desiredVelocity.y = 0;
+        if (apex.desiredVelocity.lengthSq() > 1) apex.desiredVelocity.setLength(apex.speed * .7);
+        if (canAct && apex.mineTimer <= 0) {
+          apex.mineTimer = 7;
+          apex.state = 'recover';
+          apex.stateTimer = .9;
+          this.onApexMine(apex);
+        }
+        if (canAct && apex.shockwaveTimer <= 0 && distanceXZ < 10) {
+          apex.shockwaveTimer = 8;
+          apex.state = 'recover';
+          apex.stateTimer = .8;
+          this.onApexShockwave(apex);
+        }
+        if (apex.state === 'recover' && apex.stateTimer <= 0) apex.state = 'patrol';
+        break;
+      }
+
+      case 'sentinel': {
+        if (apex.state === 'barrage' || apex.state === 'recover') {
+          apex.desiredVelocity.set(0, 0, 0);
+          if (apex.stateTimer <= 0) {
+            apex.state = 'patrol';
+            apex.stateTimer = 0;
+          }
+        } else {
+          const orbitPoint = this.temp3.set(
+            target.x + Math.sin(time * .28 + apex.phase) * 7,
+            target.y + 3.5,
+            target.z + Math.cos(time * .25 + apex.phase) * 7
+          );
+          apex.desiredVelocity.copy(orbitPoint).sub(apex.position);
+          apex.desiredVelocity.y = 0;
+          if (apex.desiredVelocity.lengthSq() > 1) apex.desiredVelocity.setLength(apex.speed * .7);
+          const phase = apex.sentinelPhase || 1;
+          const period = phase >= 3 ? 3.6 : phase === 2 ? 5 : 6.4;
+          if (canAct && apex.attackCooldown <= 0) {
+            apex.state = 'barrage';
+            apex.stateTimer = 1.0;
+            apex.attackCooldown = period;
+            this.onApexAttack(apex, 'radial');
+          }
+          if (phase >= 3 && canAct && apex.summonTimer <= 0 && distanceXZ < 22) {
+            apex.summonTimer = 9;
+            this.onApexSummon(apex);
+          }
+        }
+        break;
+      }
+
+      default: {
+        const orbitPoint = this.temp3.set(
+          target.x + Math.sin(time * .4 + apex.phase) * 5,
+          target.y + 3,
+          target.z + Math.cos(time * .36 + apex.phase) * 5
+        );
+        apex.desiredVelocity.copy(orbitPoint).sub(apex.position);
+        apex.desiredVelocity.y = 0;
+        if (apex.desiredVelocity.lengthSq() > 1) apex.desiredVelocity.setLength(apex.speed * .7);
+      }
+    }
+
+    // Fuoco a distanza comune, diverso per archetipo.
+    apex.fireTimer -= delta;
+    if (canAct && distanceXZ < 34 && apex.fireTimer <= 0 && apex.state === 'patrol') {
+      if (apex.archetypeId === 'wraith') {
+        this.onApexAttack(apex, 'burst');
+        apex.fireTimer = 3.6;
+      } else if (apex.archetypeId === 'vex') {
+        this.onApexAttack(apex, 'shot');
+        apex.fireTimer = 2.4;
+      } else if (apex.archetypeId === 'sentinel') {
+        this.onApexAttack(apex, 'shot');
+        apex.fireTimer = 1.9;
+      } else {
+        this.onApexAttack(apex, 'shot');
+        apex.fireTimer = 2.8;
+      }
+    }
+  }
+
+  /** Applica danno all'Apex (armatura VANGUARD, fasi SENTINEL). */
+  applyApexDamage(apex, amount) {
+    if (!apex || !apex.alive) return { hit: false, killed: false, armorBroken: false, phaseChanged: false };
+    let dealt = amount;
+    let armorBroken = false;
+    const armorMesh = apex.parts && apex.parts[0];
+    if (apex.armorMax > 0 && !apex.armorBroken) {
+      apex.armor -= Math.min(apex.armor, dealt);
+      dealt *= .5;
+      if (apex.armor <= 0) {
+        apex.armorBroken = true;
+        armorBroken = true;
+        if (armorMesh && armorMesh.material) armorMesh.visible = false;
+      }
+    }
+    apex.health -= dealt;
+    apex.coreMaterial.emissive.setHex(0xff173c);
+    apex.coreMaterial.emissiveIntensity = 2.7;
+    const killed = apex.health <= 0;
+    const prevPhase = apex.sentinelPhase || 1;
+    if (killed) {
+      apex.alive = false;
+      apex.group.visible = false;
+      apex.marker.style.display = 'none';
+    } else if (apex.archetypeId === 'sentinel') {
+      const ratio = apex.health / apex.maxHealth;
+      const phase = ratio > APEX_TUNING.sentinelPhase2Hp ? 1 : ratio > APEX_TUNING.sentinelPhase3Hp ? 2 : 3;
+      if (phase !== prevPhase) {
+        apex.sentinelPhase = phase;
+        apex.state = 'recover';
+        apex.stateTimer = 1.2;
+      }
+    }
+    return { hit: true, killed, armorBroken, phaseChanged: apex.sentinelPhase !== prevPhase, position: apex.position.clone() };
+  }
+
   updateMarkers() {
     const width = window.innerWidth;
     const height = window.innerHeight;
@@ -355,6 +892,37 @@ export class DroneSystem {
         drone.lastHealth = healthPct;
         drone.markerHealth.style.width = `${healthPct}%`;
       }
+    }
+
+    // Marker dedicato per l'Apex di fine ondata.
+    if (this.apex && this.apex.alive) {
+      const apex = this.apex;
+      const projected = this.markerProjected.copy(apex.position);
+      const distance = projected.distanceTo(this.camera.position);
+      projected.project(this.camera);
+      const visible = projected.z > -1 && projected.z < 1 && Math.abs(projected.x) < .94 && Math.abs(projected.y) < .9;
+      let screenX = projected.x;
+      let screenY = projected.y;
+      if (!visible) {
+        if (projected.z > 1) { screenX *= -1; screenY *= -1; }
+        screenX = THREE.MathUtils.clamp(screenX, -.9, .9);
+        screenY = THREE.MathUtils.clamp(screenY, -.82, .82);
+      }
+      const left = Math.round((screenX * .5 + .5) * width);
+      const top = Math.round((-screenY * .5 + .5) * height);
+      const state = !visible ? 'THREAT' : apex.telegraphing ? 'TELEGRAPH' : apex.state === 'recover' ? 'STAGGERED' : '';
+      const range = `${distance.toFixed(0)}M · APX-T${apex.tier}`;
+      if (apex.lastOffscreen !== !visible) {
+        apex.lastOffscreen = !visible;
+        apex.marker.classList.toggle('offscreen', !visible);
+        apex.marker.style.display = 'block';
+      }
+      if (apex.lastLeft !== left) { apex.lastLeft = left; apex.marker.style.left = `${left}px`; }
+      if (apex.lastTop !== top) { apex.lastTop = top; apex.marker.style.top = `${top}px`; }
+      if (apex.lastRange !== range) { apex.lastRange = range; apex.marker.dataset.range = range; }
+      if (apex.lastState !== state) { apex.lastState = state; apex.markerState.textContent = state; }
+      const healthPct = Math.max(0, apex.health / apex.maxHealth * 100);
+      if (apex.lastHealth !== healthPct) { apex.lastHealth = healthPct; apex.markerHealth.style.width = `${healthPct}%`; }
     }
   }
 }

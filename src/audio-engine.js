@@ -51,6 +51,7 @@ export class AudioEngine {
     this.onStateChange = onStateChange;
     this.droneVoices = [];
     this.ambientDrone = null;
+    this.apexHum = null; // sub-bass grave quando un Apex è vivo
     this.arpeggiatorEnabled = true;
     this.arpeggioStep = 0;
     // A natural minor, kept as frequencies so the scale can be swapped
@@ -417,6 +418,41 @@ export class AudioEngine {
       this.step++;
       scheduled++;
     }
+    // Sub-bass grave quando un Apex è vivo: hum "presenza" distinto dal ronzio
+    // dei droni normali. Commutazione più aggressiva (figura/dà la tensione).
+    this.updateApexHum(Boolean(snapshot.apexAlive), now);
+  }
+
+  updateApexHum(apexAlive, now = null) {
+    const time = now ?? (this.ctx ? this.ctx.currentTime : 0);
+    if (apexAlive && !this.apexHum) {
+      if (!this.started || !this.ctx) return;
+      const oscillator = this.ctx.createOscillator();
+      oscillator.type = 'sawtooth';
+      oscillator.frequency.value = 38;
+      const gain = this.ctx.createGain();
+      gain.gain.value = 0;
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = 160;
+      oscillator.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.music);
+      oscillator.start();
+      this.apexHum = { oscillator, gain, filter };
+      this.duckMusic(.55, .12);
+    } else if (!apexAlive && this.apexHum) {
+      const hum = this.apexHum;
+      hum.gain.gain.setTargetAtTime(0, time, .15);
+      hum.oscillator.stop(time + 1);
+      this.apexHum = null;
+    }
+    if (this.apexHum && this.ctx) {
+      const intensity = 1 + Math.random() * .4;
+      this.apexHum.gain.gain.setTargetAtTime(.035 + intensity * .015, time, .2);
+      this.apexHum.oscillator.frequency.setTargetAtTime(36 + Math.random() * 6, time, .35);
+      this.apexHum.filter.frequency.setTargetAtTime(130 + intensity * 50, time, .3);
+    }
   }
 
   scheduleStep(time, step) {
@@ -663,6 +699,35 @@ export class AudioEngine {
     this.noise(.3, .05, 2400, 'bandpass', 0, time + .26, this.music);
     this.tone(70, 34, .3, .15, 'sine', time + .3, this.sfx);
   }
+
+  // --- Apex Sentinel: stinger e suoni del nemico speciale di fine ondata ---
+  apexStart() {
+    if (!this.started) return;
+    const time = this.ctx.currentTime;
+    this.tone(60, 120, .7, .06, 'sawtooth', time, this.music, -.16);
+    this.tone(120, 240, .6, .045, 'square', time + .05, this.music, .16);
+    this.noise(.5, .06, 900, 'lowpass', 0, time, this.music);
+    this.tone(52, 30, .5, .16, 'sine', time + .35, this.sfx);
+    this.tone(1040, 2080, .22, .03, 'triangle', time + .4, this.sfx, -.2);
+  }
+  apexKill(pan = 0) {
+    this.noise(.7, .34, 260, 'lowpass', pan);
+    this.noise(.34, .2, 1500, 'bandpass', pan);
+    this.tone(70, 22, .7, .24, 'sawtooth', null, null, pan);
+    this.tone(1400, 120, .5, .1, 'square', null, null, pan);
+    this.duckMusic(.6, .7);
+  }
+  apexTelegraph(pan = 0) { this.tone(220, 880, .3, .05, 'square', null, null, pan); this.noise(.2, .04, 3000, 'bandpass', pan); }
+  apexCharge() { this.tone(90, 320, .34, .07, 'sawtooth', null, null, 0); this.noise(.3, .05, 700, 'lowpass', 0); }
+  apexBarrage() { this.tone(300, 900, .2, .05, 'square', null, null, 0); this.noise(.16, .04, 4200, 'bandpass', 0); }
+  apexShot(pan = 0) { this.tone(720, 160, .2, .06, 'sawtooth', null, null, pan); this.noise(.12, .05, 2600, 'bandpass', pan); }
+  apexSplit() { this.tone(500, 150, .25, .06, 'square', null, null, 0); this.noise(.2, .05, 1800, 'bandpass', 0); }
+  apexSummon() { this.tone(100, 300, .4, .05, 'sawtooth', null, null, 0); this.noise(.3, .05, 1200, 'lowpass', 0); }
+  apexMine() { this.tone(1200, 600, .22, .05, 'sine', null, null, 0); this.noise(.12, .04, 5000, 'highpass', 0); }
+  apexMineBoom(pan = 0) { this.noise(.4, .22, 500, 'lowpass', pan); this.tone(120, 40, .4, .16, 'sine', null, null, pan); }
+  apexShockwave() { this.noise(.45, .2, 300, 'lowpass', 0); this.tone(60, 180, .35, .12, 'sine', null, null, 0); }
+  apexArmorBreak(pan = 0) { this.noise(.3, .18, 2400, 'bandpass', pan); this.tone(300, 90, .3, .08, 'square', null, null, pan); }
+  apexPhase(pan = 0) { this.tone(200, 900, .4, .06, 'sawtooth', null, null, pan); this.noise(.3, .05, 3200, 'bandpass', pan); }
 
   toggle() {
     this.muted = !this.muted;

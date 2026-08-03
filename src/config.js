@@ -49,6 +49,98 @@ export const DRONE_TUNING = Object.freeze({
   evadeCooldownMax: 1.8
 });
 
+// Apex Sentinel — nemico speciale di fine ondata.
+//
+// Il roster cicla ogni 4 ondate; ogni ciclo completo alza il "tier" (moltiplicatore
+// di statistiche) e sblocca un'abilità extra per archetipo. Ne risulta un nemico
+// diverso a ogni ondata e sempre più forte nelle successive.
+const APEX_ROSTER_BASE = [
+  {
+    id: 'vanguard',
+    nameKey: 'apex.vanguard',
+    color: 0x00e5ff,
+    baseHp: 420,
+    baseSpeed: 3.4,
+    baseDamage: 13,
+    radius: 1.15,
+    extraAbility: 1 // doppia carica da tier 2
+  },
+  {
+    id: 'wraith',
+    nameKey: 'apex.wraith',
+    color: 0xff2d95,
+    baseHp: 300,
+    baseSpeed: 4.6,
+    baseDamage: 12,
+    radius: .95,
+    extraAbility: 1 // triplo blink da tier 2
+  },
+  {
+    id: 'vex',
+    nameKey: 'apex.vex',
+    color: 0xffc857,
+    baseHp: 340,
+    baseSpeed: 3.9,
+    baseDamage: 14,
+    radius: 1.0,
+    extraAbility: 1 // 3 mine da tier 2
+  },
+  {
+    id: 'sentinel',
+    nameKey: 'apex.sentinel',
+    color: 0xff4f5f,
+    baseHp: 900,
+    baseSpeed: 3.8,
+    baseDamage: 16,
+    radius: 1.35,
+    extraAbility: 1 // 4 minion da tier 2
+  }
+];
+
+export const APEX_ROSTER = Object.freeze(APEX_ROSTER_BASE.map(a => Object.freeze({ ...a })));
+
+export const APEX_TUNING = Object.freeze({
+  tierMultiplier: 1.35, // statistiche × per tier
+  rosterSize: 4,        // un archetipo per ondata, ciclo ogni 4
+  spawnDescent: 2.6,    // secondi di discesa in aria prima di attivarsi
+  chargeSpeed: 14,      // carica VANGUARD
+  chargeContactDmg: 22, // danno da contatto carica
+  wraithBlinkRange: 9,
+  wraithBlinkCooldown: 3.2,
+  vexMineCount: 2,
+  vexSplitMinis: 2,
+  sentinelMinions: 3,
+  sentinelPhase2Hp: .66,
+  sentinelPhase3Hp: .33,
+  scoreKill: 500,
+  healKill: 25,
+  ammoDropGuaranteed: true
+});
+
+// Seleziona l'archetipo Apex per l'ondata data (ciclo + tier).
+export function getApexArchetype(wave) {
+  const safeWave = Math.max(1, Math.floor(Number(wave) || 1));
+  const tier = Math.floor((safeWave - 1) / APEX_TUNING.rosterSize) + 1;
+  const archetype = APEX_ROSTER[(safeWave - 1) % APEX_ROSTER.length];
+  return { archetype, tier };
+}
+
+// Statistiche scalate di un Apex per l'ondata data.
+export function getApexStats(wave) {
+  const { archetype, tier } = getApexArchetype(wave);
+  const m = Math.pow(APEX_TUNING.tierMultiplier, tier - 1);
+  return {
+    archetype,
+    tier,
+    maxHealth: Math.round(archetype.baseHp * m),
+    speed: archetype.baseSpeed * m,
+    damage: Math.round(archetype.baseDamage * m),
+    radius: archetype.radius,
+    color: archetype.color,
+    nameKey: archetype.nameKey
+  };
+}
+
 function safeStorage() {
   try {
     return globalThis.localStorage || null;

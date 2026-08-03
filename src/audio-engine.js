@@ -1,9 +1,32 @@
+import * as THREE from 'three';
 import { getStoredMix, storeMix } from './config.js';
 
-export class AdaptiveAudioEngine {
+/**
+ * Pure procedural audio engine. Every sound is synthesized at runtime with
+ * WebAudio nodes; the game never fetches or decodes an audio asset.
+ *
+ * The singleton accessor prevents duplicate AudioContexts when both the start
+ * screen and the pointer-lock transition request audio at the same time.
+ */
+export class AudioEngine {
+  static instance = null;
+
+  static getInstance(onStateChange = null) {
+    if (!AudioEngine.instance) AudioEngine.instance = new AudioEngine(onStateChange || undefined);
+    else if (onStateChange) AudioEngine.instance.onStateChange = onStateChange;
+    return AudioEngine.instance;
+  }
+
   constructor(onStateChange = () => {}) {
+    if (AudioEngine.instance) {
+      if (onStateChange) AudioEngine.instance.onStateChange = onStateChange;
+      return AudioEngine.instance;
+    }
+    AudioEngine.instance = this;
     this.ctx = null;
+    this.audioContext = null;
     this.master = null;
+    this.masterCompressor = null;
     this.sfx = null;
     this.music = null;
     this.musicDuck = null;
@@ -11,7 +34,9 @@ export class AdaptiveAudioEngine {
     this.reverb = null;
     this.reverbSend = null;
     this.noiseBuffer = null;
+    this.distortionCurve = null;
     this.started = false;
+    this.startPromise = null;
     this.muted = false;
     this.nextStepTime = 0;
     this.step = 0;
@@ -20,6 +45,12 @@ export class AdaptiveAudioEngine {
     this.mix = getStoredMix();
     this.onStateChange = onStateChange;
     this.droneVoices = [];
+    this.ambientDrone = null;
+    this.arpeggiatorEnabled = true;
+    this.arpeggioStep = 0;
+    // A natural minor, kept as frequencies so the scale can be swapped
+    // without changing the scheduling code below.
+    this.naturalMinorScale = [110, 130.81, 146.83, 164.81, 196, 220, 246.94];
     this.tempo = 128;
   }
 
@@ -28,15 +59,27 @@ export class AdaptiveAudioEngine {
       if (this.ctx.state === 'suspended') await this.ctx.resume();
       return;
     }
+    if (this.startPromise) return this.startPromise;
+    this.startPromise = this.initialize();
+    try {
+      await this.startPromise;
+    } finally {
+      this.startPromise = null;
+    }
+  }
+
+  async initialize() {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextClass) return;
     this.ctx = new AudioContextClass();
+    this.audioContext = this.ctx;
     const compressor = this.ctx.createDynamicsCompressor();
     compressor.threshold.value = -14;
     compressor.knee.value = 14;
     compressor.ratio.value = 4.5;
     compressor.attack.value = .004;
     compressor.release.value = .22;
+    this.masterCompressor = compressor;
     this.master = this.ctx.createGain();
     this.sfx = this.ctx.createGain();
     this.music = this.ctx.createGain();
@@ -57,7 +100,8 @@ export class AdaptiveAudioEngine {
     compressor.connect(this.master);
     this.master.connect(this.ctx.destination);
     this.musicDuck.gain.value = 1;
-    this.noiseBuffer = this.makeNoise(3);
+    this.noiseBuffer = this.createNoiseBuffer(3);
+    this.distortionCurve = this.createDistortionCurve(65);
     this.applyMix();
     this.startAmbience();
     this.createDroneVoices();
@@ -67,16 +111,30 @@ export class AdaptiveAudioEngine {
     this.ui();
   }
 
-  makeNoise(seconds) {
+  createNoiseBuffer(seconds, brownAmount = .035) {
     const buffer = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * seconds), this.ctx.sampleRate);
     const data = buffer.getChannelData(0);
     let brown = 0;
     for (let i = 0; i < data.length; i++) {
       const white = Math.random() * 2 - 1;
-      brown = brown * .965 + white * .035;
+      brown = brown * (1 - brownAmount) + white * brownAmount;
       data[i] = white * .38 + brown * .9;
     }
     return buffer;
+  }
+
+  // Kept as a compatibility alias for callers that used the old helper.
+  makeNoise(seconds) { return this.createNoiseBuffer(seconds); }
+
+  createDistortionCurve(amount = 50) {
+    const samples = 256;
+    const curve = new Float32Array(samples);
+    const drive = Math.max(1, amount);
+    for (let i = 0; i < samples; i++) {
+      const x = i * 2 / samples - 1;
+      curve[i] = ((3 + drive) * x * 20 * Math.PI / 180) / (Math.PI + drive * Math.abs(x));
+    }
+    return curve;
   }
 
   createImpulse(seconds, decay) {
@@ -92,20 +150,27 @@ export class AdaptiveAudioEngine {
     return impulse;
   }
 
+  resolveDestination(destination) {
+    if (destination?.getInput) return destination.getInput();
+    if (destination?.input && typeof destination.input.connect === 'function') return destination.input;
+    return destination || this.sfx;
+  }
+
   routePan(node, pan, destination) {
+    const target = this.resolveDestination(destination);
     if (this.ctx.createStereoPanner) {
       const panner = this.ctx.createStereoPanner();
       panner.pan.value = Math.max(-1, Math.min(1, pan || 0));
       node.connect(panner);
-      panner.connect(destination);
+      panner.connect(target);
       return panner;
     }
-    node.connect(destination);
-    return destination;
+    node.connect(target);
+    return target;
   }
 
   tone(frequencyStart, frequencyEnd, duration, gainValue, type = 'sine', when = null, destination = null, pan = 0) {
-    if (!this.started) return;
+    if (!this.started) return null;
     const start = when ?? this.ctx.currentTime;
     const oscillator = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
@@ -119,10 +184,11 @@ export class AdaptiveAudioEngine {
     this.routePan(gain, pan, destination || this.sfx);
     oscillator.start(start);
     oscillator.stop(start + duration + .03);
+    return gain;
   }
 
   noise(duration, gainValue, frequency = 1200, type = 'bandpass', pan = 0, when = null, destination = null, q = .7) {
-    if (!this.started) return;
+    if (!this.started) return null;
     const start = when ?? this.ctx.currentTime;
     const source = this.ctx.createBufferSource();
     const filter = this.ctx.createBiquadFilter();
@@ -138,6 +204,7 @@ export class AdaptiveAudioEngine {
     this.routePan(gain, pan, destination || this.sfx);
     source.start(start, Math.random() * 2);
     source.stop(start + duration + .03);
+    return gain;
   }
 
   startAmbience() {
@@ -176,6 +243,92 @@ export class AdaptiveAudioEngine {
       gain.connect(this.ambience);
       oscillator.start();
     }
+    this.startAmbientDrone();
+    this.startArpeggiator();
+  }
+
+  /**
+   * Starts a persistent low-frequency tension bed. The LFO modulates the
+   * filter cutoff rather than the oscillator pitch, creating a subtle breath
+   * without making the arena sound seasick.
+   */
+  startAmbientDrone() {
+    if (!this.ctx || this.ambientDrone) return this.ambientDrone?.output || null;
+    const output = this.ctx.createGain();
+    const filter = this.ctx.createBiquadFilter();
+    const lfo = this.ctx.createOscillator();
+    const lfoDepth = this.ctx.createGain();
+    const now = this.ctx.currentTime;
+
+    output.gain.value = .38;
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(360, now);
+    filter.Q.value = .8;
+    lfo.type = 'sine';
+    lfo.frequency.value = .075;
+    lfoDepth.gain.value = 125;
+    lfo.connect(lfoDepth);
+    lfoDepth.connect(filter.frequency);
+    filter.connect(output);
+    output.connect(this.ambience);
+
+    const voices = [
+      { type: 'sine', frequency: 40, gain: .15 },
+      { type: 'sine', frequency: 41.5, gain: .12 },
+      { type: 'triangle', frequency: 80, gain: .045 }
+    ];
+    const oscillators = voices.map(({ type, frequency, gain: gainValue }) => {
+      const oscillator = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      oscillator.type = type;
+      oscillator.frequency.value = frequency;
+      gain.gain.value = gainValue;
+      oscillator.connect(gain);
+      gain.connect(filter);
+      oscillator.start(now);
+      return { oscillator, gain };
+    });
+    lfo.start(now);
+    this.ambientDrone = { output, filter, lfo, lfoDepth, oscillators };
+    return output;
+  }
+
+  startArpeggiator() {
+    this.arpeggiatorEnabled = true;
+    this.arpeggioStep = 0;
+    return this;
+  }
+
+  stopArpeggiator() {
+    this.arpeggiatorEnabled = false;
+    return this;
+  }
+
+  playArpeggioNote(frequency, when, pan = 0, intensity = 1) {
+    if (!this.started || !this.arpeggiatorEnabled) return null;
+    const oscillator = this.ctx.createOscillator();
+    const filter = this.ctx.createBiquadFilter();
+    const gain = this.ctx.createGain();
+    const output = this.ctx.createGain();
+    const duration = .16;
+    const start = when ?? this.ctx.currentTime;
+    const level = .018 + intensity * .009;
+    oscillator.type = 'sawtooth';
+    oscillator.frequency.setValueAtTime(Math.max(20, frequency), start);
+    filter.type = 'lowpass';
+    filter.Q.value = 1.3;
+    filter.frequency.setValueAtTime(2600, start);
+    filter.frequency.exponentialRampToValueAtTime(460, start + duration);
+    gain.gain.setValueAtTime(.0001, start);
+    gain.gain.exponentialRampToValueAtTime(level, start + .004);
+    gain.gain.exponentialRampToValueAtTime(.0001, start + duration);
+    oscillator.connect(filter);
+    filter.connect(gain);
+    gain.connect(output);
+    this.routePan(output, pan, this.music);
+    oscillator.start(start);
+    oscillator.stop(start + duration + .025);
+    return output;
   }
 
   createDroneVoices() {
@@ -262,10 +415,12 @@ export class AdaptiveAudioEngine {
       this.tone(root, root * .992, .21, .055 + this.intensity * .008, 'sawtooth', time, this.music, beat % 4 ? -.1 : .1);
       if (this.intensity >= 2) this.tone(root * 2, root * 1.995, .12, .015, 'square', time, this.music, .18);
     }
-    if (this.intensity >= 2 && beat % 2 === (variation % 2)) {
-      const arpeggio = [146.83, 174.61, 220, 261.63, 220, 174.61, 164.81, 196];
-      const note = arpeggio[(Math.floor(step / 2) + variation * 2) % arpeggio.length];
-      this.tone(note, note * 1.002, .095, .015 + this.intensity * .004, 'triangle', time, this.music, beat < 8 ? -.28 : .28);
+    // Combat arpeggiator: short sawtooth plucks from the natural minor scale.
+    if (this.intensity >= 1 && beat % 2 === (variation % 2)) {
+      const scaleIndex = this.arpeggioStep++ % this.naturalMinorScale.length;
+      const octave = this.intensity >= 2 ? 2 : 1;
+      const note = this.naturalMinorScale[scaleIndex] * octave;
+      this.playArpeggioNote(note, time, beat < 8 ? -.28 : .28, this.intensity);
     }
     if (beat === 0) {
       const chord = variation % 2 ? [110, 146.83, 220] : [110, 164.81, 220];
@@ -276,8 +431,16 @@ export class AdaptiveAudioEngine {
 
   updateDroneHums(drones, camera) {
     if (!this.started) return;
-    const alive = drones.filter(drone => drone.alive).sort((a, b) => a.position.distanceToSquared(camera.position) - b.position.distanceToSquared(camera.position));
     const now = this.ctx.currentTime;
+    // Riutilizza array e vettori temporanei: niente allocazioni nel frame loop.
+    const alive = this._aliveDrones || (this._aliveDrones = []);
+    alive.length = 0;
+    const camPos = camera.position;
+    for (const drone of drones) {
+      if (drone.alive) alive.push(drone);
+    }
+    alive.sort((a, b) => a.position.distanceToSquared(camPos) - b.position.distanceToSquared(camPos));
+    const projected = this._projected || (this._projected = new THREE.Vector3());
     for (let i = 0; i < this.droneVoices.length; i++) {
       const voice = this.droneVoices[i];
       const drone = alive[i];
@@ -285,28 +448,148 @@ export class AdaptiveAudioEngine {
         voice.gain.gain.setTargetAtTime(0, now, .08);
         continue;
       }
-      const distance = drone.position.distanceTo(camera.position);
+      const distance = drone.position.distanceTo(camPos);
       const gain = Math.max(0, 1 - distance / 30) * .027;
-      const projected = drone.position.clone().project(camera);
+      projected.copy(drone.position).project(camera);
       voice.gain.gain.setTargetAtTime(gain, now, .08);
       voice.oscillator.frequency.setTargetAtTime(72 + drone.velocity.length() * 7 + i * 11, now, .08);
       if (voice.panner) voice.panner.pan.setTargetAtTime(Math.max(-.9, Math.min(.9, projected.x)), now, .06);
     }
   }
 
-  gun() {
+  createSfxOutput(destination = null, pan = 0) {
+    const output = this.ctx.createGain();
+    output.gain.value = 1;
+    this.routePan(output, pan, destination || this.sfx);
+    return output;
+  }
+
+  /** Sci-fi shot: fast pitch sweep + distorted low-passed noise. */
+  playShoot({ when = null, destination = null, pan = 0 } = {}) {
+    if (!this.started) return null;
+    const start = when ?? this.ctx.currentTime;
+    const output = this.createSfxOutput(destination, pan);
+    const oscillator = this.ctx.createOscillator();
+    const oscillatorGain = this.ctx.createGain();
+    const noiseSource = this.ctx.createBufferSource();
+    const noiseFilter = this.ctx.createBiquadFilter();
+    const distortion = this.ctx.createWaveShaper();
+    const noiseGain = this.ctx.createGain();
     const variation = Math.random();
-    this.noise(.075 + variation * .035, .36 + variation * .08, 1650 + variation * 700, 'bandpass');
-    this.tone(165 + variation * 28, 42 + variation * 10, .12, .27, 'square');
-    this.tone(1180 + variation * 300, 250, .07, .06, 'sawtooth');
+
+    output.gain.setValueAtTime(.72, start);
+    output.gain.exponentialRampToValueAtTime(.0001, start + .2);
+    oscillator.type = 'sawtooth';
+    oscillator.frequency.setValueAtTime(190 + variation * 35, start);
+    oscillator.frequency.exponentialRampToValueAtTime(42 + variation * 12, start + .14);
+    oscillatorGain.gain.setValueAtTime(.0001, start);
+    oscillatorGain.gain.exponentialRampToValueAtTime(.28, start + .004);
+    oscillatorGain.gain.exponentialRampToValueAtTime(.0001, start + .16);
+    oscillator.connect(oscillatorGain);
+    oscillatorGain.connect(output);
+
+    noiseSource.buffer = this.noiseBuffer;
+    noiseFilter.type = 'lowpass';
+    noiseFilter.Q.value = 1.1;
+    noiseFilter.frequency.setValueAtTime(5600 + variation * 900, start);
+    noiseFilter.frequency.exponentialRampToValueAtTime(780, start + .12);
+    distortion.curve = this.distortionCurve || this.createDistortionCurve(65);
+    distortion.oversample = '2x';
+    noiseGain.gain.setValueAtTime(.0001, start);
+    noiseGain.gain.exponentialRampToValueAtTime(.4 + variation * .08, start + .003);
+    noiseGain.gain.exponentialRampToValueAtTime(.0001, start + .13);
+    noiseSource.connect(noiseFilter);
+    noiseFilter.connect(distortion);
+    distortion.connect(noiseGain);
+    noiseGain.connect(output);
+
+    oscillator.start(start);
+    oscillator.stop(start + .2);
+    noiseSource.start(start, Math.random() * Math.max(.01, this.noiseBuffer.duration - .2));
+    noiseSource.stop(start + .16);
     this.duckMusic(.12, .1);
+    return output;
+  }
+
+  /** Dry metallic hit with a short resonant transient. */
+  playImpact(options = {}) {
+    if (!this.started) return null;
+    if (typeof options === 'string') options = { material: options };
+    const { when = null, destination = null, pan = 0, material = 'metal' } = options;
+    const start = when ?? this.ctx.currentTime;
+    const output = this.createSfxOutput(destination, pan);
+    const source = this.ctx.createBufferSource();
+    const filter = this.ctx.createBiquadFilter();
+    const noiseGain = this.ctx.createGain();
+    const oscillator = this.ctx.createOscillator();
+    const oscillatorGain = this.ctx.createGain();
+    const frequency = material === 'wood' ? 760 : material === 'concrete' ? 980 : 3200;
+
+    output.gain.setValueAtTime(.6, start);
+    output.gain.exponentialRampToValueAtTime(.0001, start + .16);
+    source.buffer = this.noiseBuffer;
+    filter.type = 'bandpass';
+    filter.frequency.value = frequency;
+    filter.Q.value = material === 'metal' ? 4.2 : 1.4;
+    noiseGain.gain.setValueAtTime(.0001, start);
+    noiseGain.gain.exponentialRampToValueAtTime(.13, start + .002);
+    noiseGain.gain.exponentialRampToValueAtTime(.0001, start + .085);
+    source.connect(filter);
+    filter.connect(noiseGain);
+    noiseGain.connect(output);
+
+    oscillator.type = 'triangle';
+    oscillator.frequency.setValueAtTime(material === 'metal' ? 620 : 250, start);
+    oscillator.frequency.exponentialRampToValueAtTime(120, start + .09);
+    oscillatorGain.gain.setValueAtTime(.0001, start);
+    oscillatorGain.gain.exponentialRampToValueAtTime(.055, start + .002);
+    oscillatorGain.gain.exponentialRampToValueAtTime(.0001, start + .11);
+    oscillator.connect(oscillatorGain);
+    oscillatorGain.connect(output);
+    source.start(start, Math.random() * Math.max(.01, this.noiseBuffer.duration - .12));
+    source.stop(start + .12);
+    oscillator.start(start);
+    oscillator.stop(start + .14);
+    return output;
+  }
+
+  /** Quiet, randomized low-pass noise step. */
+  playFootstep({ when = null, destination = null, pan = 0, sprint = false } = {}) {
+    if (!this.started) return null;
+    const start = when ?? this.ctx.currentTime;
+    const variation = Math.random();
+    const output = this.createSfxOutput(destination, pan);
+    const source = this.ctx.createBufferSource();
+    const filter = this.ctx.createBiquadFilter();
+    const gain = this.ctx.createGain();
+    source.buffer = this.noiseBuffer;
+    filter.type = 'lowpass';
+    filter.frequency.value = (sprint ? 760 : 470) + variation * 260;
+    filter.Q.value = .65 + variation * .35;
+    gain.gain.setValueAtTime(.0001, start);
+    gain.gain.exponentialRampToValueAtTime((sprint ? .13 : .085) + variation * .025, start + .003);
+    gain.gain.exponentialRampToValueAtTime(.0001, start + (sprint ? .105 : .09));
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(output);
+    source.start(start, Math.random() * Math.max(.01, this.noiseBuffer.duration - .12));
+    source.stop(start + .12);
+    return output;
+  }
+
+  // Compatibility aliases used by older gameplay code.
+  gun(options) { return this.playShoot(options); }
+  melee() {
+    const variation = Math.random();
+    this.noise(.09 + variation * .04, .12 + variation * .05, 620 + variation * 420, 'bandpass');
+    this.tone(190 + variation * 35, 62, .14, .09, 'sawtooth');
+  }
+  pickup() {
+    this.tone(420, 920, .16, .07, 'sine');
+    this.tone(840, 1320, .12, .045, 'triangle', (this.ctx?.currentTime || 0) + .05);
   }
   dry() { this.tone(420, 260, .055, .07, 'square'); }
-  footstep(sprint = false) {
-    const variation = Math.random();
-    this.noise(.075 + variation * .035, sprint ? .14 : .095, 520 + variation * 460, 'lowpass', variation > .5 ? .16 : -.16);
-    this.tone(sprint ? 90 : 70, 42, .065, .04 + variation * .012, 'sine');
-  }
+  footstep(sprint = false) { return this.playFootstep({ sprint }); }
   jump() { this.noise(.08, .055, 700, 'lowpass'); this.tone(130, 260, .14, .065, 'sine'); }
   land(force = 1) { this.noise(.14, .12 * Math.min(force, 1.5), 420, 'lowpass'); this.tone(64, 36, .11, .08 * Math.min(force, 1.4), 'sine'); }
   pad() { this.tone(90, 720, .42, .18, 'sawtooth'); this.tone(180, 1080, .5, .08, 'sine'); }
@@ -317,11 +600,7 @@ export class AdaptiveAudioEngine {
     this.tone(430, 260, .06, .07, 'square', time + .26);
     this.tone(320, 610, .08, .075, 'square', time + .78);
   }
-  impact(material = 'metal') {
-    const frequency = material === 'wood' ? 620 : material === 'concrete' ? 820 : 3100;
-    this.noise(.07, .105, frequency, 'bandpass', Math.random() - .5);
-    this.tone(material === 'metal' ? 540 : 230, 160, .06, .038, 'square');
-  }
+  impact(material = 'metal') { return this.playImpact({ material }); }
   hit(kill = false) {
     this.tone(kill ? 880 : 690, kill ? 1320 : 930, kill ? .12 : .065, kill ? .09 : .055, 'sine');
     if (kill) this.tone(440, 880, .16, .045, 'triangle', this.ctx.currentTime + .035);
@@ -343,3 +622,6 @@ export class AdaptiveAudioEngine {
     this.onStateChange(this.muted);
   }
 }
+
+// Backwards-compatible name for integrations built before the singleton API.
+export class AdaptiveAudioEngine extends AudioEngine {}

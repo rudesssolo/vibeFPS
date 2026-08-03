@@ -24,8 +24,28 @@ import {
   vec4
 } from 'three/tsl';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
-import { bloom } from 'three/addons/tsl/display/BloomNode.js';
+import BloomNode from 'three/addons/tsl/display/BloomNode.js';
 import { smaa } from 'three/addons/tsl/display/SMAANode.js';
+
+// Bloom a 1/4 della risoluzione di output: equivalente di
+// `UnrealBloomPass.resolution = (window.innerWidth/4, ...)`. `setSize()` viene
+// invocato da `updateBefore()` a ogni frame con la dimensione del drawing
+// buffer; partiamo da width/4 invece di width/2 e scendiamo per mip, riducendo
+// sensibilmente il costo dei passaggi di blur e composite.
+class QuarterResolutionBloomNode extends BloomNode {
+  setSize(width, height) {
+    let resx = Math.max(1, Math.round(width / 4));
+    let resy = Math.max(1, Math.round(height / 4));
+    this._renderTargetBright.setSize(resx, resy);
+    for (let i = 0; i < this._nMips; i++) {
+      this._renderTargetsHorizontal[i].setSize(resx, resy);
+      this._renderTargetsVertical[i].setSize(resx, resy);
+      this._separableBlurMaterials[i].invSize.value.set(1 / resx, 1 / resy);
+      resx = Math.max(1, Math.round(resx / 2));
+      resy = Math.max(1, Math.round(resy / 2));
+    }
+  }
+}
 
 export class RenderPipelineController {
   constructor({ renderer, scene, camera, graphics }) {
@@ -37,10 +57,20 @@ export class RenderPipelineController {
     this.shockwaveCenter = uniform(new THREE.Vector2(.5, .5));
     this.shockwaveProgress = uniform(1);
     this.shockwaveStrength = uniform(0);
-    this.aspect = uniform(window.innerWidth / window.innerHeight);
+    this.aspect = uniform(window.innerWidth / Math.max(1, window.innerHeight));
     this.progress = 1;
+    this.postProcessingEnabled = true;
+    this.postProcessingError = null;
+    // A camera pressed against the perimeter is a deliberately conservative
+    // rendering case: the optional screen-space passes have very little useful
+    // information there and can amplify depth precision artifacts. The game
+    // keeps the base scene alive while the edge-safe material is active.
+    this.edgeSafeMode = false;
 
     this.pipeline = new THREE.RenderPipeline(renderer);
+    // outputColorTransform=false + renderOutput() esplicito (sotto): la pipeline
+    // non applica conversioni implicite, mentre il nodo renderOutput() gestisce
+    // da solo tone mapping e conversione nello spazio colore di output.
     this.pipeline.outputColorTransform = false;
 
     const normalPass = pass(scene, camera);
@@ -63,7 +93,7 @@ export class RenderPipelineController {
     scenePass.contextNode = builtinAOContext(aoFactor);
 
     const sceneColor = scenePass.getTextureNode('output');
-    this.bloomPass = bloom(
+    this.bloomPass = new QuarterResolutionBloomNode(
       sceneColor,
       graphics.bloom.strength,
       graphics.bloom.radius,
@@ -144,15 +174,30 @@ export class RenderPipelineController {
   }
 
   triggerShockwave(worldPosition) {
+    if (!worldPosition
+      || !Number.isFinite(worldPosition.x)
+      || !Number.isFinite(worldPosition.y)
+      || !Number.isFinite(worldPosition.z)) return;
     const projected = worldPosition.clone().project(this.camera);
+    if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y)) return;
     this.shockwaveCenter.value.set(projected.x * .5 + .5, -projected.y * .5 + .5);
     this.shockwaveProgress.value = 0;
     this.shockwaveStrength.value = .032;
     this.progress = 0;
   }
 
+  reset() {
+    this.progress = 1;
+    this.shockwaveProgress.value = 1;
+    this.shockwaveStrength.value = 0;
+  }
+
   setQuality(profile) {
     this.aoPass.samples.value = profile.gtaoSamples;
+  }
+
+  setEdgeSafeMode(enabled) {
+    this.edgeSafeMode = Boolean(enabled);
   }
 
   resize(width, height) {
@@ -160,13 +205,38 @@ export class RenderPipelineController {
   }
 
   render(delta, elapsed) {
-    this.grainTime.value = elapsed;
+    const safeDelta = Number.isFinite(delta) ? Math.min(Math.max(delta, 0), .1) : 0;
+    const safeElapsed = Number.isFinite(elapsed) ? elapsed : 0;
+    this.grainTime.value = safeElapsed;
     if (this.progress < 1) {
-      this.progress = Math.min(1, this.progress + delta / .56);
+      this.progress = Math.min(1, this.progress + safeDelta / .56);
       this.shockwaveProgress.value = this.progress;
       this.shockwaveStrength.value = .032 * (1 - this.progress);
     }
-    this.pipeline.render();
+    if (this.edgeSafeMode || !this.postProcessingEnabled) {
+      this.renderBaseScene();
+      return;
+    }
+
+    try {
+      this.pipeline.render();
+    } catch (error) {
+      // A shader/resource failure must not stop gameplay. Keep the normal
+      // scene render alive and permanently bypass only the optional post chain
+      // for this renderer instance; the next page load can retry compilation.
+      this.postProcessingEnabled = false;
+      this.postProcessingError = error;
+      console.error('VIBE post-processing disabled', error);
+      this.renderBaseScene();
+    }
+  }
+
+  renderBaseScene() {
+    // A failed post pass may leave an intermediate target/MRT selected. Reset
+    // both before drawing to the visible canvas.
+    this.renderer.setRenderTarget(null);
+    this.renderer.setMRT?.(null);
+    this.renderer.render(this.scene, this.camera);
   }
 
   dispose() {

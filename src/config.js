@@ -2,9 +2,9 @@ export const QUALITY_PROFILES = Object.freeze({
   autoHigh: Object.freeze({
     name: 'AUTO // HIGH',
     pixelRatio: 1.35,
-    shadowSize: 2048,
+    shadowSize: 1024,
     reflectorSize: 512,
-    gtaoSamples: 16,
+    gtaoSamples: 10,
     facadeResolution: 1024,
     particleScale: 0.72,
     dynamicLights: 4
@@ -12,7 +12,7 @@ export const QUALITY_PROFILES = Object.freeze({
   autoLow: Object.freeze({
     name: 'AUTO // BALANCED',
     pixelRatio: 1,
-    shadowSize: 1024,
+    shadowSize: 512,
     reflectorSize: 256,
     gtaoSamples: 8,
     facadeResolution: 1024,
@@ -22,9 +22,9 @@ export const QUALITY_PROFILES = Object.freeze({
   ultra: Object.freeze({
     name: 'ULTRA',
     pixelRatio: 2,
-    shadowSize: 4096,
+    shadowSize: 1024,
     reflectorSize: 1024,
-    gtaoSamples: 24,
+    gtaoSamples: 16,
     facadeResolution: 2048,
     particleScale: 1,
     dynamicLights: 8
@@ -49,18 +49,41 @@ export const DRONE_TUNING = Object.freeze({
   evadeCooldownMax: 1.8
 });
 
+function safeStorage() {
+  try {
+    return globalThis.localStorage || null;
+  } catch {
+    // Privacy mode, disabled storage, or a blocked file origin must not stop
+    // the simulation from booting.
+    return null;
+  }
+}
+
+function readStorage(storage, key) {
+  try {
+    return storage?.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
 export function getStoredQualityMode() {
-  const value = localStorage.getItem('vibefps.quality');
+  const value = readStorage(safeStorage(), 'vibefps.quality');
   return value === 'ultra' ? 'ultra' : 'auto';
 }
 
 export function storeQualityMode(mode) {
-  localStorage.setItem('vibefps.quality', mode === 'ultra' ? 'ultra' : 'auto');
+  try {
+    safeStorage()?.setItem('vibefps.quality', mode === 'ultra' ? 'ultra' : 'auto');
+  } catch {
+    // Storage quotas are optional; gameplay settings remain in memory.
+  }
 }
 
 export function getStoredMix() {
+  const storage = safeStorage();
   const safe = (key, fallback) => {
-    const value = Number(localStorage.getItem(key));
+    const value = Number(readStorage(storage, key));
     return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : fallback;
   };
   return {
@@ -71,7 +94,13 @@ export function getStoredMix() {
 }
 
 export function storeMix(mix) {
+  const storage = safeStorage();
+  if (!storage) return;
   for (const [key, value] of Object.entries(mix)) {
-    localStorage.setItem(`vibefps.mix.${key}`, String(Math.max(0, Math.min(1, value))));
+    try {
+      storage.setItem(`vibefps.mix.${key}`, String(Math.max(0, Math.min(1, value))));
+    } catch {
+      // Ignore quota/security errors for non-essential persistence.
+    }
   }
 }

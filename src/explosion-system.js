@@ -54,6 +54,11 @@ class ParticlePool {
       alphaTest: .003,
       alphaToCoverage: true
     });
+    // "Instanced Points": Sprite + PointsNodeMaterial + object.count (pattern
+    // ufficiale WebGPU di three.js r184, vedi webgpu_instance_points.html).
+    // Le particelle sono punti instanziati: posizione/colore/dimensione/opacità
+    // arrivano da attributi instanziati via positionNode/colorNode/sizeNode/
+    // opacityNode. Un solo draw call per pool.
     this.points = new THREE.Sprite(material);
     this.points.count = maximum;
     this.points.frustumCulled = false;
@@ -119,6 +124,21 @@ class ParticlePool {
         this.activeCount--;
       }
     }
+    for (const attribute of this.attributes) attribute.needsUpdate = true;
+  }
+
+  reset() {
+    this.cursor = 0;
+    this.activeCount = 0;
+    for (const particle of this.particles) {
+      particle.active = false;
+      particle.position.set(0, -999, 0);
+      particle.velocity.set(0, 0, 0);
+      particle.age = 0;
+    }
+    this.positions.fill(0);
+    this.opacities.fill(0);
+    for (let i = 0; i < this.maximum; i++) this.positions[i * 3 + 1] = -999;
     for (const attribute of this.attributes) attribute.needsUpdate = true;
   }
 }
@@ -207,6 +227,36 @@ export class ExplosionSystem {
     for (const wave of this.shockwaves) {
       if (!wave.active) wave.mesh.visible = false;
     }
+  }
+
+  reset() {
+    this.additive.reset();
+    this.smoke.reset();
+    this.debrisCursor = 0;
+    this.activeDebris = 0;
+    this.scaleVector.setScalar(0);
+    for (let i = 0; i < MAX_DEBRIS; i++) {
+      const debris = this.debris[i];
+      debris.active = false;
+      debris.position.set(0, -999, 0);
+      debris.velocity.set(0, 0, 0);
+      debris.angular.set(0, 0, 0);
+      this.matrix.compose(debris.position, this.quaternion, this.scaleVector);
+      this.debrisMesh.setMatrixAt(i, this.matrix);
+    }
+    this.debrisMesh.instanceMatrix.needsUpdate = true;
+    for (const wave of this.shockwaves) {
+      wave.active = false;
+      wave.age = 0;
+      wave.material.opacity = 0;
+      wave.mesh.visible = false;
+    }
+    for (const light of this.lights) {
+      light.userData.active = false;
+      light.userData.age = 0;
+      light.intensity = 0;
+    }
+    this.warmupPending = false;
   }
 
   randomDirection(speed, verticalBias = 0) {

@@ -1,14 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { DRONE_TUNING } from './config.js';
-
-function seeded(seed) {
-  let value = seed || 1;
-  return () => {
-    value = value * 16807 % 2147483647;
-    return (value - 1) / 2147483646;
-  };
-}
+import { makeRng } from './rng.js';
 
 const clampLength = (vector, max) => {
   if (vector.lengthSq() > max * max) vector.setLength(max);
@@ -29,6 +22,8 @@ export class DroneSystem {
     this.closest = new THREE.Vector3();
     this.temp = new THREE.Vector3();
     this.temp2 = new THREE.Vector3();
+    this.steering = new THREE.Vector3();
+    this.separationOffset = new THREE.Vector3();
     this.lookHelper = new THREE.Object3D();
     this.coreGeometry = new RoundedBoxGeometry(.86, .54, .94, 4, .12);
     this.wingGeometry = new RoundedBoxGeometry(.62, .11, .38, 3, .045);
@@ -60,7 +55,7 @@ export class DroneSystem {
   }
 
   createDrone(index, count) {
-    const random = seeded(7100 + this.wave * 101 + index * 17);
+    const random = makeRng(7100 + this.wave * 101 + index * 17);
     const angle = index / count * Math.PI * 2 + this.wave * .37;
     const radius = 10 + ((index * 7 + this.wave * 3) % 8);
     const anchor = new THREE.Vector3(Math.sin(angle) * radius, 2.5 + index % 3 * .72, Math.cos(angle) * radius);
@@ -168,7 +163,7 @@ export class DroneSystem {
       if (!drone.alive || drone.evadeCooldown > 0 || drone.state === 'telegraph' || drone.state === 'evade') continue;
       this.line.closestPointToPoint(drone.position, true, this.closest);
       if (this.closest.distanceToSquared(drone.position) > DRONE_TUNING.threatRadius ** 2) continue;
-      const side = drone.position.clone().sub(this.closest);
+      const side = this.separationOffset.copy(drone.position).sub(this.closest);
       if (side.lengthSq() < .04) side.set(-bulletDirection.z, 0, bulletDirection.x);
       side.y += (drone.random() - .5) * .7;
       side.normalize();
@@ -224,10 +219,10 @@ export class DroneSystem {
       }
 
       // Separazione morbida fra unità e repulsione dai limiti dell'arena.
-      const steering = new THREE.Vector3();
+      const steering = this.steering.set(0, 0, 0);
       for (const other of this.drones) {
         if (other === drone || !other.alive) continue;
-        const offset = drone.position.clone().sub(other.position);
+        const offset = this.separationOffset.copy(drone.position).sub(other.position);
         const distance = offset.length();
         if (distance > .001 && distance < DRONE_TUNING.separationRadius) {
           steering.addScaledVector(offset.normalize(), (DRONE_TUNING.separationRadius - distance) * 3.8);

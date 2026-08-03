@@ -1,12 +1,5 @@
 import * as THREE from 'three';
-
-function rng(seed) {
-  let value = seed || 1;
-  return () => {
-    value = value * 16807 % 2147483647;
-    return (value - 1) / 2147483646;
-  };
-}
+import { makeRng } from './rng.js';
 
 function canvasTexture(canvas, { color = false, anisotropy = 1 } = {}) {
   const texture = new THREE.CanvasTexture(canvas);
@@ -57,7 +50,7 @@ function createFacadeMaps(resolution, anisotropy) {
   const r = roughness.getContext('2d');
   const h = heightMap.getContext('2d');
   const e = emissive.getContext('2d');
-  const random = rng(481516);
+  const random = makeRng(481516);
 
   a.fillStyle = '#111923'; a.fillRect(0, 0, width, height);
   r.fillStyle = '#adadad'; r.fillRect(0, 0, width, height);
@@ -152,7 +145,7 @@ function createPaintedNumber(text, color, resolution, seed) {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = resolution;
   const context = canvas.getContext('2d');
-  const random = rng(seed);
+  const random = makeRng(seed);
   context.clearRect(0, 0, resolution, resolution);
   context.textAlign = 'center';
   context.textBaseline = 'middle';
@@ -252,7 +245,7 @@ export class FacadeSystem {
   }
 
   buildCity() {
-    const random = rng(4242);
+    const random = makeRng(4242);
     const numberColors = ['#e7e2d7', '#d4b24f', '#b7d3d5', '#a24f49'];
     const roofMat = new THREE.MeshStandardMaterial({ color: 0x11171d, metalness: .72, roughness: .48, envMapIntensity: 1.1 });
     const trimMat = new THREE.MeshStandardMaterial({ color: 0x222a31, metalness: .85, roughness: .28, envMapIntensity: 1.25 });

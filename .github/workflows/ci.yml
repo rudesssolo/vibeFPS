@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Test & syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Unit tests
+        run: node --test
+
+      - name: Syntax check src & tests
+        run: |
+          set -e
+          for f in src/*.js tests/*.js; do node --check "$f"; done
+
+      - name: Syntax check inline module script in index.html
+        run: |
+          set -e
+          sed -n '/<script type="module">/,/<\/script>/p' index.html \
+            | sed '1d;$d' > /tmp/main.mjs
+          node --check /tmp/main.mjs

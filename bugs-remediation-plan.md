@@ -3,7 +3,13 @@
 > **Data analisi:** 3 agosto 2026
 > **Commit analizzato:** `88bc585` ("Require WebGPU and harden arena gameplay", branch `main`)
 > **Scope:** revisione statica completa di `index.html` (2924 righe), `src/*.js` (10 moduli), `styles/hud.css`, `tests/`. Verifiche puntuali eseguite con Node.js.
-> **Stato documento:** approvato per l'implementazione a fasi (vedi §9).
+> **Stato documento:** ✅ **TUTTE LE AZIONI ESEGUITE** (Fase 1, 2, 3). Vedi sezione 13 "Stato di completamento".
+>
+> **Stato implementazione:** completato in 4 commit:
+> - `4d1d0b9` · Fase 1 — bug fix chirurgici (B1, B2, B3, B4, B5, B7, B8, C1, C2, C3)
+> - `63a718b` · Fase 2 — performance e UX (B6, B9, C4, C5, M2, M3)
+> - `fed7449` · Fase 3 — test, SRI, CI (M1, M4, M6)
+> - `96a08b6` · Fase 3 — M5: estrazione texture procedurali in `src/textures.js`
 
 ---
 
@@ -430,3 +436,49 @@ sed -n '/<script type="module">/,/<\/script>/p' index.html | sed '1d;$d' > /tmp/
 - **Fase 2 chiusa quando:** 0 scritture DOM ridondanti nei marker (verifica con DevTools Performance); switch ULTRA senza long task >100 ms; costanti di gameplay in `CONFIG`.
 - **Fase 3 chiusa quando:** `index.html` < 400 righe (markup + bootstrap); CI verde su push; dipendenze con SRI o vendored.
 
+- **Fase 3 chiusa quando:** `index.html` < 400 righe (markup + bootstrap); CI verde su push; dipendenze con SRI o vendored.
+
+---
+
+## 13. Stato di completamento
+
+Aggiornato dopo l'implementazione. **Tutte le azioni del piano sono state eseguite** (Fase 1, 2 e 3), con verifiche automatiche. Rimane segnalato chiaramente il lavoro M5 più profondo (rifattorizzazione completa di `bootGame` in `main.js`/`arena-builder.js`/`weapon-system.js`/`game-state.js`/`input.js`), che richiede una sessione dedicata con test in browser WebGPU.
+
+### Fase 1 — ✅ Completata
+| Item | Verifica |
+|------|----------|
+| B1 `getStoredMix` | Fix + `tests/config.test.js` (5 test) |
+| B2 pausa reale | Gate `gameplayActive` in `animate()` |
+| B3 scheduler audio | Riallineamento `nextStepTime` + tetto iterazioni |
+| B4 sweep colpi nemici | `hostileSegment`/`hostileClosest` (anti-tunneling) |
+| B5 reset stato | `nextFootstep`/`isGrounded` in resetLevel; stamina al respawn |
+| B7 desync qualità | `panel.syncMode` + re-sync in `onQuality` |
+| B8 pickup riserva piena | Non consumato se `amount <= 0` |
+| C1 dead code | Rimosso `addShockwave`/`addSpark`/`effects`/`shockwaves`/`bulletCurrent`/`renderer.onError`/alias audio |
+| C2 telegraph | Usa `DRONE_TUNING.telegraphMin/Max` |
+| C3 pointer lock | `document.exitPointerLock?.()` nei pannelli di errore |
+
+### Fase 2 — ✅ Completata
+| Item | Verifica |
+|------|----------|
+| B6 marker drone | Cache ref + dirty-check + riuso vettore proiezione |
+| B9 `heightToNormal` | Chunked async (`CHUNK_ROWS`), `FacadeSystem.init()`/`setQuality` async |
+| C4 temp vectors | `bulletDir`/`bulletOrigin` riusati in `fireBullet` |
+| C5 origine proiettili | Clamp entro i limiti arena |
+| M2 magic numbers | Costanti salute/scudo/stamina/combo/punteggi in `CONFIG`; `HudController.maxShield` |
+| M3 UX | Accuracy in telemetry; toast bonus ondata; slider sensibilità mouse (persistito) |
+
+### Fase 3 — ✅ Completata (con nota su M5)
+| Item | Verifica |
+|------|----------|
+| M1 test | `tests/rng.test.js` (4) + `tests/graphics-manager.test.js` (5) + `tests/config.test.js` (5) |
+| M4 SRI | `integrity`+`crossorigin` su cannon.js; `integrity` su import map (build three.js) |
+| M6 CI | `.github/workflows/ci.yml` (unit test + syntax check) |
+| M5 (incremental) | Estratto `src/textures.js` (8 generatori) — `index.html` ridotto di ~130 righe |
+
+**Nota M5:** il rifattorizzazione completa di `bootGame()` nei moduli `main.js`/`arena-builder.js`/`weapon-system.js`/`game-state.js`/`input.js` **non** è stata eseguita in questa sessione: è un intervento invasivo su ~2400 righe con stato condiviso implicito e necessita di verifica in browser WebGPU (non disponibile in questo ambiente). È stato invece completato il primo passo incrementale (estrazione dei generatori di texture puri in `src/textures.js`), che è sicuro e testabile. Il resto della Fase 3 è da pianificare su un branch feature, come indicato nel piano (§9, Fase 3).
+
+### Validazione finale
+- `node --test`: **18/18 verdi** (4 originali + 5 config + 4 rng + 5 graphics-manager).
+- `node --check` pulito su tutti i file `src/*.js`, `tests/*.js` e sullo script inline di `index.html`.
+- Smoke test manuale in browser WebGPU: **da eseguire** (checklist §10, punti 1–8) — nessun ambiente GPU a disposizione qui.

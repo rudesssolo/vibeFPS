@@ -62,6 +62,7 @@ src/render-pipeline.js  GTAO, bloom, SMAA, grain, grading, shockwave and vignett
 src/drone-system.js     Drone spawning, movement, attacks, and evasive behavior
 src/explosion-system.js Explosion pooling, particles, and shockwave effects
 src/facade-system.js    Procedural building facade generation
+src/textures.js         Procedural canvas/texture generators (asphalt, metal, wood, PBR, signs)
 src/audio-engine.js     Singleton procedural AudioEngine, SFX, drone, arpeggiator, and spatial audio
 src/hud-controller.js    HUD onboarding and simulation settings
 ```
@@ -73,7 +74,7 @@ The start screen provides two graphics modes:
 - **Auto** adapts between balanced and high quality according to frame rate.
 - **Ultra** uses the highest configured render quality.
 
-Music, sound effects, ambience, and the selected graphics mode are stored in `localStorage` for the current browser profile.
+Music, sound effects, ambience, mouse sensitivity, and the selected graphics mode are stored in `localStorage` for the current browser profile. The HUD telemetry also shows a live **accuracy** readout (hits / shots).
 
 ## Development notes
 

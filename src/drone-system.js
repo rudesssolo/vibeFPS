@@ -285,7 +285,7 @@ export class DroneSystem {
       const away = drone.position.clone().sub(this.targetProvider()).setY((drone.random() - .5) * .65).normalize();
       drone.evadeDirection.copy(away);
       drone.state = 'telegraph';
-      drone.stateTimer = Math.max(.12, THREE.MathUtils.lerp(.14, .22, drone.random()));
+      drone.stateTimer = Math.max(.12, THREE.MathUtils.lerp(DRONE_TUNING.telegraphMin, DRONE_TUNING.telegraphMax, drone.random()));
       drone.marker.classList.add('evade-warning');
       this.onTelegraph(drone);
     }

@@ -123,9 +123,6 @@ export class AudioEngine {
     return buffer;
   }
 
-  // Kept as a compatibility alias for callers that used the old helper.
-  makeNoise(seconds) { return this.createNoiseBuffer(seconds); }
-
   createDistortionCurve(amount = 50) {
     const samples = 256;
     const curve = new Float32Array(samples);
@@ -384,11 +381,18 @@ export class AudioEngine {
     const energy = Math.min(1, enemies / 8 * .45 + wave / 8 * .3 + danger + (snapshot.combo || 1) / 5 * .12);
     this.targetIntensity = energy > .78 ? 3 : energy > .48 ? 2 : energy > .18 ? 1 : 0;
     const sixteenth = 60 / this.tempo / 4;
-    while (this.nextStepTime < this.ctx.currentTime + .12) {
+    const now = this.ctx.currentTime;
+    // Riallinea lo scheduler dopo una tab nascosta o un resume: currentTime del
+    // contesto continua ad avanzare mentre il loop rAF è fermo; senza questo clamp
+    // al ritorno si schedulerebbero migliaia di note nel passato (stallo + raffica).
+    if (this.nextStepTime < now - .25) this.nextStepTime = now + .05;
+    let scheduled = 0;
+    while (this.nextStepTime < now + .12 && scheduled < 8) {
       if (this.step % 16 === 0) this.intensity = this.targetIntensity;
       this.scheduleStep(this.nextStepTime, this.step);
       this.nextStepTime += sixteenth;
       this.step++;
+      scheduled++;
     }
   }
 
@@ -578,7 +582,6 @@ export class AudioEngine {
   }
 
   // Compatibility aliases used by older gameplay code.
-  gun(options) { return this.playShoot(options); }
   melee() {
     const variation = Math.random();
     this.noise(.09 + variation * .04, .12 + variation * .05, 620 + variation * 420, 'bandpass');
@@ -622,6 +625,3 @@ export class AudioEngine {
     this.onStateChange(this.muted);
   }
 }
-
-// Backwards-compatible name for integrations built before the singleton API.
-export class AdaptiveAudioEngine extends AudioEngine {}

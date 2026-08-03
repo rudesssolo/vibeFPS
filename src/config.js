@@ -83,7 +83,11 @@ export function storeQualityMode(mode) {
 export function getStoredMix() {
   const storage = safeStorage();
   const safe = (key, fallback) => {
-    const value = Number(readStorage(storage, key));
+    // localStorage.getItem() restituisce null per una chiave mancante; Number(null)
+    // è 0, quindi il fallback qui sotto non scatterebbe mai al primo avvio (gioco
+    // muto). Trattiamo null/'' come "non memorizzato" e usiamo il valore di default.
+    const raw = readStorage(storage, key);
+    const value = raw === null || raw === '' ? Number.NaN : Number(raw);
     return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : fallback;
   };
   return {

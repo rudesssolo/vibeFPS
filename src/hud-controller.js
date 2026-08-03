@@ -136,7 +136,9 @@ export class HudController {
     const setSelected = mode => panel.querySelectorAll('[data-quality]').forEach(button => button.classList.toggle('selected', button.dataset.quality === mode));
     setSelected(qualityMode);
     panel.querySelectorAll('[data-quality]').forEach(button => button.addEventListener('click', () => {
-      setSelected(button.dataset.quality);
+      // La selezione viene riallineata da onQuality() dopo l'applicazione reale
+      // (che può essere ignorata, es. durante la transizione ULTRA): così la UI
+      // riflette sempre lo stato effettivo del GraphicsManager.
       onQuality(button.dataset.quality);
     }));
     panel.querySelectorAll('[data-mix]').forEach(input => input.addEventListener('input', () => {
@@ -144,6 +146,9 @@ export class HudController {
     }));
     panel.querySelector('[data-reset-level]')?.addEventListener('click', onReset);
     overlay.appendChild(panel);
+    // Espone un setter per riallineare la selezione visiva allo stato reale del
+    // GraphicsManager (usato da index.html dopo setMode, vedi B7).
+    panel.syncMode = setSelected;
     return panel;
   }
 }

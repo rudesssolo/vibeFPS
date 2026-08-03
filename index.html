@@ -412,6 +412,9 @@
     const cta = overlay?.querySelector('.cta');
     const build = overlay?.querySelector('.build');
     if (!overlay) return;
+    // C3: se il pointer lock è ancora attivo il cursore resta catturato e
+    // l'overlay di recovery non è interagibile: rilascialo sempre.
+    document.exitPointerLock?.();
     overlay.classList.remove('is-loading');
     overlay.classList.add('ready', 'gpu-unavailable');
     overlay.style.display = 'flex';
@@ -543,6 +546,8 @@
     const cta = document.querySelector('#overlay .cta');
     const title = document.querySelector('#overlay h1');
     const subtitle = document.querySelector('#overlay .sub');
+    // C3: rilascia il pointer lock per rendere l'overlay di recovery interagibile.
+    document.exitPointerLock?.();
     if (build) build.textContent = 'RENDERER // OFFLINE';
     if (cta) cta.textContent = message;
     if (title) title.textContent = 'RENDERER OFFLINE';
@@ -558,7 +563,6 @@
     detachRendererCanvas();
     showWebGPUUnavailable('Il device WebGPU è stato perso. Ricarica la pagina dopo aver verificato il driver grafico.');
   };
-  renderer.onError = error => console.error('VIBE renderer error', error);
   try {
     await renderer.init();
   } catch (error) {
@@ -1944,10 +1948,15 @@
   });
   graphicsManager.init();
   loadingUI.update(.92, 'FINAL CHECK', 'SINCRONIZZAZIONE HUD E PROFILI GRAFICI...');
-  hudController.mountSettings(overlayEl, {
+  const settingsPanelRef = hudController.mountSettings(overlayEl, {
     qualityMode: graphicsManager.mode,
     mix: audio.mix,
-    onQuality: mode => graphicsManager.setMode(mode),
+    onQuality: mode => {
+      graphicsManager.setMode(mode);
+      // Riallinea la selezione visiva allo stato reale (setMode può ignorare la
+      // richiesta durante la transizione ULTRA, vedi B7).
+      settingsPanelRef?.syncMode?.(graphicsManager.mode);
+    },
     onMix: partial => audio.setMix(partial),
     onReset: resetLevel
   });
@@ -1956,7 +1965,6 @@
      7C. UNITÀ SENTINELLA, FUOCO NEMICO E LOOP A ONDATE
      ============================================================ */
   const hostileShots=[];
-  const shockwaves=[];
   const ammoPickups=[];
   const ammoPickupGeometry = new THREE.OctahedronGeometry(.22, 0);
   const ammoPickupRingGeometry = new THREE.TorusGeometry(.3, .028, 6, 18);
@@ -1972,6 +1980,11 @@
   const hostilePlayerPoint = new THREE.Vector3();
   const hostileFrom = new CANNON.Vec3();
   const hostileTo = new CANNON.Vec3();
+  // Sweep segmento→punto per il hit test dei colpi nemici contro il giocatore
+  // (riveled da B4): evita il tunneling a FPS bassi, come già fatto per i
+  // proiettili del giocatore contro i droni.
+  const hostileSegment = new THREE.Line3();
+  const hostileClosest = new THREE.Vector3();
   let aliveEnemyCount = 0;
   const droneSystem = new DroneSystem({
     scene,
@@ -2006,11 +2019,6 @@
     const toCam=origin.clone().project(camera);audio.enemyShot(Math.max(-.85,Math.min(.85,toCam.x)));
   }
 
-  function addShockwave(position,color=0xff3155){
-    const mat=new THREE.MeshBasicMaterial({color,transparent:true,opacity:.9,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide});
-    const mesh=new THREE.Mesh(new THREE.RingGeometry(.3,.42,32),mat);mesh.position.copy(position);mesh.lookAt(camera.position);scene.add(mesh);shockwaves.push({mesh,mat,age:0,life:.5});
-  }
-
   function spawnAmmoDrop(position) {
     const mesh = new THREE.Group();
     const core = new THREE.Mesh(ammoPickupGeometry, ammoPickupMaterial);
@@ -2040,17 +2048,16 @@
 
       if (pickup.mesh.position.distanceToSquared(playerBody.position) <= 1.15 * 1.15) {
         const amount = Math.min(CONFIG.ammoDropAmount, CONFIG.reserveAmmo - gameState.reserve);
+        // B8: a riserva piena il pickup NON viene consumato (resta a terra finché
+        // non serve); nessun toast spam finché il giocatore resta sopra il drop.
         if (amount > 0) {
           gameState.reserve += amount;
           audio.pickup();
           toast(`<b>RIFORNIMENTO</b> · +${amount} MUNIZIONI`);
           updateHUD();
-        } else {
-          audio.ui();
-          toast('<b>RIFORNIMENTO</b> · MUNIZIONI AL MASSIMO');
+          scene.remove(pickup.mesh);
+          ammoPickups.splice(i, 1);
         }
-        scene.remove(pickup.mesh);
-        ammoPickups.splice(i, 1);
         continue;
       }
       if (pickup.age >= CONFIG.ammoDropLifetime) {
@@ -2091,7 +2098,7 @@
   }
 
   function respawnPlayer(){
-    gameState.health=100;gameState.shield=75;gameState.dead=false;resetPlayerBody();showWave('LINK RESTORED','SISTEMI DI COMBATTIMENTO OPERATIVI');
+    gameState.health=100;gameState.shield=75;gameState.stamina=100;gameState.dead=false;resetPlayerBody();showWave('LINK RESTORED','SISTEMI DI COMBATTIMENTO OPERATIVI');
   }
 
   function updateDrones(delta,time){
@@ -2109,13 +2116,14 @@
       s.age+=delta;s.prev.copy(s.pos);s.pos.addScaledVector(s.vel,delta);s.mesh.position.copy(s.pos);
       const attr=s.trail.geometry.attributes.position;attr.setXYZ(0,s.prev.x,s.prev.y,s.prev.z);attr.setXYZ(1,s.pos.x,s.pos.y,s.pos.z);attr.needsUpdate=true;
       let remove=s.age>2.5;
-      if(!remove&&s.pos.distanceToSquared(hostilePlayerPoint)<.52){damagePlayer(8+gameState.wave*1.1);remove=true;}
+      // Hit test sweep segmento→punto (B4): traduce il movimento del colpo tra
+      // prev e pos in un segmento, così a FPS bassi il proiettile non salta sopra
+      // il giocatore. .52 = raggio di collisione effettivo ^2 (≈0.72m).
+      if(!remove){hostileSegment.start.copy(s.prev);hostileSegment.end.copy(s.pos);hostileSegment.closestPointToPoint(hostilePlayerPoint,true,hostileClosest);if(hostileClosest.distanceToSquared(hostilePlayerPoint)<.52){damagePlayer(8+gameState.wave*1.1);remove=true;}}
       if(!remove){hostileFrom.set(s.prev.x,s.prev.y,s.prev.z);hostileTo.set(s.pos.x,s.pos.y,s.pos.z);if(hostileRay.intersectWorld(world,{mode:CANNON.Ray.CLOSEST,result:hostileHit,from:hostileFrom,to:hostileTo,collisionFilterGroup:COLLISION.BULLET,collisionFilterMask:COLLISION.STATIC|COLLISION.CRATE}))remove=true;}
       if(remove){scene.remove(s.mesh,s.trail);s.mesh.geometry.dispose();s.mesh.material.dispose();s.trail.geometry.dispose();s.trail.material.dispose();hostileShots.splice(i,1);}
     }
   }
-
-  function updateShockwaves(delta){for(let i=shockwaves.length-1;i>=0;i--){const s=shockwaves[i];s.age+=delta;const t=s.age/s.life;s.mesh.scale.setScalar(1+t*8);s.mat.opacity=1-t;s.mesh.lookAt(camera.position);if(t>=1){scene.remove(s.mesh);s.mesh.geometry.dispose();s.mat.dispose();shockwaves.splice(i,1);}}}
 
   function updateTargetMarkers(){
     droneSystem.updateMarkers();
@@ -2364,9 +2372,6 @@
   let meleeCooldown = 0;
   let meleeTimer = 0;
 
-  const sparkGeo = new THREE.OctahedronGeometry(0.16);
-  const effects = [];
-
   function fireBullet() {
     if (!gameState.started || gameStartLoading || gameState.dead || gameState.reloading || meleeTimer > 0) return;
     if (gameState.ammo <= 0) { audio.dry(); startReload(); fireCooldown = .2; return; }
@@ -2448,34 +2453,10 @@
     }
   }
 
-  // Burst di scintille all'impatto
-  function addSpark(position) {
-    const count = 6 + Math.floor(Math.random() * 4);
-    for (let i = 0; i < count; i++) {
-      const mat = new THREE.MeshBasicMaterial({
-        color: Math.random() < 0.6 ? 0x9ff5ff : 0xffd0a0,
-        transparent: true, opacity: 1,
-        blending: THREE.AdditiveBlending, depthWrite: false
-      });
-      const mesh = new THREE.Mesh(sparkGeo, mat);
-      mesh.position.set(position.x, position.y, position.z);
-      const s = 0.05 + Math.random() * 0.09;
-      mesh.scale.setScalar(s);
-      const vel = new THREE.Vector3(
-        (Math.random() - 0.5) * 7,
-        2 + Math.random() * 6,
-        (Math.random() - 0.5) * 7
-      );
-      scene.add(mesh);
-      effects.push({ mesh, mat, vel, age: 0, life: 0.3 + Math.random() * 0.25, base: s });
-    }
-  }
-
   const bulletRay = new CANNON.Ray();
   const bulletHit = new CANNON.RaycastResult();
   const bulletSegment = new THREE.Line3();
   const bulletClosest = new THREE.Vector3();
-  const bulletCurrent = new THREE.Vector3();
 
   function isFiniteVector3(value) {
     return Boolean(value)
@@ -2566,29 +2547,6 @@
     }
   }
 
-  function updateEffects(delta) {
-    for (let i = effects.length - 1; i >= 0; i--) {
-      const e = effects[i];
-      if (!Number.isFinite(e.age) || !isFiniteVector3(e.mesh?.position) || !isFiniteVector3(e.vel)) {
-        scene.remove(e.mesh);
-        e.mat.dispose();
-        effects.splice(i, 1);
-        continue;
-      }
-      e.age += delta;
-      const t = Math.min(e.age / e.life, 1);
-      e.vel.y -= 14 * delta;                       // gravità leggera sulle scintille
-      e.mesh.position.addScaledVector(e.vel, delta);
-      e.mesh.scale.setScalar(Math.max(e.base * (1 + t * 0.6) * (1 - t * 0.5), 0.001));
-      e.mat.opacity = 1 - t;
-      if (t >= 1) {
-        scene.remove(e.mesh);
-        e.mat.dispose();
-        effects.splice(i, 1);
-      }
-    }
-  }
-
   function clearBullets() {
     for (const bullet of bullets) {
       disposeBullet(bullet);
@@ -2607,30 +2565,11 @@
     hostileShots.length = 0;
   }
 
-  function clearEffects() {
-    for (const effect of effects) {
-      scene.remove(effect.mesh);
-      effect.mat.dispose();
-    }
-    effects.length = 0;
-  }
-
-  function clearShockwaves() {
-    for (const shockwave of shockwaves) {
-      scene.remove(shockwave.mesh);
-      shockwave.mat.dispose();
-      shockwave.mesh.geometry.dispose();
-    }
-    shockwaves.length = 0;
-  }
-
   function resetLevel() {
     const wasStarted = gameState.started;
     clearPlayerInput();
     clearBullets();
     clearHostileShots();
-    clearEffects();
-    clearShockwaves();
     clearAmmoPickups();
     explosionSystem.reset();
     renderPipeline.reset();
@@ -2665,6 +2604,8 @@
     pitch = 0;
     cameraDamageKick = 0;
     bobPhase = 0;
+    isGrounded = false;
+    nextFootstep = 0;
     fireCooldown = 0;
     meleeCooldown = 0;
     meleeTimer = 0;
@@ -2717,62 +2658,72 @@
     accumulator = Math.min(accumulator + delta, FIXED_STEP * MAX_PHYSICS_STEPS);
     syncHudVisibility();
 
-    // Correggi subito eventuali residui dello step precedente prima che il
-    // movimento e il raycast del terreno li possano riutilizzare.
-    constrainPlayerToArena();
-    sanitizeDynamicBodies();
-    updatePlayer(delta);
-    // updatePlayer imposta l'intento del frame. Filtralo anche prima dello
-    // step: sul bordo esatto rimuove solo la componente verso il muro e lascia
-    // intatta quella tangenziale, evitando jitter e blocchi nello scorrimento.
-    constrainPlayerToArena();
-
-    // Fisica a passo fisso
-    let physicsSteps = 0;
-    while (accumulator >= FIXED_STEP && physicsSteps < MAX_PHYSICS_STEPS) {
-      world.step(FIXED_STEP);
-      // Il clamp tra gli step impedisce che due collisioni simultanee in un
-      // angolo lascino il corpo oltre il muro fino al frame successivo.
+    // B2: la simulazione è "attiva" solo con pointer lock + partita avviata.
+    // Con il menu di pausa aperto il gioco è davvero sospeso: niente step fisici,
+    // niente droni, niente colpi in volo, niente timer di gioco. Rendering, camera,
+    // HUD, pioggia/vapore e musica restano attivi.
+    const gameplayActive = locked && gameState.started && !gameStartLoading;
+    if (gameplayActive) {
+      // Correggi subito eventuali residui dello step precedente prima che il
+      // movimento e il raycast del terreno li possano riutilizzare.
       constrainPlayerToArena();
       sanitizeDynamicBodies();
-      accumulator -= FIXED_STEP;
-      physicsSteps++;
-    }
-    // Se il limite è stato raggiunto, conserva solo la frazione sub-step:
-    // il tempo arretrato non deve trasformarsi in un blocco del rendering.
-    if (physicsSteps === MAX_PHYSICS_STEPS && accumulator >= FIXED_STEP) {
-      accumulator %= FIXED_STEP;
-    }
-    constrainPlayerToArena();
-    sanitizeDynamicBodies();
+      updatePlayer(delta);
+      // updatePlayer imposta l'intento del frame. Filtralo anche prima dello
+      // step: sul bordo esatto rimuove solo la componente verso il muro e lascia
+      // intatta quella tangenziale, evitando jitter e blocchi nello scorrimento.
+      constrainPlayerToArena();
 
-    // Fuoco continuo tenendo premuto il tasto
-    fireCooldown -= delta;
-    if (triggerDown && fireCooldown <= 0) {
-      fireBullet();
-      fireCooldown = CONFIG.fireRate;
+      // Fisica a passo fisso
+      let physicsSteps = 0;
+      while (accumulator >= FIXED_STEP && physicsSteps < MAX_PHYSICS_STEPS) {
+        world.step(FIXED_STEP);
+        // Il clamp tra gli step impedisce che due collisioni simultanee in un
+        // angolo lascino il corpo oltre il muro fino al frame successivo.
+        constrainPlayerToArena();
+        sanitizeDynamicBodies();
+        accumulator -= FIXED_STEP;
+        physicsSteps++;
+      }
+      // Se il limite è stato raggiunto, conserva solo la frazione sub-step:
+      // il tempo arretrato non deve trasformarsi in un blocco del rendering.
+      if (physicsSteps === MAX_PHYSICS_STEPS && accumulator >= FIXED_STEP) {
+        accumulator %= FIXED_STEP;
+      }
+      constrainPlayerToArena();
+      sanitizeDynamicBodies();
+
+      // Fuoco continuo tenendo premuto il tasto
+      fireCooldown -= delta;
+      if (triggerDown && fireCooldown <= 0) {
+        fireBullet();
+        fireCooldown = CONFIG.fireRate;
+      }
+
+      updateDrones(delta, elapsed);
+      updateAmmoPickups(delta, elapsed);
+      updateBullets(delta);
+      updateHostileShots(delta);
+      updateGameplay(delta, elapsed);
+
+      // Sincronizza le mesh con i body fisici
+      for (const o of synced) {
+        o.mesh.position.copy(o.body.position);
+        o.mesh.quaternion.copy(o.body.quaternion);
+      }
+    } else {
+      // Pausa o pre-start: congela la fisica e scarta il tempo accumulato, così
+      // al rientro non scattano raffiche di step arretrati.
+      accumulator = 0;
     }
 
-    updateDrones(delta, elapsed);
-    updateAmmoPickups(delta, elapsed);
-    updateBullets(delta);
-    updateEffects(delta);
-    updateHostileShots(delta);
-    updateShockwaves(delta);
     explosionSystem.update(delta,camera);
-    updateGameplay(delta, elapsed);
     audio.update({
       aliveEnemies:aliveEnemyCount,
       wave:gameState.wave,
       health:gameState.health,
       combo:gameState.combo
     });
-
-    // Sincronizza le mesh con i body fisici
-    for (const o of synced) {
-      o.mesh.position.copy(o.body.position);
-      o.mesh.quaternion.copy(o.body.quaternion);
-    }
 
     // Jump pad: pulsazione soft + rotazione freccia
     padGlowMat.emissiveIntensity = 0.7 + Math.sin(elapsed * 2.5) * 0.2;

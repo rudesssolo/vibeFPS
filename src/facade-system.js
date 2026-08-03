@@ -36,7 +36,41 @@ function heightToNormal(heightCanvas, strength, anisotropy) {
   return canvasTexture(canvas, { anisotropy });
 }
 
-function createFacadeMaps(resolution, anisotropy) {
+// N1/B9: la conversione a 2048px è un loop su ~4,2M pixel che in forma sincrona
+// blocca il main thread per centinaia di ms durante la transizione ULTRA. La
+// variante asincrona cede il controllo ogni CHUNK_ROWS righe: il rebuild avviene
+// in background senza freeze (il boot resta sul percorso sincrono a 1024px).
+const CHUNK_ROWS = 64;
+const yieldMainThread = () => new Promise(resolve => setTimeout(resolve, 0));
+
+async function heightToNormalAsync(heightCanvas, strength, anisotropy) {
+  const width = heightCanvas.width;
+  const height = heightCanvas.height;
+  const source = heightCanvas.getContext('2d').getImageData(0, 0, width, height).data;
+  const output = new Uint8ClampedArray(width * height * 4);
+  const sample = (x, y) => source[((y + height) % height * width + (x + width) % width) * 4] / 255;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let nx = (sample(x - 1, y) - sample(x + 1, y)) * strength;
+      let ny = (sample(x, y - 1) - sample(x, y + 1)) * strength;
+      let nz = 1;
+      const length = 1 / Math.hypot(nx, ny, nz);
+      nx *= length; ny *= length; nz *= length;
+      const offset = (y * width + x) * 4;
+      output[offset] = (nx * .5 + .5) * 255;
+      output[offset + 1] = (ny * .5 + .5) * 255;
+      output[offset + 2] = (nz * .5 + .5) * 255;
+      output[offset + 3] = 255;
+    }
+    if (y % CHUNK_ROWS === CHUNK_ROWS - 1) await yieldMainThread();
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = width; canvas.height = height;
+  canvas.getContext('2d').putImageData(new ImageData(output, width, height), 0, 0);
+  return canvasTexture(canvas, { anisotropy });
+}
+
+function createFacadeCanvases(resolution) {
   const width = resolution;
   const height = resolution;
   const albedo = document.createElement('canvas');
@@ -132,13 +166,32 @@ function createFacadeMaps(resolution, anisotropy) {
     r.beginPath(); r.moveTo(x, y); r.lineTo(x + (random() - .5) * 4, y + length); r.stroke();
   }
 
-  const maps = {
-    map: canvasTexture(albedo, { color: true, anisotropy }),
-    roughnessMap: canvasTexture(roughness, { anisotropy }),
-    normalMap: heightToNormal(heightMap, 2.4, anisotropy),
-    emissiveMap: canvasTexture(emissive, { color: true, anisotropy })
+  return { albedo, roughness, heightMap, emissive };
+}
+
+function facadeMapsFromCanvases(canvases, normalMap, anisotropy) {
+  return {
+    map: canvasTexture(canvases.albedo, { color: true, anisotropy }),
+    roughnessMap: canvasTexture(canvases.roughness, { anisotropy }),
+    normalMap,
+    emissiveMap: canvasTexture(canvases.emissive, { color: true, anisotropy })
   };
-  return maps;
+}
+
+// Percorso sincrono: usato al boot a 1024px (costo contenuto, comportamento
+// invariato rispetto alla versione originale).
+function createFacadeMaps(resolution, anisotropy) {
+  const canvases = createFacadeCanvases(resolution);
+  return facadeMapsFromCanvases(canvases, heightToNormal(canvases.heightMap, 2.4, anisotropy), anisotropy);
+}
+
+// Percorso asincrono chunked (N1): usato per il rebuild ULTRA a 2048px.
+async function createFacadeMapsAsync(resolution, anisotropy) {
+  const canvases = createFacadeCanvases(resolution);
+  // Cede il frame anche tra disegno canvas e conversione: nessun long task.
+  await yieldMainThread();
+  const normalMap = await heightToNormalAsync(canvases.heightMap, 2.4, anisotropy);
+  return facadeMapsFromCanvases(canvases, normalMap, anisotropy);
 }
 
 function createPaintedNumber(text, color, resolution, seed) {
@@ -191,8 +244,12 @@ function disposeMaps(maps) {
   for (const texture of Object.values(maps)) texture.dispose();
 }
 
+// Risoluzione base dei profili AUTO: le mappe a questa risoluzione restano in
+// cache dopo il passaggio a ULTRA, così il ritorno ad AUTO è immediato.
+const BASE_RESOLUTION = 1024;
+
 export class FacadeSystem {
-  constructor({ scene, anisotropy = 1, resolution = 1024, buildingCount = 56 }) {
+  constructor({ scene, anisotropy = 1, resolution = BASE_RESOLUTION, buildingCount = 56 }) {
     this.scene = scene;
     this.anisotropy = anisotropy;
     this.resolution = resolution;
@@ -201,14 +258,43 @@ export class FacadeSystem {
     this.group.name = 'RealisticSkyline';
     this.materials = [];
     this.maps = null;
+    this.mapsResolution = 0;
+    this.cachedBaseMaps = null;
+    // N1: token di generazione — un rebuild asincrono ancora in volo viene
+    // scartato se nel frattempo è partita un'altra ricostruzione o un ritorno
+    // alle mappe base. Evita swap fuori ordine e doppi materiali.
+    this.buildGeneration = 0;
     this.numberTextures = [];
     scene.add(this.group);
     this.rebuildMaterials(resolution);
     this.buildCity();
   }
 
+  // Rebuild sincrono: solo al boot (risoluzione base, costo contenuto).
   rebuildMaterials(resolution) {
-    const nextMaps = createFacadeMaps(resolution, this.anisotropy);
+    this.buildGeneration++;
+    this.applyMaps(createFacadeMaps(resolution, this.anisotropy), resolution);
+  }
+
+  // N1: rebuild asincrono chunked per le alte risoluzioni (transizione ULTRA).
+  // Fire-and-forget da setQuality: un errore lascia attive le mappe correnti.
+  async rebuildMaterialsAsync(resolution) {
+    const generation = ++this.buildGeneration;
+    let nextMaps;
+    try {
+      nextMaps = await createFacadeMapsAsync(resolution, this.anisotropy);
+    } catch (error) {
+      console.warn('VIBE facade rebuild failed, keeping current maps', error);
+      return;
+    }
+    if (generation !== this.buildGeneration) {
+      disposeMaps(nextMaps);
+      return;
+    }
+    this.applyMaps(nextMaps, resolution);
+  }
+
+  applyMaps(nextMaps, resolution) {
     if (!this.materials.length) {
       const colors = [0xd7e1e8, 0xaab9c7, 0xc4c8c9, 0x8fa7b5];
       for (const color of colors) {
@@ -233,15 +319,34 @@ export class FacadeSystem {
         material.emissiveMap = nextMaps.emissiveMap;
         material.needsUpdate = true;
       }
-      disposeMaps(this.maps);
+      // Le mappe base non vengono mai distrutte mentre sono di riserva per il
+      // ritorno rapido ad AUTO; quelle ad alta risoluzione sì (memoria GPU).
+      if (this.maps && this.maps !== nextMaps) {
+        if (this.mapsResolution === BASE_RESOLUTION) this.cachedBaseMaps = this.maps;
+        else disposeMaps(this.maps);
+      }
     }
+    if (this.cachedBaseMaps === nextMaps) this.cachedBaseMaps = null;
     this.maps = nextMaps;
+    this.mapsResolution = resolution;
     this.resolution = resolution;
   }
 
   setQuality(profile) {
-    if (!profile || profile.facadeResolution === this.resolution) return;
-    this.rebuildMaterials(profile.facadeResolution);
+    if (!profile) return;
+    const target = profile.facadeResolution;
+    if (target === this.resolution) {
+      // Annulla un rebuild asincrono in volo verso un'altra risoluzione.
+      this.buildGeneration++;
+      return;
+    }
+    if (target === BASE_RESOLUTION && this.cachedBaseMaps) {
+      // Ritorno immediato alle mappe base (nessuna ricostruzione).
+      this.buildGeneration++;
+      this.applyMaps(this.cachedBaseMaps, BASE_RESOLUTION);
+      return;
+    }
+    this.rebuildMaterialsAsync(target);
   }
 
   buildCity() {

@@ -5,20 +5,21 @@ VIBE FPS is a browser-based cyberpunk first-person shooter tech demo. Enter a ne
 ## Features
 
 - Real-time 3D rendering with Three.js and WebGPU
-- A cyberpunk night arena with procedural buildings, neon lighting, rain, fog, reflections, bloom, ambient occlusion, film grain, and cinematic color grading
+- A cyberpunk night arena with procedural buildings, neon lighting (with animated sign flicker), rain, fog, reflections, bloom, ambient occlusion, film grain, and cinematic color grading
+- Shader warm-up during loading (`compileAsync` + one offscreen post-chain render) so the first frame, shot, and explosion never stutter
 - Physics-based movement, jumping, a launch pad, collisions, and projectile simulation powered by Cannon.js
 - Wave-based combat against drones that patrol, engage, telegraph attacks, and evade incoming projectiles
-- Weapon feedback with muzzle shots, tracers, melee strikes, hit markers, explosions, shockwaves, damage effects, score, and combo tracking
+- Weapon feedback with muzzle shots, tracers, melee strikes, hit markers, explosions, shockwaves, reload and landing camera animation, damage effects, score, and combo tracking
 - Enemy rewards: kills restore health and create collectible ammunition drops
-- In-game pause menu with a complete level reset action
-- Pure procedural music, ambience, spatialized drone sounds, and sound effects generated with the Web Audio API (no MP3/WAV assets)
+- A true pause menu (simulation fully suspended, ducked audio) with a complete level reset action
+- Pure procedural music, ambience, spatialized drone sounds, wave stingers, a critical-health heartbeat, and sound effects generated with the Web Audio API (no MP3/WAV assets)
 - Responsive tactical HUD with mission progress, radar, health, shield, stamina, ammo, telemetry, and target markers
-- Auto and Ultra graphics profiles, plus persistent music, effects, and ambience volume controls
+- Auto and Ultra graphics profiles, plus persistent music, effects, ambience, mouse sensitivity, and mute settings
 
 ## Requirements
 
 - A modern desktop browser with WebGPU and Pointer Lock support
-- An internet connection: Three.js and Cannon.js are loaded from public CDNs
+- No internet connection needed: Three.js and Cannon.js are vendored in `vendor/` (three.js 0.184.0, cannon.js 0.6.2)
 
 The game is designed for keyboard and mouse. Headphones are recommended for the spatial audio experience.
 The distributed build requires WebGPU. If the browser or device cannot provide a WebGPU adapter, the start menu shows an explicit warning and the simulation remains disabled.
@@ -65,6 +66,8 @@ src/facade-system.js    Procedural building facade generation
 src/textures.js         Procedural canvas/texture generators (asphalt, metal, wood, PBR, signs)
 src/audio-engine.js     Singleton procedural AudioEngine, SFX, drone, arpeggiator, and spatial audio
 src/hud-controller.js    HUD onboarding and simulation settings
+vendor/                 Vendored runtime dependencies (three.js WebGPU build + addons, cannon.js)
+tools/smoke-boot.mjs    Headless boot smoke test (module graph, vendoring, WebGPU fallback path)
 ```
 
 ## Settings
@@ -78,4 +81,15 @@ Music, sound effects, ambience, mouse sensitivity, and the selected graphics mod
 
 ## Development notes
 
-There is no build step or package installation required. Most game logic currently lives in `index.html`, while reusable systems are organized under `src/`. External library versions are pinned in the import map and CDN script URL.
+There is no build step or package installation required. Most game logic currently lives in `index.html`, while reusable systems are organized under `src/`. External library versions are pinned by vendoring them under `vendor/` (the import map points at local files; no CDN is involved at runtime).
+
+Automated checks:
+
+```bash
+npm test        # unit tests (node --test, no browser needed)
+npm run smoke   # headless boot smoke test — requires playwright + chromium
+                # (`npx playwright install chromium`); verifies zero JS errors,
+                # zero missing resources, and the no-WebGPU recovery panel
+```
+
+The manual pre-presentation GPU checklist lives in `bugs-remediation-plan.md` (§15).

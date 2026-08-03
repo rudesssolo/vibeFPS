@@ -94,25 +94,81 @@
   left: 50%;
   bottom: 22px;
   transform: translateX(-50%);
-  width: min(720px, 88vw);
-  padding: 13px 18px 12px;
+  width: min(980px, 94vw);
+  padding: 15px 20px 14px;
   display: grid;
-  grid-template-columns: auto auto repeat(3, minmax(0, 1fr)) auto;
+  /* Riga 1: titolo · qualità · reset. Riga 2: i 4 slider a tutta larghezza
+     (ognuno ~220px — review demo: prima erano troppo corti). */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   align-items: center;
-  gap: 18px;
+  gap: 12px 16px;
   background: rgba(3,9,16,.72);
   border: 1px solid rgba(159,239,246,.18);
   backdrop-filter: blur(12px);
   z-index: 3;
 }
-.settings-title { color: rgba(200,244,248,.5); font: 800 9px ui-monospace, monospace; letter-spacing: 1.8px; white-space: nowrap; }
+.settings-title { grid-column: 1 / 3; grid-row: 1; color: rgba(200,244,248,.5); font: 800 10px ui-monospace, monospace; letter-spacing: 1.8px; white-space: nowrap; }
+/* L1: wrapper dei due toggle (qualità AUTO/ULTRA + lingua IT/EN) nella cella 3. */
+.panel-toggles { grid-column: 3 / 4; grid-row: 1; display: flex; gap: 14px; justify-self: center; }
+.reset-level { grid-column: 4 / 5; grid-row: 1; justify-self: end; }
 .quality-toggle { display: flex; gap: 4px; }
-.quality-toggle button { padding: 6px 10px; color: rgba(221,249,252,.55); background: rgba(255,255,255,.035); border: 1px solid rgba(156,238,246,.15); font: 800 9px ui-monospace, monospace; cursor: pointer; }
+.quality-toggle button { padding: 8px 12px; color: rgba(221,249,252,.55); background: rgba(255,255,255,.035); border: 1px solid rgba(156,238,246,.15); font: 800 10px ui-monospace, monospace; cursor: pointer; }
 .quality-toggle button.selected { color: #eaffff; border-color: rgba(119,246,255,.7); background: rgba(0,229,255,.1); box-shadow: inset 0 0 12px rgba(0,229,255,.08); }
-.reset-level { padding: 6px 10px; color: rgba(255,213,147,.82); background: rgba(255,173,76,.06); border: 1px solid rgba(255,193,105,.28); font: 800 9px ui-monospace, monospace; letter-spacing: .7px; cursor: pointer; white-space: nowrap; }
+.reset-level { padding: 8px 12px; color: rgba(255,213,147,.82); background: rgba(255,173,76,.06); border: 1px solid rgba(255,193,105,.28); font: 800 10px ui-monospace, monospace; letter-spacing: .7px; cursor: pointer; white-space: nowrap; }
 .reset-level:hover { color: #fff1cf; border-color: rgba(255,205,126,.8); background: rgba(255,173,76,.14); box-shadow: 0 0 14px rgba(255,173,76,.12); }
-.settings-panel label { display: grid; grid-template-columns: auto 1fr; gap: 7px; align-items: center; color: rgba(213,245,248,.55); font: 700 8px ui-monospace, monospace; letter-spacing: 1px; }
-.settings-panel input { width: 100%; accent-color: #8df7ff; }
+/* Slider: etichetta sopra, controllo sotto a tutta larghezza. I range nativi
+   erano troppo piccoli da usare (review demo) — traccia e thumb custom. */
+.settings-panel label { grid-row: 2; display: grid; grid-template-columns: 1fr; gap: 6px; align-items: center; color: rgba(213,245,248,.62); font: 700 9px ui-monospace, monospace; letter-spacing: 1.4px; }
+.settings-panel input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.settings-panel input[type="range"]::-webkit-slider-runnable-track {
+  height: 5px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, rgba(0,229,255,.42), rgba(119,246,255,.14));
+  box-shadow: inset 0 1px 2px rgba(0,0,0,.45);
+}
+.settings-panel input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: #a8f4ff;
+  border: 1px solid rgba(8,26,36,.65);
+  box-shadow: 0 0 9px rgba(0,229,255,.6);
+}
+.settings-panel input[type="range"]::-moz-range-track {
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(119,246,255,.2);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,.45);
+}
+.settings-panel input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 1px solid rgba(8,26,36,.65);
+  border-radius: 50%;
+  background: #a8f4ff;
+  box-shadow: 0 0 9px rgba(0,229,255,.6);
+}
+
+/* Sotto i 1100px: intestazione, poi qualità/reset, poi gli slider 2×2 —
+   mai schiacciati sotto una dimensione utilizzabile. */
+@media (max-width: 1100px) {
+  .settings-panel { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 10px; }
+  .settings-title { grid-column: 1 / -1; grid-row: 1; }
+  .panel-toggles { grid-column: 1 / 2; grid-row: 2; justify-self: start; }
+  .reset-level { grid-column: 2 / 3; grid-row: 2; justify-self: end; }
+  .settings-panel label { grid-row: auto; }
+}
 
 @media (max-width: 900px) {
   .mission-card { width: min(58vw, 440px); }
@@ -121,5 +177,4 @@
   #radar { width: 175px; height: 175px; }
   .vitals { width: 300px; }
   .weapon-hud { width: 300px; }
-  .settings-panel { grid-template-columns: auto auto; row-gap: 8px; }
 }

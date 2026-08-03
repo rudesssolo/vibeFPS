@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="it">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -272,8 +272,8 @@
   <div id="crosshair"><i class="ch top"></i><i class="ch right"></i><i class="ch bottom"></i><i class="ch left"></i><i class="cross-dot"></i></div>
 
   <div id="hitmarker"><i></i><i></i><i></i><i></i></div>
-  <div id="wave-banner"><strong>ONDATA 01</strong><span>CONTATTI OSTILI RILEVATI</span></div>
-  <div id="score-pop">+100 NEUTRALIZZATO</div>
+  <div id="wave-banner"><strong>WAVE 01</strong><span>HOSTILE CONTACTS DETECTED</span></div>
+  <div id="score-pop">+100 SENTINEL DOWN</div>
   <div id="damage-vignette"></div>
   <div id="target-layer"></div>
 
@@ -282,8 +282,8 @@
       <div>
         <div class="sector">NIGHT//SHIFT <span style="color:rgba(255,255,255,.28)">·</span> SECTOR 07</div>
         <div class="mission-card hud-panel">
-          <div class="micro-label">OBIETTIVO ATTIVO <span id="wave-label" style="float:right;color:var(--pink)">ONDATA 01</span></div>
-          <div class="mission-line"><i class="mission-pip"></i><span id="objective-text">NEUTRALIZZA I DRONI · 0/5</span></div>
+          <div class="micro-label"><span data-i18n="mission.label">ACTIVE OBJECTIVE</span> <span id="wave-label" style="float:right;color:var(--pink)">WAVE 01</span></div>
+          <div class="mission-line"><i class="mission-pip"></i><span id="objective-text">NEUTRALIZE THE DRONES · 0/5</span></div>
           <div class="mission-progress"><i id="mission-progress-fill"></i></div>
         </div>
       </div>
@@ -298,12 +298,12 @@
 
     <div class="radar-wrap"><div class="radar-tag">PROXIMITY // 20M</div><canvas id="radar" width="440" height="440"></canvas></div>
     <div class="vitals">
-      <div class="vital-row"><span class="vital-name">VITA</span><span class="bar"><i id="health-fill"></i></span><b id="health-value" class="vital-value">100</b></div>
-      <div class="vital-row"><span class="vital-name">SCUDO</span><span class="bar"><i id="shield-fill"></i></span><b id="shield-value" class="vital-value">075</b></div>
-      <div class="vital-row"><span class="vital-name">ENERGIA</span><span class="bar"><i id="stamina-fill"></i></span><b id="stamina-value" class="vital-value">100</b></div>
+      <div class="vital-row"><span class="vital-name" data-i18n="vitals.health">HEALTH</span><span class="bar"><i id="health-fill"></i></span><b id="health-value" class="vital-value">100</b></div>
+      <div class="vital-row"><span class="vital-name" data-i18n="vitals.shield">SHIELD</span><span class="bar"><i id="shield-fill"></i></span><b id="shield-value" class="vital-value">075</b></div>
+      <div class="vital-row"><span class="vital-name" data-i18n="vitals.stamina">STAMINA</span><span class="bar"><i id="stamina-fill"></i></span><b id="stamina-value" class="vital-value">100</b></div>
     </div>
     <div class="weapon-hud hud-panel">
-      <div id="reload-message" class="reload-message">RICARICA IN CORSO</div>
+      <div id="reload-message" class="reload-message" data-i18n="weapon.reloading">RELOADING</div>
       <div class="weapon-head"><span class="weapon-name">VX-9 PULSE</span><span class="fire-mode">AUTO // 5.56E</span></div>
       <div class="ammo-line"><span id="ammo">30</span><span class="reserve">/ <b id="reserve">180</b></span></div>
       <div id="ammo-cells" class="ammo-cells"></div>
@@ -312,8 +312,8 @@
     <div id="sound-state">AUDIO: IMMERSIVE · <b>M</b> MUTE</div>
   </div>
 
-  <div id="hud">
-    <kbd>WASD</kbd> MUOVI · <kbd>SHIFT</kbd> SCATTO · <kbd>SPAZIO</kbd> SALTA · <kbd>R</kbd> RICARICA · <kbd>MOUSE DX</kbd> MELEE · <kbd>M</kbd> AUDIO · <kbd>ESC</kbd> PAUSA
+  <div id="hud" data-i18n-html="hud.hintHtml">
+    <kbd>WASD</kbd> MOVE · <kbd>SHIFT</kbd> SPRINT · <kbd>SPACE</kbd> JUMP · <kbd>R</kbd> RELOAD · <kbd>RMB</kbd> MELEE · <kbd>M</kbd> AUDIO · <kbd>ESC</kbd> PAUSE
   </div>
 
   <div id="overlay">
@@ -321,39 +321,35 @@
     <div class="build">BUILD 2.6.08 // GPU INIT</div>
     <h1>VIBE&nbsp;FPS</h1>
     <div class="sub">NIGHT//SHIFT · REAL-TIME CYBERPUNK COMBAT SIMULATION</div>
-    <div class="brief">Entra nel poligono urbano, neutralizza le unità sentinella e sopravvivi a ondate sempre più aggressive. Audio 3D procedurale, materiali PBR, illuminazione dinamica e fisica in tempo reale.</div>
+    <div class="brief" data-i18n="overlay.brief.start">Enter the urban combat zone, neutralize the sentinel units and survive increasingly aggressive waves. Procedural 3D audio, PBR materials, dynamic lighting and real-time physics.</div>
     <div id="loading-panel" class="loading-panel" aria-live="polite">
       <div class="loading-head"><span id="loading-label">BOOT SEQUENCE</span><span id="loading-percent">0%</span></div>
       <div class="loading-track"><i id="loading-fill"></i></div>
-      <div id="loading-detail">IN ATTESA DEL LINK GRAFICO...</div>
+      <div id="loading-detail" data-i18n="loading.initial">WAITING FOR THE GRAPHICS LINK...</div>
     </div>
     <div id="gpu-warning" class="gpu-warning" role="alert" hidden></div>
-    <div class="cta">INIZIALIZZA SIMULAZIONE</div>
+    <div class="cta" data-i18n="overlay.cta.start">INITIALIZE SIMULATION</div>
     <div class="keys">
-      <kbd>WASD</kbd> muovi · <kbd>SHIFT</kbd> scatto · <kbd>SPAZIO</kbd> salta ·
-      <kbd>R</kbd> ricarica · mouse sx spara · mouse dx melee<br>
-      <span class="pad-hint">◆ CUFFIE CONSIGLIATE</span> · il suono si attiva entrando nella simulazione
+      <span data-i18n-html="overlay.keysHtml"><kbd>WASD</kbd> move · <kbd>SHIFT</kbd> sprint · <kbd>SPACE</kbd> jump · <kbd>R</kbd> reload · LMB fire · RMB melee</span><br>
+      <span class="pad-hint" data-i18n="overlay.headphones">◆ HEADPHONES RECOMMENDED</span> <span data-i18n="overlay.audioNote">· audio engages when entering the simulation</span><span id="overlay-sound-state"></span>
     </div>
   </div>
 
+  <!-- D1: dipendenze vendored in ./vendor (three.js 0.184.0 + cannon.js 0.6.2).
+       La demo è completamente offline-capable: nessuna chiamata CDN, nessun
+       rischio di rete o SRI il giorno della presentazione. -->
   <script type="importmap">
   {
     "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.webgpu.js",
-      "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.webgpu.js",
-      "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.tsl.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/"
-    },
-    "integrity": {
-      "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.webgpu.js": "sha384-vatRh9vQy/B/ECoJSF7P/Jg9rF6KVuG/ovU+3Wp/BUaCcpR0DM+a4zCEbQ8Y/RFK",
-      "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.tsl.js": "sha384-dqftyqccaI6qYFdGtJtugSSe4YKncDgGHttpZJr+lR/vSq18VR5ubqlzEHdGLdJ1"
+      "three": "./vendor/three/build/three.webgpu.js",
+      "three/webgpu": "./vendor/three/build/three.webgpu.js",
+      "three/tsl": "./vendor/three/build/three.tsl.js",
+      "three/addons/": "./vendor/three/examples/jsm/"
     }
   }
   </script>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"
-          integrity="sha384-I+vlbhtggPtDgOcGQ3rwhQl9JEO7qonTByw9baD7Vlc+1bJdn2ucktJAsbo3nmGA"
-          crossorigin="anonymous"></script>
+  <script src="./vendor/cannon/cannon.min.js"></script>
 
   <script type="module">
   import * as THREE from 'three/webgpu';
@@ -373,6 +369,16 @@
   import { makeRng } from './src/rng.js';
   import { constrainBodyToSquare } from './src/player-collision.js';
   import { getStoredSensitivity, storeSensitivity } from './src/config.js';
+  import { t, getLanguage, setLanguage } from './src/i18n.js';
+
+  // L1: applica subito la lingua persistita (default inglese) ai testi statici
+  // marcati con data-i18n / data-i18n-html, prima ancora del boot grafico.
+  function applyStaticStrings() {
+    for (const el of document.querySelectorAll('[data-i18n]')) el.textContent = t(el.dataset.i18n);
+    for (const el of document.querySelectorAll('[data-i18n-html]')) el.innerHTML = t(el.dataset.i18nHtml);
+  }
+  document.documentElement.lang = getLanguage();
+  applyStaticStrings();
   import {
     canvasToNormalTexture, makePbrMaps, makeMetalPanelTexture, makeWoodTexture,
     makeBrushedCanvas, makeAsphaltCanvas, makeHazardCanvas, makeKoreanSignCanvas
@@ -415,7 +421,7 @@
     return { nextFrame, update, showModal, hideModal, finishBoot };
   })();
 
-  function showWebGPUUnavailable(message = 'Questo dispositivo non espone WebGPU o non riesce a creare un device compatibile.') {
+  function showWebGPUUnavailable(message = t('gpu.default')) {
     const overlay = document.getElementById('overlay');
     const warning = document.getElementById('gpu-warning');
     const title = overlay?.querySelector('h1');
@@ -430,16 +436,16 @@
     overlay.classList.remove('is-loading');
     overlay.classList.add('ready', 'gpu-unavailable');
     overlay.style.display = 'flex';
-    if (title) title.textContent = 'WEBGPU RICHIESTO';
-    if (subtitle) subtitle.textContent = 'LINK GRAFICO NON DISPONIBILE · SIMULAZIONE BLOCCATA';
-    if (brief) brief.textContent = 'La simulazione usa esclusivamente WebGPU. Aggiorna il browser o abilita WebGPU sul dispositivo per continuare.';
+    if (title) title.textContent = t('gpu.title');
+    if (subtitle) subtitle.textContent = t('gpu.sub');
+    if (brief) brief.textContent = t('gpu.brief');
     if (build) build.textContent = 'BUILD 2.6.08 // WEBGPU OFFLINE';
     if (warning) {
       warning.hidden = false;
-      warning.textContent = `AVVISO WEBGPU · ${message}`;
+      warning.textContent = `${t('gpu.warning')} · ${message}`;
     }
     if (cta) {
-      cta.textContent = 'WEBGPU NON DISPONIBILE';
+      cta.textContent = t('gpu.cta');
       cta.setAttribute('aria-disabled', 'true');
       cta.tabIndex = -1;
     }
@@ -552,7 +558,8 @@
   /* ============================================================
      2. RENDERER, SCENA, CAMERA E POST-PROCESSING
      ============================================================ */
-  const renderer = new THREE.WebGPURenderer({ antialias: true });
+  // G2: forza la GPU dedicata su sistemi dual-GPU (laptop), se presente.
+  const renderer = new THREE.WebGPURenderer({ antialias: true, powerPreference: 'high-performance' });
   // Three.js configures an alternate backend internally. Nulling the private
   // fallback hook is intentional here: this application is WebGPU-only and a
   // missing adapter must reach the menu warning instead of silently changing
@@ -580,10 +587,10 @@
     const subtitle = document.querySelector('#overlay .sub');
     // C3: rilascia il pointer lock per rendere l'overlay di recovery interagibile.
     document.exitPointerLock?.();
-    if (build) build.textContent = 'RENDERER // OFFLINE';
+    if (build) build.textContent = t('fail.build');
     if (cta) cta.textContent = message;
-    if (title) title.textContent = 'RENDERER OFFLINE';
-    if (subtitle) subtitle.textContent = 'STATO DI SICUREZZA · LA SIMULAZIONE NON PUÒ CONTINUARE';
+    if (title) title.textContent = t('fail.title');
+    if (subtitle) subtitle.textContent = t('fail.sub');
     // Un errore GPU non deve lasciare un canvas congelato senza spiegazione:
     // mostra sempre il pannello di recovery anche se il gioco era già avviato.
     overlay.classList.remove('is-loading');
@@ -593,21 +600,21 @@
   renderer.onDeviceLost = () => {
     renderer.setAnimationLoop(null);
     detachRendererCanvas();
-    showWebGPUUnavailable('Il device WebGPU è stato perso. Ricarica la pagina dopo aver verificato il driver grafico.');
+    showWebGPUUnavailable(t('gpu.lost'));
   };
   try {
     await renderer.init();
   } catch (error) {
     console.warn('VIBE WebGPU unavailable', error);
     detachRendererCanvas();
-    showWebGPUUnavailable('Il browser non ha fornito un adapter/device WebGPU utilizzabile.');
+    showWebGPUUnavailable(t('gpu.noAdapter'));
     return;
   }
   loadingUI.update(.24, 'GPU ONLINE', 'ALLOCAZIONE DEL DEVICE E DEL CANVAS COMPLETATA');
 
   if (renderer.coordinateSystem !== THREE.WebGPUCoordinateSystem) {
     detachRendererCanvas();
-    showWebGPUUnavailable('Il renderer attivo non è WebGPU.');
+    showWebGPUUnavailable(t('gpu.notWebgpu'));
     return;
   }
   document.body.appendChild(renderer.domElement);
@@ -889,7 +896,7 @@
   }
 
   // Strato PBR sopra la riflessione: evita l'effetto specchio e restituisce asfalto bagnato credibile.
-  const asphaltCanvas = makeAsphaltCanvas();
+  const asphaltCanvas = makeAsphaltCanvas();   // 1024 di default (review demo)
   const asphaltMap = new THREE.CanvasTexture(asphaltCanvas);
   asphaltMap.colorSpace = THREE.SRGBColorSpace;
   asphaltMap.wrapS = asphaltMap.wrapT = THREE.RepeatWrapping;
@@ -897,7 +904,7 @@
   asphaltMap.repeat.set(asphaltRepeat, asphaltRepeat);
   asphaltMap.anisotropy = aniso;
   const asphaltNormal = canvasToNormalTexture(asphaltCanvas, 2.2, [asphaltRepeat, asphaltRepeat], aniso);
-  const asphaltPbr = makePbrMaps(asphaltCanvas, [asphaltRepeat, asphaltRepeat], aniso);
+  const asphaltPbr = makePbrMaps(asphaltCanvas, [asphaltRepeat, asphaltRepeat], aniso, 1024);
   const asphaltMaterialOptions = {
     map: asphaltMap, normalMap: asphaltNormal,
     roughnessMap: asphaltPbr.roughnessMap, metalnessMap: asphaltPbr.metalnessMap,
@@ -989,8 +996,12 @@
     { size: [CONFIG.wallThick, CONFIG.wallHeight, CONFIG.arenaSize], pos: [-CONFIG.arenaSize / 2, CONFIG.wallHeight / 2, 0] },  // Ovest
     { size: [CONFIG.wallThick, CONFIG.wallHeight, CONFIG.arenaSize], pos: [ CONFIG.arenaSize / 2, CONFIG.wallHeight / 2, 0] }   // Est
   ];
-  const baseWallCanvas = makeMetalPanelTexture();
+  const baseWallCanvas = makeMetalPanelTexture();   // 1024 di default (review)
   const baseWallPbr = makePbrMaps(baseWallCanvas, [1, 1], aniso);
+  // La normal map a 1024 è condivisa tra i 4 muri: la conversione height→normal
+  // (~1M pixel) gira UNA sola volta al boot; ogni muro clona la texture e
+  // imposta solo il proprio repeat.
+  const baseWallNormal = canvasToNormalTexture(baseWallCanvas, 1.1, [1, 1], aniso);
   for (const w of wallConfigs) {
     const rx = w.size[0] > w.size[2] ? 9 : 4;
     const tex = new THREE.CanvasTexture(baseWallCanvas);
@@ -998,7 +1009,9 @@
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     tex.repeat.set(rx, 2);
     tex.anisotropy = aniso;
-    const nrm = canvasToNormalTexture(baseWallCanvas, 1.1, [rx, 2], aniso);
+    const nrm = baseWallNormal.clone();
+    nrm.repeat.set(rx, 2);
+    nrm.needsUpdate = true;
     const roughnessMap = baseWallPbr.roughnessMap.clone();
     const metalnessMap = baseWallPbr.metalnessMap.clone();
     roughnessMap.repeat.set(rx, 2);
@@ -1019,15 +1032,18 @@
     mesh.position.set(...w.pos);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
-    // In prossimità del muro la priorità è una faccia interna sempre leggibile:
-    // questa modalità sicura evita che una combinazione di illuminazione, fog e
-    // precisione del depth buffer trasformi il pannello in una superficie nera.
-    const edgeSafeMaterial = new THREE.MeshBasicMaterial({
-      // Alcuni driver WebGPU trattano una CanvasTexture molto vicina al near
-      // plane come valore nero: la faccia interna usa quindi un colore piatto.
-      color: 0x2f6488,
-      side: THREE.DoubleSide,
-      fog: true
+    // In prossimità del muro la priorità è una faccia interna sempre leggibile,
+    // ma SENZA il pop cromatico della vecchia variante a colore piatto blu
+    // (review demo: "le pareti cambiano colore avvicinandosi"). Il materiale di
+    // sicurezza condivide mappe e tinta con quello lit e alza solo l'emissiva
+    // come assicurazione contro il caso limite della faccia in ombra: lo swap
+    // è visivamente impercettibile.
+    const edgeSafeMaterial = new THREE.MeshStandardMaterial({
+      map: tex, normalMap: nrm, roughnessMap, metalnessMap,
+      color: 0x8699ad,
+      roughness: .66, metalness: .24, envMapIntensity: 1.05,
+      emissive: 0x1d3a54, emissiveIntensity: .92,
+      side: THREE.DoubleSide
     });
     wallSurfaces.push({ mesh, litMaterial: mat, edgeSafeMaterial });
     addStaticBox(w.pos[0], w.pos[1], w.pos[2], w.size[0], w.size[1], w.size[2], mesh);
@@ -1242,6 +1258,9 @@
     }
   })();
 
+  // G3: insegne neon con flicker discreto (fase e velocità per insegna).
+  const flickerSigns = [];
+
   // Insegna neon "VIBE" sul muro ovest
   (function createSign() {
     const sw = 256, sh = 128;
@@ -1268,6 +1287,7 @@
     sign.position.set(-19.35, 3.5, -4);
     sign.rotation.y = Math.PI / 2;
     scene.add(sign);
+    flickerSigns.push({ material: sign.material, phase: 0, speed: 6.1 });
 
     const frame = new THREE.Mesh(
       new THREE.BoxGeometry(0.1, 2.9, 5.4),
@@ -1323,12 +1343,17 @@
     sign.position.set(pos[0], pos[1], pos[2]);
     sign.lookAt(pos[0] + normal[0], pos[1] + normal[1], pos[2] + normal[2]);
     scene.add(sign);
+    flickerSigns.push({ material: sign.material, phase: Math.random() * Math.PI * 2, speed: 4.5 + Math.random() * 3.5 });
 
     const frame = new THREE.Mesh(
       new THREE.BoxGeometry(w + 0.3, h + 0.3, 0.12),
       new THREE.MeshStandardMaterial({ color: 0x0a0d13, metalness: 0.8, roughness: 0.4 })
     );
     frame.position.set(pos[0] - normal[0] * 0.12, pos[1] - normal[1] * 0.12, pos[2] - normal[2] * 0.12);
+    // Il telaio deve seguire l'orientamento dell'insegna: senza questa rotazione
+    // il box resta sottile solo lungo Z, quindi sui muri est/ovest (normale ±X)
+    // appariva PERPENDICOLARE alla parete invece che aderente (bug di review).
+    frame.lookAt(pos[0] + normal[0], pos[1] + normal[1], pos[2] + normal[2]);
     scene.add(frame);
   }
 
@@ -1615,7 +1640,11 @@
   scene.add(camera);   // necessario affinché arma e luce annesse vengano renderizzate
 
   let gunRecoil = 0;   // rinculo visivo dell'arma
+  let reloadDip = 0;   // G5: abbassamento dell'arma durante la ricarica
   let crosshairFireTimer = 0;
+  // N7: stato precedente per il dirty-check delle classi DOM nel frame loop.
+  let hudSprinting = false;
+  let crosshairFiring = false;
 
   /* ============================================================
      7B. STATO DI GIOCO, HUD E MOTORE AUDIO PROCEDURALE
@@ -1646,10 +1675,24 @@
   const hudController = new HudController();
   hudController.maxShield = CONFIG.maxShield;
   const audio = AudioEngine.getInstance(muted => hudController.setMuted(muted));
+  // N8: l'HUD riflette subito il mute persistito (prima restava su IMMERSIVE).
+  hudController.setMuted(audio.muted);
 
   function restartClass(el,name){el.classList.remove(name);void el.offsetWidth;el.classList.add(name);}
+  // N9/A2: pan stereo coerente con la posizione a schermo della sorgente sonora
+  // (esplosioni e impatti seguono lo stesso schema di enemyShot/telegraph).
+  function panForWorld(position) {
+    if (!position
+      || !Number.isFinite(position.x)
+      || !Number.isFinite(position.y)
+      || !Number.isFinite(position.z)) return 0;
+    panProjection.set(position.x, position.y, position.z).project(camera);
+    if (!Number.isFinite(panProjection.x)) return 0;
+    return Math.max(-.85, Math.min(.85, panProjection.x));
+  }
+  const panProjection = new THREE.Vector3();
   function toast(message){hudController.toast(message);}
-  function showWave(title=`ONDATA ${String(gameState.wave).padStart(2,'0')}`,subtitle='CONTATTI OSTILI RILEVATI'){
+  function showWave(title=t('hud.wave',{wave:String(gameState.wave).padStart(2,'0')}),subtitle=t('wave.subtitle')){
     waveBannerEl.querySelector('strong').textContent=title;waveBannerEl.querySelector('span').textContent=subtitle;restartClass(waveBannerEl,'show');audio.ui();
   }
   function showHitmarker(kill=false){hitmarkerEl.classList.toggle('kill',kill);restartClass(hitmarkerEl,'active');audio.hit(kill);}
@@ -1668,9 +1711,35 @@
     targetLayerEl.style.display = visible ? 'block' : 'none';
   }
 
+  // L1: copy dell'overlay di pausa/reset centralizzato, così il cambio lingua
+  // runtime può rigenerarlo senza duplicare stringhe nei call site.
+  function applyOverlayStateCopy(resetVariant = false) {
+    if (!gameState.started) return; // start: coperto dai data-i18n statici
+    overlayEl.querySelector('h1').innerHTML = t(resetVariant ? 'overlay.title.reset' : 'overlay.title.paused');
+    overlayEl.querySelector('.sub').textContent = t(resetVariant ? 'overlay.sub.reset' : 'overlay.sub.paused');
+    overlayEl.querySelector('.brief').textContent = t(resetVariant ? 'overlay.brief.reset' : 'overlay.brief.paused', {
+      wave: String(gameState.wave).padStart(2, '0'),
+      score: String(Math.round(gameState.score)).padStart(6, '0')
+    });
+    overlayEl.querySelector('.cta').textContent = t('overlay.cta.resume');
+  }
+
+  // L1: cambio lingua runtime — testi statici (data-i18n), HUD dinamico,
+  // selezione nel pannello settings e copy dell'overlay di pausa se visibile.
+  function applyLanguage(lang) {
+    const next = setLanguage(lang);
+    document.documentElement.lang = next;
+    applyStaticStrings();
+    hudController.invalidateCache();
+    updateHUD();
+    hudController.setMuted(audio.muted);
+    settingsPanelRef?.syncLanguage?.(next);
+    if (!locked) applyOverlayStateCopy(false);
+  }
+
   function startReload(){
     if(!gameState.started||gameState.reloading||gameState.ammo===CONFIG.magazineSize||gameState.reserve<=0||gameState.dead)return;
-    gameState.reloading=true;gameState.reloadTimer=CONFIG.reloadTime;audio.reload();toast('<b>VX-9</b> · CAMBIO CARICATORE');updateHUD();
+    gameState.reloading=true;gameState.reloadTimer=CONFIG.reloadTime;audio.reload();toast(`<b>VX-9</b> · ${t('toast.reload')}`);updateHUD();
   }
   function completeReload(){
     const needed=CONFIG.magazineSize-gameState.ammo,taken=Math.min(needed,gameState.reserve);gameState.ammo+=taken;gameState.reserve-=taken;gameState.reloading=false;audio.ui();updateHUD();
@@ -1706,7 +1775,7 @@
       renderPipeline.setQuality(profile);
       facadeSystem.setQuality(profile);
       explosionSystem.setQuality(profile);
-      if (!initial) toast(`<b>RENDER</b> · ${profile.name}`);
+      if (!initial) toast(`<b>${t('toast.renderLabel')}</b> · ${profile.name}`);
     },
     onStatus(status) { hudController.setGraphicsStatus(`${rendererBackend} · ${status}`); },
     onTransition(state) {
@@ -1723,8 +1792,10 @@
   loadingUI.update(.92, 'FINAL CHECK', 'SINCRONIZZAZIONE HUD E PROFILI GRAFICI...');
   const settingsPanelRef = hudController.mountSettings(overlayEl, {
     qualityMode: graphicsManager.mode,
+    language: getLanguage(),
     mix: audio.mix,
     sensitivity: mouseSensitivity,
+    onLanguage: lang => applyLanguage(lang),
     onQuality: mode => {
       graphicsManager.setMode(mode);
       // Riallinea la selezione visiva allo stato reale (setMode può ignorare la
@@ -1782,8 +1853,9 @@
   function spawnWave(announce=true){
     const count=Math.min(4+gameState.wave,9);gameState.waveTargets=count;gameState.waveKills=0;gameState.waveDelay=0;
     aliveEnemyCount=droneSystem.spawnWave(gameState.wave,count);
-    if(announce)showWave();
-    toast(`<b>SCANNER</b> · ${count} FIRME OSTILI ACQUISITE`);updateHUD();
+    // A3: stinger audio distintivo solo per le nuove ondate annunciate.
+    if(announce){showWave();audio.waveStart();}
+    toast(`<b>SCANNER</b> · ${t('toast.scanner',{count})}`);updateHUD();
   }
 
   function spawnHostileShot(drone){
@@ -1831,7 +1903,7 @@
         if (amount > 0) {
           gameState.reserve += amount;
           audio.pickup();
-          toast(`<b>RIFORNIMENTO</b> · +${amount} MUNIZIONI`);
+          toast(`<b>${t('toast.resupply')}</b> · ${t('toast.ammo',{amount})}`);
           updateHUD();
           scene.remove(pickup.mesh);
           ammoPickups.splice(i, 1);
@@ -1850,20 +1922,22 @@
     ammoPickups.length = 0;
   }
 
-  function damageDrone(drone,amount,position){
+  // N3: countHit distingue i colpi d'arma da fuoco dal melee: l'accuracy HUD
+  // è hits/shots e il melee non consuma un colpo (prima poteva superare il 100%).
+  function damageDrone(drone,amount,position,countHit=true){
     if(!drone.alive)return;
-    const result=droneSystem.applyDamage(drone,amount);gameState.hits++;gameState.comboTimer=CONFIG.comboWindow;showHitmarker(result.killed);
+    const result=droneSystem.applyDamage(drone,amount);if(countHit)gameState.hits++;gameState.comboTimer=CONFIG.comboWindow;showHitmarker(result.killed);
+    const impactPosition = result.position || position || drone.group.position;
     if(result.killed){
       gameState.waveKills++;gameState.combo=Math.min(CONFIG.comboMax,gameState.combo+CONFIG.comboKillStep);
-      const earned=Math.round(CONFIG.killScore*gameState.combo);gameState.score+=earned;showScore(earned,'SENTINEL DOWN');audio.explode();
-      const impactPosition = result.position || position || drone.group.position;
+      const earned=Math.round(CONFIG.killScore*gameState.combo);gameState.score+=earned;showScore(earned,t('score.kill'));audio.explode(panForWorld(impactPosition));
       const healed = Math.min(CONFIG.killHeal, Math.max(0, CONFIG.maxHealth - gameState.health));
       gameState.health += healed;
       spawnAmmoDrop(impactPosition);
       explosionSystem.explode(impactPosition,drone.id%2?0xff4f9f:0x66efff);
-      toast(`<b>UNITÀ ${String(drone.id).padStart(2,'0')}</b> · NEUTRALIZZATA`);
-      if (healed > 0) toast(`<b>RECOVERY</b> · VITA +${healed}`);
-    }else{gameState.score+=Math.round(CONFIG.impactScore*gameState.combo);showScore(Math.round(CONFIG.impactScore*gameState.combo),'IMPATTO');audio.playImpact();}
+      toast(`<b>${t('toast.unit',{id:String(drone.id).padStart(2,'0')})}</b> · ${t('toast.neutralized')}`);
+      if (healed > 0) toast(`<b>RECOVERY</b> · ${t('toast.heal',{amount:healed})}`);
+    }else{gameState.score+=Math.round(CONFIG.impactScore*gameState.combo);showScore(Math.round(CONFIG.impactScore*gameState.combo),t('score.impact'));audio.playImpact({pan:panForWorld(impactPosition)});}
     updateHUD();
   }
 
@@ -1871,12 +1945,12 @@
     if(gameState.dead)return;
     let remaining=amount;if(gameState.shield>0){const absorbed=Math.min(gameState.shield,remaining);gameState.shield-=absorbed;remaining-=absorbed;}
     gameState.health=Math.max(0,gameState.health-remaining);gameState.lastDamage=elapsed;audio.hurt();restartClass(damageVignetteEl,'flash');cameraDamageKick=Math.min(.16,cameraDamageKick+.055);
-    if(gameState.health<=0){gameState.dead=true;gameState.respawnTimer=2.2;gameState.combo=1;showWave('LINK LOST','RICALIBRAZIONE NEURALE IN CORSO');toast('<b>AVVISO</b> · INTEGRITÀ CRITICA');}
+    if(gameState.health<=0){gameState.dead=true;gameState.respawnTimer=2.2;gameState.combo=1;showWave(t('wave.lost.title'),t('wave.lost.sub'));toast(`<b>${t('toast.warning')}</b> · ${t('toast.critical')}`);}
     updateHUD();
   }
 
   function respawnPlayer(){
-    gameState.health=CONFIG.maxHealth;gameState.shield=CONFIG.maxShield;gameState.stamina=CONFIG.maxStamina;gameState.dead=false;resetPlayerBody();showWave('LINK RESTORED','SISTEMI DI COMBATTIMENTO OPERATIVI');
+    gameState.health=CONFIG.maxHealth;gameState.shield=CONFIG.maxShield;gameState.stamina=CONFIG.maxStamina;gameState.dead=false;resetPlayerBody();showWave(t('wave.restored.title'),t('wave.restored.sub'));
   }
 
   function updateDrones(delta,time){
@@ -1923,12 +1997,26 @@
     if(gameState.reloading){gameState.reloadTimer-=delta;if(gameState.reloadTimer<=0)completeReload();}
     if(gameState.comboTimer>0){gameState.comboTimer-=delta;if(gameState.comboTimer<=0)gameState.combo=1;}
     if(time-gameState.lastDamage>CONFIG.shieldRegenDelay&&gameState.shield<CONFIG.maxShield&&!gameState.dead)gameState.shield=Math.min(CONFIG.maxShield,gameState.shield+delta*CONFIG.shieldRegen);
-    if(gameState.waveDelay>0){gameState.waveDelay-=delta;if(gameState.waveDelay<=0){gameState.wave++;gameState.shield=Math.min(CONFIG.maxShield,gameState.shield+CONFIG.waveBonusShield);gameState.reserve=Math.min(CONFIG.reserveAmmo,gameState.reserve+CONFIG.waveBonusAmmo);toast(`<b>ONDATA ${String(gameState.wave).padStart(2,'0')}</b> · SCUDO +${CONFIG.waveBonusShield} · MUNIZIONI +${CONFIG.waveBonusAmmo}`);spawnWave(true);}}
+    if(gameState.waveDelay>0){gameState.waveDelay-=delta;if(gameState.waveDelay<=0){gameState.wave++;gameState.shield=Math.min(CONFIG.maxShield,gameState.shield+CONFIG.waveBonusShield);gameState.reserve=Math.min(CONFIG.reserveAmmo,gameState.reserve+CONFIG.waveBonusAmmo);toast(`<b>${t('hud.wave',{wave:String(gameState.wave).padStart(2,'0')})}</b> · ${t('toast.waveBonus',{shield:CONFIG.waveBonusShield,ammo:CONFIG.waveBonusAmmo})}`);spawnWave(true);}}
     if(gameState.dead){gameState.respawnTimer-=delta;if(gameState.respawnTimer<=0)respawnPlayer();}
     updateHUD();
   }
 
   spawnWave(false);
+  loadingUI.update(.94, 'SHADER WARMUP', 'PRECOMPILAZIONE DELLE PIPELINE GRAFICHE...');
+  // G1: precompila le pipeline WebGPU di tutti i materiali in scena e della
+  // catena di post-processing durante il loading, così il primo frame, il
+  // primo colpo e la prima esplosione non pagano la compilazione shader.
+  try {
+    await renderer.compileAsync(scene, camera);
+  } catch (error) {
+    console.warn('VIBE shader warmup skipped', error);
+  }
+  try {
+    renderPipeline.render(0, 0);
+  } catch (error) {
+    console.warn('VIBE pipeline warmup skipped', error);
+  }
   loadingUI.update(.96, 'BOOT COMPLETE', 'SINCRONIZZAZIONE FINALE DELLA SCENA...');
   loadingUI.finishBoot();
 
@@ -1967,7 +2055,7 @@
       syncHudVisibility();
       hudController.beginOnboardingFade();
       showWave();
-      toast('<b>MISSIONE</b> · AREA DI TEST ATTIVA');
+      toast(`<b>${t('toast.missionLabel')}</b> · ${t('toast.mission')}`);
       loadingUI.update(1, 'LINK ACTIVE', 'SIMULAZIONE OPERATIVA');
       await loadingUI.nextFrame();
       await new Promise(resolve => setTimeout(resolve, 180));
@@ -1982,8 +2070,13 @@
     if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
     if (e.repeat) return;
     keys[e.code] = true;
-    if (e.code === 'Space') jumpQueued = true;
-    if (e.code === 'KeyR') startReload();
+    // N2: niente input di gioco con il menu aperto o il round non attivo: il
+    // salto in coda e la ricarica partono solo a simulazione effettivamente
+    // in corso (prima un Space in pausa saltava al rientro, R ricaricava a
+    // simulazione congelata).
+    const gameplayInput = locked && gameState.started && !gameStartLoading;
+    if (e.code === 'Space' && gameplayInput) jumpQueued = true;
+    if (e.code === 'KeyR' && gameplayInput) startReload();
     if (e.code === 'KeyM') audio.toggle();
   });
   document.addEventListener('keyup', (e) => { keys[e.code] = false; });
@@ -2032,10 +2125,8 @@
     if(locked)hudController.beginOnboardingFade();
     if (!locked) clearPlayerInput();
     if (!locked && gameState.started) {
-      overlayEl.querySelector('h1').innerHTML = 'LINK&nbsp;PAUSED';
-      overlayEl.querySelector('.sub').textContent = 'SIMULAZIONE SOSPESA · STATO DI COMBATTIMENTO CONSERVATO';
-      overlayEl.querySelector('.brief').textContent = `ONDATA ${String(gameState.wave).padStart(2,'0')} · SCORE ${String(Math.round(gameState.score)).padStart(6,'0')} · Riprendi quando sei pronto: droni, fisica e progressione restano attivi.`;
-      overlayEl.querySelector('.cta').textContent = 'RIPRENDI SIMULAZIONE';
+      // N5: la pausa congela davvero la simulazione (B2) — il testo lo dichiara.
+      applyOverlayStateCopy(false);
     }
   });
 
@@ -2091,7 +2182,11 @@
     const onGround = !!hit;
     isGrounded = onGround;
     const onPad = onGround && hit.body === padBody;
-    if (onGround && !wasGrounded && lastVerticalVelocity < -2.2) audio.land(Math.min(1.5, Math.abs(lastVerticalVelocity) / 8));
+    if (onGround && !wasGrounded && lastVerticalVelocity < -2.2) {
+      audio.land(Math.min(1.5, Math.abs(lastVerticalVelocity) / 8));
+      // G4: la camera "incassa" l'atterraggio in proporzione alla velocità.
+      landingKick = Math.min(1, Math.abs(lastVerticalVelocity) / 11);
+    }
     wasGrounded = onGround;
 
     // 2) Movimento orizzontale (relativo alla direzione dello sguardo)
@@ -2157,8 +2252,8 @@
     gameState.shots++;
     fireCooldown = CONFIG.fireRate;
     audio.playShoot();
+    // N7: la classe 'firing' la applica il dirty-check nel loop (prossimo frame).
     crosshairFireTimer = .1;
-    crosshairEl.classList.add('firing');
     updateHUD();
     bulletDir.set(0, 0, -1).applyQuaternion(camera.quaternion);
     bulletOrigin.copy(camera.position).addScaledVector(bulletDir, 0.6);
@@ -2231,7 +2326,8 @@
     }
     if (closestDrone) {
       meleeImpact.copy(meleeOrigin).addScaledVector(meleeDirection, closestDistance);
-      damageDrone(closestDrone, CONFIG.meleeDamage, meleeImpact);
+      // N3: il melee non è un colpo esploso — non entra nel conteggio accuracy.
+      damageDrone(closestDrone, CONFIG.meleeDamage, meleeImpact, false);
     }
   }
 
@@ -2320,7 +2416,7 @@
         b.impactSet = true;
       }
 
-      if (b.hit) { explosionSystem.sparkBurst(new THREE.Vector3(b.impact.x,b.impact.y,b.impact.z),b.targetHit?0x72efff:0xffd19a,b.targetHit?14:9); if (!b.targetHit) audio.playImpact(); }
+      if (b.hit) { explosionSystem.sparkBurst(new THREE.Vector3(b.impact.x,b.impact.y,b.impact.z),b.targetHit?0x72efff:0xffd19a,b.targetHit?14:9); if (!b.targetHit) audio.playImpact({pan:panForWorld(b.impact)}); }
 
       if (b.hit || b.age >= CONFIG.bulletLifetime) {
         disposeBullet(b);
@@ -2389,6 +2485,7 @@
     yaw = 0;
     pitch = 0;
     cameraDamageKick = 0;
+    landingKick = 0;
     bobPhase = 0;
     isGrounded = false;
     nextFootstep = 0;
@@ -2403,14 +2500,9 @@
     updateHUD();
     syncHudVisibility();
     if (wasStarted) {
-      showWave('LEVEL RESET', 'SIMULAZIONE RIAVVIATA');
-      toast('<b>SISTEMA</b> · LIVELLO RESETTATO');
-      if (!locked) {
-        overlayEl.querySelector('h1').innerHTML = 'LEVEL RESET';
-        overlayEl.querySelector('.sub').textContent = 'SIMULAZIONE PRONTA · NUOVA RUN CONFIGURATA';
-        overlayEl.querySelector('.brief').textContent = 'ONDATA 01 · SCORE 000000 · Premi il pulsante per rientrare nel combattimento.';
-        overlayEl.querySelector('.cta').textContent = 'RIPRENDI SIMULAZIONE';
-      }
+      showWave(t('overlay.title.reset'), t('wave.reset.sub'));
+      toast(`<b>${t('toast.system')}</b> · ${t('toast.reset')}`);
+      if (!locked) applyOverlayStateCopy(true);
     }
   }
 
@@ -2425,6 +2517,7 @@
   let accumulator = 0;
   let elapsed = 0;
   let cameraDamageKick = 0;
+  let landingKick = 0;   // G4: impatto d'atterraggio sulla camera
   let radarTimer = 0;
   let fpsFrames = 0;
   let fpsTimer = 0;
@@ -2479,12 +2572,11 @@
       constrainPlayerToArena();
       sanitizeDynamicBodies();
 
-      // Fuoco continuo tenendo premuto il tasto
+      // Fuoco continuo tenendo premuto il tasto.
+      // N4: fireBullet gestisce da solo il cooldown (colpo, colpo a secco,
+      // ricarica); sovrascriverlo qui annullava la pausa del dry-fire.
       fireCooldown -= delta;
-      if (triggerDown && fireCooldown <= 0) {
-        fireBullet();
-        fireCooldown = CONFIG.fireRate;
-      }
+      if (triggerDown && fireCooldown <= 0) fireBullet();
 
       updateDrones(delta, elapsed);
       updateAmmoPickups(delta, elapsed);
@@ -2504,6 +2596,8 @@
     }
 
     explosionSystem.update(delta,camera);
+    // A1: mix attenuato con il menu di pausa aperto (dirty-check interno).
+    audio.setMenuDuck(!locked && gameState.started);
     audio.update({
       aliveEnemies:aliveEnemyCount,
       wave:gameState.wave,
@@ -2514,6 +2608,14 @@
     // Jump pad: pulsazione soft + rotazione freccia
     padGlowMat.emissiveIntensity = 0.7 + Math.sin(elapsed * 2.5) * 0.2;
     padArrow.rotation.y += delta * 1.5;
+
+    // G3: flicker delle insegne neon — battito luminoso lento più rari cali
+    // brevi. La mappa resta intatta: si modula solo il colore (moltiplicatore).
+    for (const neon of flickerSigns) {
+      const wave = Math.sin(elapsed * neon.speed + neon.phase) * Math.sin(elapsed * 1.73 + neon.phase * 2.31);
+      const dip = Math.sin(elapsed * 29.7 + neon.phase * 13.1) > .9975 ? .38 : 0;
+      neon.material.color.setScalar(Math.max(.52, .87 + wave * .13 - dip));
+    }
 
     // Cristallo centrale: fluttuazione e rotazione
     crystal.position.y = 1.5 + Math.sin(elapsed * 2) * 0.12;
@@ -2535,6 +2637,9 @@
     const bobAmp = Math.min(speed / CONFIG.moveSpeed, 1) * 0.032;
     camera.position.y += Math.sin(bobPhase) * bobAmp;
     camera.position.x += Math.cos(bobPhase * 0.5) * bobAmp * 0.5;
+    // G4: abbassamento morbido e recupero rapido dopo un atterraggio.
+    landingKick = Math.max(0, landingKick - delta * 2.6);
+    camera.position.y -= Math.sin(landingKick * Math.PI) * .085;
     constrainCameraToArena();
     camera.rotation.z = Math.sin(bobPhase * .5) * bobAmp * .32;
     cameraDamageKick = Math.max(0, cameraDamageKick - delta * .8);
@@ -2553,12 +2658,17 @@
     gun.position.y = -0.21 - Math.abs(Math.sin(bobPhase)) * bobAmp * .72 - (isSprinting ? .035 : 0);
     const meleeProgress = meleeTimer > 0 ? 1 - meleeTimer / CONFIG.meleeDuration : 0;
     const meleeSwing = meleeTimer > 0 ? Math.sin(meleeProgress * Math.PI) : 0;
-    gun.rotation.x = -meleeSwing * 1.12;
+    // G5: l'arma scende e si inclina durante il cambio caricatore.
+    reloadDip = THREE.MathUtils.lerp(reloadDip, gameState.reloading ? 1 : 0, Math.min(1, delta * 7));
+    gun.position.y -= reloadDip * .085;
+    gun.rotation.x = -meleeSwing * 1.12 - reloadDip * .55;
     gun.rotation.y = meleeSwing * .38;
     gun.rotation.z = Math.cos(bobPhase * .5) * bobAmp * .65 + meleeSwing * .18;
-    gameHudEl.classList.toggle('sprinting',isSprinting);
+    // N7: dirty-check — le classi DOM si aggiornano solo quando lo stato cambia.
+    if (hudSprinting !== isSprinting) { hudSprinting = isSprinting; gameHudEl.classList.toggle('sprinting', isSprinting); }
     crosshairFireTimer = Math.max(0, crosshairFireTimer - delta);
-    if (crosshairFireTimer <= 0) crosshairEl.classList.remove('firing');
+    const crosshairActive = crosshairFireTimer > 0;
+    if (crosshairFiring !== crosshairActive) { crosshairFiring = crosshairActive; crosshairEl.classList.toggle('firing', crosshairActive); }
 
     // Pioggia
     if (rain) {
@@ -2620,7 +2730,7 @@
       }
       if (frameErrorCount >= 60 && !degradedNoticeShown) {
         degradedNoticeShown = true;
-        showRendererFailure('SIMULATION DEGRADED · POST-PROCESSING BYPASS');
+        showRendererFailure(t('fail.degraded'));
       }
     }
   }
@@ -2652,7 +2762,7 @@
     && navigator.gpu
     && typeof navigator.gpu.requestAdapter === 'function';
   if (!webGPUAvailable) {
-    showWebGPUUnavailable('Questo browser non espone navigator.gpu.');
+    showWebGPUUnavailable(t('gpu.noNavigator'));
   } else {
     // Watchdog: se il boot non completa entro il timeout (es. un errore silenzioso
     // o una risorsa che non risolve), mostra il pannello di recovery invece di
@@ -2661,7 +2771,7 @@
     const bootWatchdog = setTimeout(() => {
       if (!bootFinished) {
         console.warn('VIBE boot watchdog: timeout durante l\'inizializzazione');
-        showRendererFailure('BOOT TIMEOUT · INIZIALIZZAZIONE NON COMPLETATA. RICARICA LA PAGINA.');
+        showRendererFailure(t('fail.timeout'));
       }
     }, 120000);
     try {
@@ -2672,7 +2782,7 @@
       bootFinished = true;
       clearTimeout(bootWatchdog);
       console.error('VIBE boot error', error);
-      showRendererFailure('BOOT ERROR · INIZIALIZZAZIONE INTERROTTA. RICARICA LA PAGINA.');
+      showRendererFailure(t('fail.error'));
     }
   }
   </script>

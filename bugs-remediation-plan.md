@@ -482,3 +482,77 @@ Aggiornato dopo l'implementazione. **Tutte le azioni del piano sono state esegui
 - `node --test`: **18/18 verdi** (4 originali + 5 config + 4 rng + 5 graphics-manager).
 - `node --check` pulito su tutti i file `src/*.js`, `tests/*.js` e sullo script inline di `index.html`.
 - Smoke test manuale in browser WebGPU: **da eseguire** (checklist §10, punti 1–8) — nessun ambiente GPU a disposizione qui.
+
+---
+
+## 14. Seconda tornata — bug residui, improvement grafica/audio/UI (3 agosto 2026, pomeriggio)
+
+> **Contesto:** il commit `3cb4cb1` ("Fix regressione: boot bloccato al 46%") ha **revertito B9** ripristinando `FacadeSystem` sincrono: lo switch ULTRA tornava a bloccare il main thread (~4,2M pixel in `heightToNormal` a 2048²). La tabella §13 segnava B9 chiuso: **riaperto e richiuso correttamente** (N1). Nuova revisione completa + probe headless reale (Playwright/Chromium) del percorso di boot.
+>
+> **Stato: ✅ TUTTE LE AZIONI ESEGUITE** con verifiche automatiche (22/22 test, smoke boot OK).
+
+### Bug residui corretti
+
+| ID | Titolo | Fix | Verifica |
+|----|--------|-----|----------|
+| N1 | Switch ULTRA blocca il main thread (B9 riaperto dal revert `3cb4cb1`) | `facade-system.js`: split `createFacadeCanvases`/`facadeMapsFromCanvases`; `heightToNormalAsync` chunked (`CHUNK_ROWS=64`); `rebuildMaterialsAsync` con **token di generazione** + try/catch; boot **invariato** (sincrono a 1024); cache mappe base per ritorno ULTRA→AUTO immediato | `node --check`; checklist GPU §15 |
+| N2 | Input di gioco attivo in pausa (Space→salto al resume, R→reload a sim congelata) | Gate `locked && gameState.started && !gameStartLoading` nel `keydown` (`index.html`) | smoke boot |
+| N3 | Accuracy oltre il 100% con melee (hits++ senza shots) | `damageDrone(..., countHit)`; melee passa `false` | checklist GPU |
+| N4 | Cooldown dry-fire sovrascritto dal loop (click ogni 120 ms) | Rimossa la sovrascrittura: `fireBullet` gestisce da solo il cooldown | revisione codice |
+| N5 | Copy pausa contraddittorio ("restano attivi" ma B2 congela) | Testo brief aggiornato: "simulazione sospesa… congelati fino al rientro" | revisione |
+| N6 | Toast senza tetto | Cap 5 in `HudController.toast` con espulsione del più vecchio | `tests/hud-controller.test.js` (2 test) |
+| N7 | Scritture DOM per-frame (`sprinting`, `firing`) | Dirty-check come da filosofia B6; `fireBullet` non tocca più il DOM | revisione |
+| N8 | Mute non persistito, HUD non sincronizzato | `getStoredMuted`/`storeMuted` in `config.js`; `toggle()` persiste; sync HUD al boot | `tests/config.test.js` (2 test) |
+| N9 | Pan stereo incoerente (explode/impatti non pannati) | Helper `panForWorld(position)` (proiezione NDC → pan clamp); applicato a explode, impatti drone, impatti muro | checklist GPU |
+
+### Improvement
+
+| ID | Area | Titolo | Implementazione |
+|----|------|--------|-----------------|
+| G1 | Grafica | Warmup shader al boot | `await renderer.compileAsync(scene, camera)` + un `renderPipeline.render(0,0)` (try/catch non bloccanti): niente hitch al primo frame/colpo/esplosione |
+| G2 | Grafica | GPU dedicata | `powerPreference: 'high-performance'` nel `WebGPURenderer` |
+| G3 | Grafica | Flicker insegne neon | `flickerSigns` (9 insegne): modulazione colore time-based + rari cali brevi |
+| G4 | Grafica | Landing camera dip | `landingKick` proporzionale alla velocità d'impatto, decadimento morbido |
+| G5 | Grafica | Animazione ricarica arma | `reloadDip` (lerp su `gameState.reloading`): arma scende e si inclina |
+| A1 | Audio | Ducking in pausa | `AudioEngine.setMenuDuck` (musica ×.42, ambiente ×.5, sfx ×.82); hum droni muti col menu aperto |
+| A2 | Audio | Spazializzazione coerente | vedi N9 — pan da proiezione schermo su esplosioni/impatti |
+| A3 | Audio | Stinger ondata | `AudioEngine.waveStart()`: sweep ascendente + impatto basso |
+| A4 | Audio | Heartbeat critico | Doppio tonfo sub-60 Hz su SFX quando `health < 35` (ogni 2 battute) |
+| A5 | Audio | Persistenza mute | vedi N8 |
+| D1 | Affidabilità | **Vendoring dipendenze** | `vendor/three/build/*` + 5 addon jsm + `vendor/cannon/cannon.min.js` (three.js 0.184.0, cannon.js 0.6.2). Import map locale, SRI rimosso. **Demo 100% offline** |
+| D2 | Affidabilità | Smoke test automatico | `tools/smoke-boot.mjs` + `npm run smoke`: zero pageerror/console.error/404, verifica fallback senza adapter |
+| D3 | Affidabilità | Checklist GPU manuale | §15 sotto |
+| D4 | Affidabilità | Documentazione | Questa sezione + README aggiornato |
+
+### Aggiustamenti post-review demo
+
+| ID | Titolo | Fix | Verifica |
+|----|--------|-----|----------|
+| N10 | Pareti che cambiano colore avvicinandosi: la modalità edge-safe sostituiva il materiale testurizzato con un `MeshBasicMaterial` **blu piatto** (`0x2f6488`) entro 2,8 m | `index.html`: edge-safe ora è un `MeshStandardMaterial` che **condivide mappe e tinta** col materiale lit, con solo l'emissiva leggermente alzata come assicurazione anti-faccia-nera. Swap visivamente impercettibile, protezione mantenuta | checklist GPU §15 |
+| A6 | Volumi di base troppo bassi (musica effettiva ~13% del full scale) → poi **SFX mascherati** dal letto musica/ambiente arricchito | `audio-engine.js`: master .72→**.9**; SFX con **boost dedicato ×1.3** (bus ~1.23); musica ×.26→**×.42**; ambiente ×.5→**×.62**; gain alzati su hit marker, passi, melee, pickup, dry, jump, UI. `config.js`: default music .78 / sfx .95 / ambience .66. Verificato con probe headless + AnalyserNode: segnale SFX presente (shoot 0.088→**0.147**, explode 0.177→**0.232**) | `tests/config.test.js` (3 attese) + probe audio |
+| U7 | Slider dei volumi troppo piccoli (griglia 6 colonne/7 elementi, font 8px, range nativi minuscoli) → poi ancora **troppo corti** (117px) | `hud.css`: pannello 980px, **riga dedicata per i 4 slider** (~222px ciascuno, doppio rispetto alla prima iterazione), traccia 5px e thumb 15px custom glow, layout 2×2 sotto i 1100px | screenshot headless verificato: slider 222×18px, nessuno sbordo |
+| U8 | Mute persistente (A5) invisibile sull'overlay → gioco apparentemente "senza audio" | `#overlay-sound-state`: badge **AUDIO MUTED — premi M per riattivare** su start/pausa, sincronizzato da `HudController.setMuted` | revisione + `tests/hud-controller.test.js` |
+| A9 | Musica ancora poco presente | `applyMix`: musica ×.42→**×.55**; default `vibefps.mix.music` .78→**.82** (`config.js`, test aggiornati) | probe audio headless |
+| G8 | **Insegne coreane perpendicolari sui muri est/ovest**: il telaio (`frame`, box sottile solo lungo Z) non veniva mai ruotato — aderiva solo ai muri nord/sud | `index.html` `createNeonSign`: `frame.lookAt(pos + normal)` — il telaio segue la normale della parete | checklist GPU §15 |
+| G9 | Texture procedurali a bassa risoluzione (metallo **256**, legno **256**, asfalto **512**, hazard **256**) | `textures.js`: generatori parametrizzati — metallo **1024**, legno **512**, asfalto **1024**, hazard **512**, PBR asfalto **1024**; normal map muri a 1024 **condivisa** (conversione 1× invece di 4×). Costo generazione misurato: **74 ms** totali | screenshot headless delle 4 texture + smoke boot |
+
+### Validazione seconda tornata
+- `node --test`: **22/22 verdi** (18 precedenti + 2 config mute + 2 hud-controller toast cap).
+- `node --check` pulito su `src/*.js`, `tests/*.js`, `tools/*.mjs` e script inline.
+- `npm run smoke`: **OK** — boot headless completato, fallback WebGPU verificato, nessun errore, nessuna risorsa mancante (valida anche il vendoring D1).
+- Ambiente di sviluppo **senza adapter WebGPU**: la validazione del rendering reale resta alla checklist manuale §15.
+
+## 15. Checklist manuale su macchina con GPU (pre-presentazione)
+
+Eseguire in browser con WebGPU (Chrome/Edge recenti), servendo la cartella via HTTP:
+
+1. **Boot**: barra di caricamento fino a `SYSTEM READY` senza errori console; nessuno stallo (watchdog muto).
+2. **Start**: click su INIZIALIZZA SIMULAZIONE → pointer lock, HUD visibile, musica + ambiente attivi (o MUTED se persistito da sessione precedente, con HUD coerente).
+3. **Primo colpo e prima esplosione**: nessun hitch percettibile (warmup G1).
+4. **Pausa (Esc)**: simulazione congelata (droni fermi, copy N5), musica attenuata (A1), hum droni assenti; Space/R in pausa senza effetto (N2); ripresa senza salto o reload spurii.
+5. **Switch ULTRA**: dal pannello settings → transizione senza freeze (N1); ritorno ad AUTO immediato (cache mappe base).
+6. **Gameplay**: fuoco a secco → click dry ogni ~200 ms (N4); melee + accuracy ≤ 100% (N3); kill → esplosione pannata (N9/A2), toast max 5 (N6); wave start con stinger (A3); salute <35 → heartbeat (A4) + HUD critical.
+7. **RESET LIVELLO**: run riavviata a ondata 1 senza residui.
+8. **Atterraggio da salto/jump pad**: dip camera proporzionale (G4) + suono land; flicker neon visibile sulle insegne (G3); arma si abbassa in ricarica (G5); telai delle insegne coreane aderenti ai muri est/ovest (G8); dettaglio texture di asfalto, muri e casse visibilmente più fine da vicino (G9).
+9. **Pareti rasenti**: percorrere il perimetro incollati al muro — nessun cambio di colore delle pareti (N10); volumi base e SFX chiaramente udibili al primo avvio (A6: sparo, hit marker, passi, esplosioni sopra il letto musicale); slider volumi lunghi e trascinabili (U7); premendo M il badge AUDIO MUTED compare sull'overlay e sparisce alla riattivazione (U8).
+10. **Offline**: ripetere i punti 1–3 con la rete disattivata (vendoring D1).

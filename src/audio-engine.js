@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { getStoredMix, storeMix } from './config.js';
+import { getStoredMix, storeMix, getStoredMuted, storeMuted } from './config.js';
 
 /**
  * Pure procedural audio engine. Every sound is synthesized at runtime with
@@ -37,7 +37,12 @@ export class AudioEngine {
     this.distortionCurve = null;
     this.started = false;
     this.startPromise = null;
-    this.muted = false;
+    // N8/A5: il mute è persistito (localStorage) come mix e sensibilità.
+    this.muted = getStoredMuted();
+    // A1: con il menu di pausa aperto il mix viene attenuato (vedi applyMix).
+    this.menuDucked = false;
+    // A4: ultimo valore di salute noto, usato per il battito a integrità critica.
+    this.lastHealth = 100;
     this.nextStepTime = 0;
     this.step = 0;
     this.targetIntensity = 0;
@@ -357,10 +362,27 @@ export class AudioEngine {
   applyMix() {
     if (!this.ctx) return;
     const now = this.ctx.currentTime;
-    this.master.gain.setTargetAtTime(this.muted ? 0 : .72, now, .025);
-    this.sfx.gain.setTargetAtTime(this.mix.sfx, now, .025);
-    this.music.gain.setTargetAtTime(this.mix.music * .26, now, .035);
-    this.ambience.gain.setTargetAtTime(this.mix.ambience * .5, now, .035);
+    // A1: menu di pausa aperto → musica e ambiente si abbassano e il pannello
+    // resta leggibile; gli effetti UI restano quasi a pieno volume.
+    const musicDuck = this.menuDucked ? .42 : 1;
+    const ambienceDuck = this.menuDucked ? .5 : 1;
+    const sfxDuck = this.menuDucked ? .82 : 1;
+    // Livelli base rialzati (review demo): master .72→.9; SFX con boost
+    // dedicato ×1.3; musica ×.55 (richiesta demo: più presente); ambiente
+    // ×.62. Il compressore sul master gestisce i picchi.
+    this.master.gain.setTargetAtTime(this.muted ? 0 : .9, now, .025);
+    this.sfx.gain.setTargetAtTime(this.mix.sfx * 1.3 * sfxDuck, now, .025);
+    this.music.gain.setTargetAtTime(this.mix.music * .55 * musicDuck, now, .035);
+    this.ambience.gain.setTargetAtTime(this.mix.ambience * .62 * ambienceDuck, now, .035);
+  }
+
+  // A1: attenuazione del mix con il menu aperto. Dirty-check interno: chiamabile
+  // a ogni frame dal game loop senza costo quando lo stato non cambia.
+  setMenuDuck(active) {
+    const next = Boolean(active);
+    if (next === this.menuDucked) return;
+    this.menuDucked = next;
+    this.applyMix();
   }
 
   duckMusic(amount = .35, duration = .18) {
@@ -377,6 +399,7 @@ export class AudioEngine {
     const enemies = snapshot.aliveEnemies || 0;
     const wave = snapshot.wave || 1;
     const health = snapshot.health ?? 100;
+    this.lastHealth = health;
     const danger = health < 35 ? .4 : health < 60 ? .18 : 0;
     const energy = Math.min(1, enemies / 8 * .45 + wave / 8 * .3 + danger + (snapshot.combo || 1) / 5 * .12);
     this.targetIntensity = energy > .78 ? 3 : energy > .48 ? 2 : energy > .18 ? 1 : 0;
@@ -431,11 +454,22 @@ export class AudioEngine {
       for (const note of chord) this.tone(note, note * .998, 1.75, .006 + this.intensity * .0015, 'triangle', time, this.music);
     }
     if (this.intensity >= 3 && beat === 15) this.tone(220, 880, .105, .018, 'sawtooth', time, this.music, .22);
+    // A4: integrità critica → doppio tonfo in ottava bassa (battito) ogni due
+    // battute. Va al canale SFX: deve emergere anche sopra la musica ducked.
+    if (this.lastHealth < 35 && beat % 8 === 0) {
+      this.tone(58, 40, .11, .13, 'sine', time, this.sfx);
+      this.tone(54, 36, .09, .09, 'sine', time + .17, this.sfx);
+    }
   }
 
   updateDroneHums(drones, camera) {
     if (!this.started) return;
     const now = this.ctx.currentTime;
+    // A1: con il menu aperto i rombi dei droni tacciono del tutto.
+    if (this.menuDucked) {
+      for (const voice of this.droneVoices) voice.gain.gain.setTargetAtTime(0, now, .12);
+      return;
+    }
     // Riutilizza array e vettori temporanei: niente allocazioni nel frame loop.
     const alive = this._aliveDrones || (this._aliveDrones = []);
     alive.length = 0;
@@ -571,7 +605,7 @@ export class AudioEngine {
     filter.frequency.value = (sprint ? 760 : 470) + variation * 260;
     filter.Q.value = .65 + variation * .35;
     gain.gain.setValueAtTime(.0001, start);
-    gain.gain.exponentialRampToValueAtTime((sprint ? .13 : .085) + variation * .025, start + .003);
+    gain.gain.exponentialRampToValueAtTime((sprint ? .19 : .13) + variation * .03, start + .003);
     gain.gain.exponentialRampToValueAtTime(.0001, start + (sprint ? .105 : .09));
     source.connect(filter);
     filter.connect(gain);
@@ -584,16 +618,16 @@ export class AudioEngine {
   // Compatibility aliases used by older gameplay code.
   melee() {
     const variation = Math.random();
-    this.noise(.09 + variation * .04, .12 + variation * .05, 620 + variation * 420, 'bandpass');
-    this.tone(190 + variation * 35, 62, .14, .09, 'sawtooth');
+    this.noise(.09 + variation * .04, .16 + variation * .06, 620 + variation * 420, 'bandpass');
+    this.tone(190 + variation * 35, 62, .14, .12, 'sawtooth');
   }
   pickup() {
-    this.tone(420, 920, .16, .07, 'sine');
-    this.tone(840, 1320, .12, .045, 'triangle', (this.ctx?.currentTime || 0) + .05);
+    this.tone(420, 920, .16, .09, 'sine');
+    this.tone(840, 1320, .12, .06, 'triangle', (this.ctx?.currentTime || 0) + .05);
   }
-  dry() { this.tone(420, 260, .055, .07, 'square'); }
+  dry() { this.tone(420, 260, .055, .1, 'square'); }
   footstep(sprint = false) { return this.playFootstep({ sprint }); }
-  jump() { this.noise(.08, .055, 700, 'lowpass'); this.tone(130, 260, .14, .065, 'sine'); }
+  jump() { this.noise(.08, .08, 700, 'lowpass'); this.tone(130, 260, .14, .09, 'sine'); }
   land(force = 1) { this.noise(.14, .12 * Math.min(force, 1.5), 420, 'lowpass'); this.tone(64, 36, .11, .08 * Math.min(force, 1.4), 'sine'); }
   pad() { this.tone(90, 720, .42, .18, 'sawtooth'); this.tone(180, 1080, .5, .08, 'sine'); }
   reload() {
@@ -605,8 +639,8 @@ export class AudioEngine {
   }
   impact(material = 'metal') { return this.playImpact({ material }); }
   hit(kill = false) {
-    this.tone(kill ? 880 : 690, kill ? 1320 : 930, kill ? .12 : .065, kill ? .09 : .055, 'sine');
-    if (kill) this.tone(440, 880, .16, .045, 'triangle', this.ctx.currentTime + .035);
+    this.tone(kill ? 880 : 690, kill ? 1320 : 930, kill ? .12 : .065, kill ? .13 : .085, 'sine');
+    if (kill) this.tone(440, 880, .16, .065, 'triangle', this.ctx.currentTime + .035);
   }
   enemyShot(pan = 0) { this.tone(680, 110, .23, .075, 'sawtooth', null, null, pan); this.noise(.1, .04, 2400, 'bandpass', pan); }
   droneTelegraph(pan = 0) { this.tone(520, 1040, .09, .045, 'square', null, null, pan); }
@@ -618,9 +652,21 @@ export class AudioEngine {
     this.tone(480, 90, .2, .06, 'square', null, null, pan);
     this.duckMusic(.5, .46);
   }
-  ui() { this.tone(520, 760, .055, .035, 'sine'); }
+  ui() { this.tone(520, 760, .055, .05, 'sine'); }
+
+  /** A3: stinger di inizio ondata — sweep ascendente + impatto basso finale. */
+  waveStart() {
+    if (!this.started) return;
+    const time = this.ctx.currentTime;
+    this.tone(180, 720, .38, .055, 'sawtooth', time, this.music, -.12);
+    this.tone(90, 360, .42, .04, 'triangle', time + .06, this.music, .12);
+    this.noise(.3, .05, 2400, 'bandpass', 0, time + .26, this.music);
+    this.tone(70, 34, .3, .15, 'sine', time + .3, this.sfx);
+  }
+
   toggle() {
     this.muted = !this.muted;
+    storeMuted(this.muted);
     this.applyMix();
     this.onStateChange(this.muted);
   }

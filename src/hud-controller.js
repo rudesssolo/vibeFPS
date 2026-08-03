@@ -1,3 +1,5 @@
+import { t } from './i18n.js';
+
 export class HudController {
   constructor() {
     this.ui = {
@@ -19,7 +21,8 @@ export class HudController {
       missionFill: document.getElementById('mission-progress-fill'),
       waveLabel: document.getElementById('wave-label'),
       toasts: document.getElementById('toast-stack'),
-      sound: document.getElementById('sound-state')
+      sound: document.getElementById('sound-state'),
+      overlaySound: document.getElementById('overlay-sound-state')
     };
     if (!this.ui.ammoCells.children.length) {
       for (let i = 0; i < 15; i++) this.ui.ammoCells.appendChild(document.createElement('i'));
@@ -85,12 +88,12 @@ export class HudController {
     }
     const objective = `${state.waveKills}/${state.waveTargets}`;
     if (last.objective !== objective) {
-      this.ui.objective.textContent = `NEUTRALIZZA I DRONI · ${objective}`;
+      this.ui.objective.textContent = `${t('mission.objective')} · ${objective}`;
       this.ui.missionFill.style.width = `${state.waveTargets ? state.waveKills / state.waveTargets * 100 : 0}%`;
       last.objective = objective;
     }
     if (last.wave !== state.wave) {
-      this.ui.waveLabel.textContent = `ONDATA ${String(state.wave).padStart(2, '0')}`;
+      this.ui.waveLabel.textContent = t('hud.wave', { wave: String(state.wave).padStart(2, '0') });
       last.wave = state.wave;
     }
     const critical = state.health < 35;
@@ -109,12 +112,28 @@ export class HudController {
   }
 
   setMuted(muted) {
-    this.ui.sound.innerHTML = muted
-      ? 'AUDIO: <b class="danger-text">MUTED</b> · M ENABLE'
-      : 'AUDIO: IMMERSIVE · <b>M</b> MUTE';
+    this.ui.sound.innerHTML = t(muted ? 'sound.offHtml' : 'sound.onHtml');
+    // Con il mute persistente (A5/N8) lo stato deve essere evidente anche
+    // sull'overlay di start/pausa: altrimenti il gioco sembra "senza audio".
+    if (this.ui.overlaySound) {
+      this.ui.overlaySound.innerHTML = muted ? t('mute.badgeHtml') : '';
+    }
+  }
+
+  // Dopo un cambio lingua i testi dinamici vanno riscritti anche se i valori
+  // numerici non sono cambiati: si azzera la cache del dirty-check.
+  invalidateCache() {
+    this.last = {};
   }
 
   toast(message) {
+    // N6: tetto ai toast visibili. In combattimento intenso (kill + heal +
+    // rifornimento + bonus ondata) gli eventi si accumulerebbero coprendo il
+    // lato destro dello schermo: oltre il limite il più vecchio cede subito.
+    const MAX_TOASTS = 5;
+    while (this.ui.toasts.children.length >= MAX_TOASTS) {
+      this.ui.toasts.lastElementChild.remove();
+    }
     const element = document.createElement('div');
     element.className = 'toast';
     element.innerHTML = message;
@@ -128,29 +147,42 @@ export class HudController {
     this.onboardingTimer = setTimeout(() => document.getElementById('hud').classList.add('onboarding-hidden'), 6000);
   }
 
-  mountSettings(overlay, { qualityMode, mix, sensitivity = 1, onQuality, onMix, onSensitivity = () => {}, onReset = () => {} }) {
+  mountSettings(overlay, { qualityMode, language = 'en', mix, sensitivity = 1, onQuality, onLanguage = () => {}, onMix, onSensitivity = () => {}, onReset = () => {} }) {
     const panel = document.createElement('div');
     panel.className = 'settings-panel';
+    // Le label usano data-i18n: al cambio lingua (L1) applyStaticStrings() in
+    // index.html le riscrive senza ricreare il pannello.
     panel.innerHTML = `
-      <div class="settings-title">SIMULATION SETTINGS</div>
-      <div class="quality-toggle" role="group" aria-label="Qualità grafica">
-        <button type="button" data-quality="auto">AUTO</button>
-        <button type="button" data-quality="ultra">ULTRA</button>
+      <div class="settings-title" data-i18n="settings.title">${t('settings.title')}</div>
+      <div class="panel-toggles">
+        <div class="quality-toggle" role="group" aria-label="${t('settings.qualityAria')}">
+          <button type="button" data-quality="auto">AUTO</button>
+          <button type="button" data-quality="ultra">ULTRA</button>
+        </div>
+        <div class="quality-toggle lang-toggle" role="group" aria-label="${t('settings.langAria')}">
+          <button type="button" data-lang="it">IT</button>
+          <button type="button" data-lang="en">EN</button>
+        </div>
       </div>
-      <label><span>MUSICA</span><input data-mix="music" type="range" min="0" max="1" step="0.01" value="${mix.music}"></label>
-      <label><span>EFFETTI</span><input data-mix="sfx" type="range" min="0" max="1" step="0.01" value="${mix.sfx}"></label>
-      <label><span>AMBIENTE</span><input data-mix="ambience" type="range" min="0" max="1" step="0.01" value="${mix.ambience}"></label>
-      <label><span>SENSIBILITÀ</span><input data-sensitivity type="range" min="0.25" max="3" step="0.05" value="${sensitivity}"></label>
-      <button type="button" class="reset-level" data-reset-level>RESET LIVELLO</button>`;
+      <label><span data-i18n="settings.music">${t('settings.music')}</span><input data-mix="music" type="range" min="0" max="1" step="0.01" value="${mix.music}"></label>
+      <label><span data-i18n="settings.sfx">${t('settings.sfx')}</span><input data-mix="sfx" type="range" min="0" max="1" step="0.01" value="${mix.sfx}"></label>
+      <label><span data-i18n="settings.ambience">${t('settings.ambience')}</span><input data-mix="ambience" type="range" min="0" max="1" step="0.01" value="${mix.ambience}"></label>
+      <label><span data-i18n="settings.sensitivity">${t('settings.sensitivity')}</span><input data-sensitivity type="range" min="0.25" max="3" step="0.05" value="${sensitivity}"></label>
+      <button type="button" class="reset-level" data-reset-level data-i18n="settings.reset">${t('settings.reset')}</button>`;
     panel.addEventListener('click', event => event.stopPropagation());
     panel.addEventListener('pointerdown', event => event.stopPropagation());
     const setSelected = mode => panel.querySelectorAll('[data-quality]').forEach(button => button.classList.toggle('selected', button.dataset.quality === mode));
     setSelected(qualityMode);
+    const setLangSelected = lang => panel.querySelectorAll('[data-lang]').forEach(button => button.classList.toggle('selected', button.dataset.lang === lang));
+    setLangSelected(language);
     panel.querySelectorAll('[data-quality]').forEach(button => button.addEventListener('click', () => {
       // La selezione viene riallineata da onQuality() dopo l'applicazione reale
       // (che può essere ignorata, es. durante la transizione ULTRA): così la UI
       // riflette sempre lo stato effettivo del GraphicsManager.
       onQuality(button.dataset.quality);
+    }));
+    panel.querySelectorAll('[data-lang]').forEach(button => button.addEventListener('click', () => {
+      onLanguage(button.dataset.lang);
     }));
     panel.querySelectorAll('[data-mix]').forEach(input => input.addEventListener('input', () => {
       onMix({ [input.dataset.mix]: Number(input.value) });
@@ -163,6 +195,12 @@ export class HudController {
     // Espone un setter per riallineare la selezione visiva allo stato reale del
     // GraphicsManager (usato da index.html dopo setMode, vedi B7).
     panel.syncMode = setSelected;
+    // Riallinea selezione lingua e aria-label dopo un cambio lingua (L1).
+    panel.syncLanguage = lang => {
+      setLangSelected(lang);
+      panel.querySelector('.quality-toggle').setAttribute('aria-label', t('settings.qualityAria'));
+      panel.querySelector('.lang-toggle').setAttribute('aria-label', t('settings.langAria'));
+    };
     return panel;
   }
 }

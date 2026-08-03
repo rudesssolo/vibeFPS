@@ -91,9 +91,11 @@ export function getStoredMix() {
     return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : fallback;
   };
   return {
-    music: safe('vibefps.mix.music', 0.72),
-    sfx: safe('vibefps.mix.sfx', 0.9),
-    ambience: safe('vibefps.mix.ambience', 0.58)
+    // Volumi di default rialzati (review demo): il mix precedente era troppo
+    // timido, soprattutto la musica (moltiplicatori in AudioEngine.applyMix).
+    music: safe('vibefps.mix.music', 0.82),
+    sfx: safe('vibefps.mix.sfx', 0.95),
+    ambience: safe('vibefps.mix.ambience', 0.66)
   };
 }
 
@@ -121,6 +123,36 @@ export function getStoredSensitivity() {
 export function storeSensitivity(value) {
   try {
     safeStorage()?.setItem('vibefps.sensitivity', String(Math.max(.25, Math.min(3, value))));
+  } catch {
+    // Non essenziale: resta in memoria.
+  }
+}
+
+// Stato mute (N8/A5): persistito come il mix, così il tasto M sopravvive al
+// reload della pagina e l'HUD può rifletterlo fin dal primo avvio.
+export function getStoredMuted() {
+  return readStorage(safeStorage(), 'vibefps.muted') === '1';
+}
+
+export function storeMuted(muted) {
+  try {
+    safeStorage()?.setItem('vibefps.muted', muted ? '1' : '0');
+  } catch {
+    // Non essenziale: resta in memoria.
+  }
+}
+
+// Lingua dell'interfaccia (L1): persistita come gli altri settings.
+// Default 'en' (richiesta demo); 'it' disponibile dal pannello settings.
+export const LANGUAGE_DEFAULT = 'en';
+
+export function getStoredLanguage() {
+  return readStorage(safeStorage(), 'vibefps.lang') === 'it' ? 'it' : LANGUAGE_DEFAULT;
+}
+
+export function storeLanguage(lang) {
+  try {
+    safeStorage()?.setItem('vibefps.lang', lang === 'it' ? 'it' : 'en');
   } catch {
     // Non essenziale: resta in memoria.
   }

@@ -292,15 +292,13 @@ export class VolumetricSmokeSystem {
       // Tetto all'overdraw: oltre maxActive volumi vivi si rinuncia al puff
       // invece di riciclarne uno ancora visibile (che farebbe un pop).
       if (this.activeCount >= this.maxActive) return;
-      this.activeCount++;
     } else {
-      // Nessuno slot libero: ricicla il più vecchio nell'ordine del cursore.
-      // NOTA: il puff era già attivo e già contato in activeCount, quindi qui
-      // NON va incrementato (era la causa della deriva del contatore).
-      puff = this.puffs[this.cursor];
-      this.cursor = (this.cursor + 1) % this.maximum;
+      // L5: nessuno slot libero — si rinuncia al nuovo puff invece di
+      // sovrascrivere un volume ancora visibile (pop). Il commento qui sopra
+      // dichiarava già questa intenzione ma il ramo la contraddiceva: con la
+      // coda piena a Ultra i nuovi spawn rimpiazzavano i vivi a raffica.
+      return;
     }
-    puff.active = true;
     puff.position.copy(options.position || new THREE.Vector3());
     puff.velocity.copy(options.velocity || new THREE.Vector3());
     puff.origin.copy(options.origin || puff.position);
@@ -319,7 +317,18 @@ export class VolumetricSmokeSystem {
     puff.radius = Math.max(puff.radiusStart, 0.001);
     puff.inside = false;
 
-    const mesh = this._acquireMesh(puff);
+    // activeCount incrementato SOLO a puff effettivamente attivato (dopo
+    // _acquireMesh): se l'acquisizione della mesh lancia, il contatore non
+    // deriva (stessa classe di bug L5/L6).
+    let mesh;
+    try {
+      mesh = this._acquireMesh(puff);
+    } catch (error) {
+      return;
+    }
+    // L6: puff attivo SOLO dopo che la mesh è stata acquisita con successo.
+    puff.active = true;
+    this.activeCount++;
     const attributes = mesh.geometry.vibeAttributes;
     // Costanti per la vita del puff: scritte una volta sola qui.
     this._fill(attributes.color, [puff.color.r, puff.color.g, puff.color.b]);

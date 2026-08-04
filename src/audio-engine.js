@@ -62,6 +62,7 @@ export class AudioEngine {
     // without changing the scheduling code below.
     this.naturalMinorScale = [110, 130.81, 146.83, 164.81, 196, 220, 246.94];
     this.tempo = 128;
+    this.finalBossMode = false;
   }
 
   async start() {
@@ -83,38 +84,48 @@ export class AudioEngine {
     if (!AudioContextClass) return;
     this.ctx = new AudioContextClass();
     this.audioContext = this.ctx;
-    const compressor = this.ctx.createDynamicsCompressor();
-    compressor.threshold.value = -14;
-    compressor.knee.value = 14;
-    compressor.ratio.value = 4.5;
-    compressor.attack.value = .004;
-    compressor.release.value = .22;
-    this.masterCompressor = compressor;
-    this.master = this.ctx.createGain();
-    this.sfx = this.ctx.createGain();
-    this.music = this.ctx.createGain();
-    this.musicDuck = this.ctx.createGain();
-    this.ambience = this.ctx.createGain();
-    this.reverbSend = this.ctx.createGain();
-    this.reverb = this.ctx.createConvolver();
-    this.reverb.buffer = this.createImpulse(2.25, 2.8);
-    this.reverbSend.gain.value = .14;
-    this.sfx.connect(compressor);
-    this.sfx.connect(this.reverbSend);
-    this.music.connect(this.musicDuck);
-    this.musicDuck.connect(compressor);
-    this.ambience.connect(compressor);
-    this.ambience.connect(this.reverbSend);
-    this.reverbSend.connect(this.reverb);
-    this.reverb.connect(compressor);
-    compressor.connect(this.master);
-    this.master.connect(this.ctx.destination);
-    this.musicDuck.gain.value = 1;
-    this.noiseBuffer = this.createNoiseBuffer(3);
-    this.distortionCurve = this.createDistortionCurve(65);
-    this.applyMix();
-    this.startAmbience();
-    this.createDroneVoices();
+    try {
+      const compressor = this.ctx.createDynamicsCompressor();
+      compressor.threshold.value = -14;
+      compressor.knee.value = 14;
+      compressor.ratio.value = 4.5;
+      compressor.attack.value = .004;
+      compressor.release.value = .22;
+      this.masterCompressor = compressor;
+      this.master = this.ctx.createGain();
+      this.sfx = this.ctx.createGain();
+      this.music = this.ctx.createGain();
+      this.musicDuck = this.ctx.createGain();
+      this.ambience = this.ctx.createGain();
+      this.reverbSend = this.ctx.createGain();
+      this.reverb = this.ctx.createConvolver();
+      this.reverb.buffer = this.createImpulse(2.25, 2.8);
+      this.reverbSend.gain.value = .14;
+      this.sfx.connect(compressor);
+      this.sfx.connect(this.reverbSend);
+      this.music.connect(this.musicDuck);
+      this.musicDuck.connect(compressor);
+      this.ambience.connect(compressor);
+      this.ambience.connect(this.reverbSend);
+      this.reverbSend.connect(this.reverb);
+      this.reverb.connect(compressor);
+      compressor.connect(this.master);
+      this.master.connect(this.ctx.destination);
+      this.musicDuck.gain.value = 1;
+      this.noiseBuffer = this.createNoiseBuffer(3);
+      this.distortionCurve = this.createDistortionCurve(65);
+      this.applyMix();
+      this.startAmbience();
+      this.createDroneVoices();
+    } catch (error) {
+      // L7: un errore durante la costruzione del grafo non deve orfanare un
+      // AudioContext: viene chiuso e ripristinato a null, così il prossimo
+      // start() riparte pulito invece di originare un secondo context.
+      if (this.ctx && typeof this.ctx.close === 'function') this.ctx.close().catch(() => {});
+      this.ctx = null;
+      this.audioContext = null;
+      throw error;
+    }
     this.nextStepTime = this.ctx.currentTime + .08;
     this.started = true;
     await this.ctx.resume();
@@ -406,9 +417,17 @@ export class AudioEngine {
     const health = snapshot.health ?? 100;
     this.lastHealth = health;
     const danger = health < 35 ? .4 : health < 60 ? .18 : 0;
+    const nextFinalBossMode = Boolean(snapshot.finalBossAlive);
+    if (nextFinalBossMode !== this.finalBossMode) {
+      this.finalBossMode = nextFinalBossMode;
+      this.step = 0;
+      this.arpeggioStep = 0;
+      this.nextStepTime = this.ctx.currentTime + .04;
+    }
     const energy = Math.min(1, enemies / 8 * .45 + wave / 8 * .3 + danger + (snapshot.combo || 1) / 5 * .12);
-    this.targetIntensity = energy > .78 ? 3 : energy > .48 ? 2 : energy > .18 ? 1 : 0;
-    const sixteenth = 60 / this.tempo / 4;
+    this.targetIntensity = this.finalBossMode ? 3 : energy > .78 ? 3 : energy > .48 ? 2 : energy > .18 ? 1 : 0;
+    const activeTempo = this.finalBossMode ? 152 : this.tempo;
+    const sixteenth = 60 / activeTempo / 4;
     const now = this.ctx.currentTime;
     // Riallinea lo scheduler dopo una tab nascosta o un resume: currentTime del
     // contesto continua ad avanzare mentre il loop rAF è fermo; senza questo clamp
@@ -460,6 +479,10 @@ export class AudioEngine {
   }
 
   scheduleStep(time, step) {
+    if (this.finalBossMode) {
+      this.scheduleFinalBossStep(time, step);
+      return;
+    }
     const beat = step % 16;
     const bar = Math.floor(step / 16);
     const variation = Math.floor(bar / 8) % 4;
@@ -499,6 +522,41 @@ export class AudioEngine {
     if (this.lastHealth < 35 && beat % 8 === 0) {
       this.tone(58, 40, .11, .13, 'sine', time, this.sfx);
       this.tone(54, 36, .09, .09, 'sine', time + .17, this.sfx);
+    }
+  }
+
+  // Traccia finale distinta: 152 BPM, ostinato cromatico grave, percussioni
+  // industriali sincopate e sirena tritonale. Non riusa armonia/arpeggiatore
+  // del tema standard, quindi il cambio di incontro è immediatamente udibile.
+  scheduleFinalBossStep(time, step) {
+    const beat = step % 16;
+    const bar = Math.floor(step / 16);
+    const roots = [27.5, 29.14, 32.7, 25.96];
+    const root = roots[Math.floor(beat / 4) % roots.length];
+    if ([0, 3, 6, 10, 12, 14].includes(beat)) {
+      this.tone(68, 24, .24, .24, 'sawtooth', time, this.music, beat % 2 ? .18 : -.18);
+      this.noise(.055, .065, 520, 'lowpass', 0, time, this.music, 1.5);
+    }
+    if (beat % 2 === 0) {
+      this.tone(root, root * .985, .3, .09, 'square', time, this.music, beat < 8 ? -.22 : .22);
+      this.tone(root * 2, root * 1.99, .16, .035, 'sawtooth', time + .02, this.music, 0);
+    }
+    if (beat === 4 || beat === 12) {
+      this.noise(.16, .11, 2100, 'bandpass', beat === 4 ? -.3 : .3, time, this.music, 1.7);
+      this.noise(.07, .055, 9000, 'highpass', 0, time + .035, this.music);
+    }
+    if (beat === 0) {
+      const chordRoot = bar % 2 ? 41.2 : 36.71;
+      for (const ratio of [1, Math.SQRT2, 2]) {
+        this.tone(chordRoot * ratio, chordRoot * ratio * .996, 2.2, .018, 'sawtooth', time, this.music, 0);
+      }
+    }
+    if (beat === 7 || beat === 15) {
+      this.tone(155.56, 220, .38, .035, 'square', time, this.music, beat === 7 ? -.35 : .35);
+      this.tone(233.08, 164.81, .4, .026, 'sawtooth', time + .03, this.music, beat === 7 ? .35 : -.35);
+    }
+    if (this.lastHealth < 35 && beat % 4 === 0) {
+      this.tone(48, 28, .14, .15, 'sine', time, this.sfx);
     }
   }
 
@@ -681,6 +739,8 @@ export class AudioEngine {
     this.tone(840, 1320, .12, .06, 'triangle', (this.ctx?.currentTime || 0) + .05);
   }
   dry() { this.tone(420, 260, .055, .1, 'square'); }
+  // Roaring breve del lanciafiamme: rumore filtrato + rumble basso.
+  flame() { this.noise(.16, .12, 900, 'bandpass'); this.noise(.2, .1, 240, 'lowpass'); }
   footstep(sprint = false) { return this.playFootstep({ sprint }); }
   jump() { this.noise(.08, .08, 700, 'lowpass'); this.tone(130, 260, .14, .09, 'sine'); }
   land(force = 1) { this.noise(.14, .12 * Math.min(force, 1.5), 420, 'lowpass'); this.tone(64, 36, .11, .08 * Math.min(force, 1.4), 'sine'); }
@@ -695,7 +755,10 @@ export class AudioEngine {
   impact(material = 'metal') { return this.playImpact({ material }); }
   hit(kill = false) {
     this.tone(kill ? 880 : 690, kill ? 1320 : 930, kill ? .12 : .065, kill ? .13 : .085, 'sine');
-    if (kill) this.tone(440, 880, .16, .065, 'triangle', this.ctx.currentTime + .035);
+    // S3: this.ctx può essere null quando WebAudio non è disponibile
+    // (initialize() ritorna presto) — la guardia previene il TypeError che
+    // interrompeva il ramo di kill in damageDrone.
+    if (kill && this.ctx) this.tone(440, 880, .16, .065, 'triangle', this.ctx.currentTime + .035);
   }
   enemyShot(pan = 0) { this.tone(680, 110, .23, .075, 'sawtooth', null, null, pan); this.noise(.1, .04, 2400, 'bandpass', pan); }
   droneTelegraph(pan = 0) { this.tone(520, 1040, .09, .045, 'square', null, null, pan); }
@@ -729,6 +792,21 @@ export class AudioEngine {
     this.tone(52, 30, .5, .16, 'sine', time + .35, this.sfx);
     this.tone(1040, 2080, .22, .03, 'triangle', time + .4, this.sfx, -.2);
   }
+  apexGauntletStart() {
+    if (!this.started) return;
+    const time = this.ctx.currentTime;
+    for (let i = 0; i < 4; i++) this.tone(55 * (i + 1), 110 * (i + 1), .42, .045, i % 2 ? 'square' : 'sawtooth', time + i * .11, this.music, i % 2 ? .25 : -.25);
+    this.noise(.8, .1, 700, 'lowpass', 0, time, this.sfx);
+  }
+  megaBossStart() {
+    if (!this.started) return;
+    const time = this.ctx.currentTime;
+    this.tone(42, 18, 1.4, .25, 'sawtooth', time, this.sfx);
+    this.tone(82.41, 41.2, 1.2, .08, 'square', time + .12, this.music, -.2);
+    this.tone(116.54, 58.27, 1.2, .07, 'square', time + .12, this.music, .2);
+    this.noise(1.1, .16, 480, 'lowpass', 0, time, this.sfx, 1.8);
+    this.duckMusic(.7, 1.1);
+  }
   apexKill(pan = 0) {
     this.noise(.7, .34, 260, 'lowpass', pan);
     this.noise(.34, .2, 1500, 'bandpass', pan);
@@ -747,6 +825,17 @@ export class AudioEngine {
   apexShockwave() { this.noise(.45, .2, 300, 'lowpass', 0); this.tone(60, 180, .35, .12, 'sine', null, null, 0); }
   apexArmorBreak(pan = 0) { this.noise(.3, .18, 2400, 'bandpass', pan); this.tone(300, 90, .3, .08, 'square', null, null, pan); }
   apexPhase(pan = 0) { this.tone(200, 900, .4, .06, 'sawtooth', null, null, pan); this.noise(.3, .05, 3200, 'bandpass', pan); }
+  megaSpiral() { this.tone(110, 880, .65, .1, 'sawtooth'); this.noise(.5, .1, 1500, 'bandpass'); }
+  megaLance() { this.tone(1800, 90, .48, .16, 'square'); this.noise(.32, .14, 4800, 'bandpass'); this.duckMusic(.55, .5); }
+  megaBombard() { this.tone(72, 36, .8, .18, 'sawtooth'); this.noise(.75, .14, 620, 'lowpass'); }
+  megaShockwave() { this.noise(.9, .3, 220, 'lowpass'); this.tone(42, 150, .7, .2, 'sine'); this.duckMusic(.65, .75); }
+  victory() {
+    if (!this.started || !this.ctx) return;
+    const time = this.ctx.currentTime;
+    this.finalBossMode = false;
+    [110, 138.59, 164.81, 220, 277.18, 329.63].forEach((note, index) => this.tone(note, note * 1.005, 1.4, .045, 'triangle', time + index * .13, this.music, index % 2 ? .2 : -.2));
+    this.tone(55, 110, 1.6, .16, 'sine', time, this.sfx);
+  }
 
   toggle() {
     this.muted = !this.muted;

@@ -9,11 +9,11 @@ VIBE FPS is a browser-based cyberpunk first-person shooter tech demo. Enter a ne
 - Shader warm-up during loading (`compileAsync` + one offscreen post-chain render) so the first frame, shot, and explosion never stutter
 - Physics-based movement, jumping, a launch pad, collisions, and projectile simulation powered by Cannon.js
 - Wave-based combat against drones that patrol, engage, telegraph attacks, and evade incoming projectiles
-- **Apex units**: a unique, progressively stronger elite ends every wave — a cycling roster (VANGUARD, WRAITH, VEX, SENTINEL PRIME) with tier scaling, dedicated boss bar, and distinct attack patterns
+- **Apex units and a complete endgame**: a progressively stronger elite ends waves 1–8 from the cycling VANGUARD/WRAITH/VEX/SENTINEL PRIME roster; wave 9 deploys all four together at tier 3, and wave 10 culminates in the triple-scale, 24,000-HP OMEGA OVERLORD with unique phase attacks, dedicated procedural music, and a victory ending
 - Weapon feedback with muzzle shots, tracers, melee strikes, hit markers, explosions, shockwaves, reload and landing camera animation, damage effects, score, and combo tracking
-- Enemy rewards: kills restore health and create collectible ammunition drops; the first Apex drops a collectible Railgun with an instant beam that one-shots standard drones
+- Enemy rewards: kills restore health and create collectible ammunition drops; the first Apex drops a collectible Railgun with an instant beam that one-shots standard drones, and the next bosses (waves 2-4) drop three more unlockable weapons — the **VULCAN** minigun (fast-spinning auto-fire), the **HELLSTORM** rocket launcher (explosive AoE missiles), and the **PYRE** flamethrower (short-range cone fire). All five first-person weapons use detailed procedural models, brushed/clear-coated PBR materials, and dedicated cyan/magenta reflection lighting; Ultra quality adds the densest mechanical detailing. Switch weapons with number keys 1-5, the mouse wheel, or Q.
 - A true pause menu (simulation fully suspended, ducked audio) with a complete level reset action
-- Pure procedural music, ambience, spatialized drone sounds, wave stingers, a critical-health heartbeat, and sound effects generated with the Web Audio API (no MP3/WAV assets)
+- Pure procedural music, ambience, stereo-panned drone sounds, wave stingers, a critical-health heartbeat, and sound effects generated with the Web Audio API (no MP3/WAV assets)
 - Responsive tactical HUD with mission progress, radar, oversized health/shield/stamina meters, ammo, telemetry, and target markers
 - Auto and Ultra graphics profiles, plus persistent music, effects, ambience, mouse sensitivity, and mute settings
 
@@ -22,7 +22,7 @@ VIBE FPS is a browser-based cyberpunk first-person shooter tech demo. Enter a ne
 - A modern desktop browser with WebGPU and Pointer Lock support
 - No internet connection needed: Three.js and Cannon.js are vendored in `vendor/` (three.js 0.184.0, cannon.js 0.6.2)
 
-The game is designed for keyboard and mouse. Headphones are recommended for the spatial audio experience.
+The game is designed for keyboard and mouse. Headphones are recommended for the stereo-panned audio experience.
 The distributed build requires WebGPU. If the browser or device cannot provide a WebGPU adapter, the start menu shows an explicit warning and the simulation remains disabled.
 
 ## Run locally
@@ -50,7 +50,7 @@ Open [http://localhost:8080](http://localhost:8080) in a supported browser and c
 | `M` | Toggle audio |
 | `Esc` | Release pointer lock and pause |
 
-The arena also contains a jump pad that launches the player automatically on landing. Defeat every drone in a wave to advance; later waves contain tougher and more numerous enemies. During a pause, use **RESET LIVELLO** in the settings panel to restart the run from wave 1.
+The arena also contains a jump pad that launches the player automatically on landing. Defeat every drone in a wave to advance through the ten-wave run and destroy the Omega Overlord to complete the demo. During a pause, use **RESET LIVELLO** in the settings panel to restart the run from wave 1.
 
 ## Project structure
 
@@ -65,7 +65,7 @@ src/drone-system.js     Drone spawning, movement, attacks, and evasive behavior
 src/explosion-system.js Explosion pooling, particles, and shockwave effects
 src/facade-system.js    Procedural building facade generation
 src/textures.js         Procedural canvas/texture generators (asphalt, metal, wood, PBR, signs)
-src/audio-engine.js     Singleton procedural AudioEngine, SFX, drone, arpeggiator, and spatial audio
+src/audio-engine.js     Singleton procedural AudioEngine, SFX, drone, arpeggiator, and stereo-panned audio
 src/hud-controller.js    HUD onboarding and simulation settings
 vendor/                 Vendored runtime dependencies (three.js WebGPU build + addons, cannon.js)
 tools/smoke-boot.mjs    Headless boot smoke test (module graph, vendoring, WebGPU fallback path)

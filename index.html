@@ -200,7 +200,6 @@
   .weapon-hud { position:absolute; right:24px; bottom:24px; width:282px; padding:13px 17px 14px; }
   .weapon-head { display:flex; justify-content:space-between; align-items:end; }
   .weapon-name { color:var(--cyan); font-weight:900; letter-spacing:2px; font-size:13px; }
-  .fire-mode { color:var(--amber); font:700 9px ui-monospace,monospace; letter-spacing:1px; }
   .ammo-line { display:flex; justify-content:flex-end; align-items:baseline; gap:8px; margin-top:-2px; }
   #ammo { font:300 52px/.95 ui-monospace,monospace; letter-spacing:-5px; text-shadow:0 0 18px rgba(0,229,255,.24); }
   .reserve { color:rgba(203,235,240,.48); font:600 17px ui-monospace,monospace; }
@@ -281,7 +280,7 @@
 
   <div id="hitmarker"><i></i><i></i><i></i><i></i></div>
   <div id="wave-banner"><strong>WAVE 01</strong><span>HOSTILE CONTACTS DETECTED</span></div>
-  <div id="boss-bar"><span id="boss-name">APX</span><span class="boss-track"><i id="boss-fill"></i></span><span id="boss-state">T-1</span></div>
+  <div id="boss-bar"><span id="boss-name">APX</span><span class="boss-track"><i id="boss-fill"></i></span><b id="boss-hp">0 / 0</b><span id="boss-state">T-1</span></div>
   <div id="score-pop">+100 SENTINEL DOWN</div>
   <div id="damage-vignette"></div>
   <div id="target-layer"></div>
@@ -309,7 +308,6 @@
     <div class="vitals hud-panel">
       <div class="vitals-head">
         <div><div class="micro-label" data-i18n="vitals.title">VITAL SYSTEMS</div><strong id="vitals-state" data-i18n="vitals.state">COMBAT READY</strong></div>
-        <span class="vitals-corner">LIVE // 03</span>
       </div>
       <div class="vital-meter health-meter">
         <div class="vital-meter-head"><span class="vital-name" data-i18n="vitals.health">HEALTH</span><b id="health-value" class="vital-value">100</b></div>
@@ -323,11 +321,15 @@
         <div class="vital-meter-head"><span class="vital-name" data-i18n="vitals.stamina">STAMINA</span><b id="stamina-value" class="vital-value">100</b></div>
         <span class="bar"><i id="stamina-fill"></i></span>
       </div>
+      <div class="vital-meter lives-meter">
+        <div class="vital-meter-head"><span class="vital-name" data-i18n="vitals.lives">LIVES</span><b id="lives-value" class="vital-value lives-value">3</b></div>
+        <div id="lives-hearts" class="lives-hearts" aria-label="Lives"></div>
+      </div>
       <div class="vitals-foot"><span>CORE / ARMOR / DRIVE</span><span>100%</span></div>
     </div>
     <div class="weapon-hud hud-panel">
       <div id="reload-message" class="reload-message" data-i18n="weapon.reloading">RELOADING</div>
-      <div class="weapon-head"><span id="weapon-name" class="weapon-name">VX-9 PULSE</span><span id="weapon-mode" class="fire-mode">AUTO // 5.56E</span></div>
+      <div class="weapon-head"><span id="weapon-name" class="weapon-name">VX-9 PULSE</span></div>
       <div class="ammo-line"><span id="ammo">30</span><span class="reserve">/ <b id="reserve">180</b></span></div>
       <div id="ammo-cells" class="ammo-cells"></div>
     </div>
@@ -354,6 +356,7 @@
       <button id="touch-btn-fire" class="touch-btn touch-btn-fire" type="button" aria-label="Fire">FIRE</button>
     </div>
     <button id="touch-btn-sprint" class="touch-btn touch-btn-sprint" type="button" aria-label="Sprint">SPRINT</button>
+    <button id="touch-btn-pause" class="touch-btn touch-btn-pause" type="button" aria-label="Pause menu">PAUSE</button>
   </div>
 
   <!-- Rotate-device guard: visibile solo in portrait su touch, blocca il gioco. -->
@@ -420,7 +423,7 @@
   import { RenderPipelineController } from './src/render-pipeline.js';
   import { makeRng } from './src/rng.js';
   import { constrainBodyToSquare } from './src/player-collision.js';
-  import { getStoredSensitivity, storeSensitivity, getStoredQualityMode, APEX_TUNING, RAILGUN_TUNING } from './src/config.js';
+  import { getStoredSensitivity, storeSensitivity, getStoredQualityMode, APEX_TUNING, ENDGAME_TUNING, RAILGUN_TUNING, WEAPON_TUNING, getBossEncounter } from './src/config.js';
   import { t, getLanguage, setLanguage } from './src/i18n.js';
 
   // L1: applica subito la lingua persistita (default inglese) ai testi statici
@@ -598,6 +601,8 @@
     maxHealth: 100,
     maxShield: 75,
     maxStamina: 100,
+    maxLives: 3,             // vite totali a inizio run (i boss Apex droppano cuori)
+    heartDropLifetime: 35,   // secondi prima che un cuore si dissolva
     shieldRegen: 9,          // punti scudo al secondo fuori combattimento
     shieldRegenDelay: 4.5,   // secondi senza subire danni prima della rigenerazione
     sprintDrain: 25,         // energia al secondo in scatto
@@ -736,7 +741,15 @@
   const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 500);
   camera.rotation.order = 'YXZ';
 
-  const renderPipeline = new RenderPipelineController({ renderer, scene, camera, graphics: GRAPHICS });
+  const renderPipeline = new RenderPipelineController({
+    renderer,
+    scene,
+    camera,
+    graphics: GRAPHICS,
+    onPersistentFailure() {
+      showRendererFailure(t('fail.degraded'));
+    }
+  });
   loadingUI.update(.32, 'PIPELINE', 'Preparing GTAO, bloom, SMAA and reflections...');
 
   /* ============================================================
@@ -862,6 +875,7 @@
   }
 
   // Ambiente IBL (PMREM): riflessi colorati sui metalli
+  let weaponEnvironment = null;
   function createEnvironment() {
     const pmrem = new THREE.PMREMGenerator(renderer);
     const envScene = new THREE.Scene();
@@ -898,8 +912,29 @@
     floorEnv.position.y = -0.5;
     envScene.add(floorEnv);
 
+    // Preserve the arena's established IBL exactly. Weapon reflections use a
+    // second PMREM below, so this pass cannot alter the arena's lighting.
     scene.environment = pmrem.fromScene(envScene, 0.04).texture;
     scene.environmentIntensity = 0.6;
+
+    // Thin studio strips create elongated highlights on small gun surfaces.
+    // They are added only after the arena PMREM has been baked.
+    const weaponReflectionPanels = [
+      { color: 0xeaf5ff, w: .7, h: 10, pos: [-4, 5, 7], yaw: 2.65 },
+      { color: 0x65edff, w: .5, h: 8, pos: [5, 4, 5], yaw: -2.4 },
+      { color: 0xff70bb, w: .6, h: 7, pos: [-6, 3.5, -4], yaw: .8 },
+      { color: 0xffd19b, w: 5, h: .5, pos: [0, 9, -5], yaw: .1 }
+    ];
+    for (const panel of weaponReflectionPanels) {
+      const mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(panel.w, panel.h),
+        new THREE.MeshBasicMaterial({ color: panel.color })
+      );
+      mesh.position.set(...panel.pos);
+      mesh.rotation.y = panel.yaw;
+      envScene.add(mesh);
+    }
+    weaponEnvironment = pmrem.fromScene(envScene, 0.025).texture;
     pmrem.dispose();
   }
 
@@ -1042,27 +1077,6 @@
   if (floorReflection) asphaltSkin.add(floorReflection.target);
   scene.add(asphaltSkin);
 
-  const wallSurfaces = [];
-  let edgeSafeMode = false;
-  const EDGE_SAFE_ENTER = 2.8;
-  const EDGE_SAFE_EXIT = 3.8;
-  function updateEdgeSafeMode() {
-    const wallDistance = Math.min(
-      arenaInnerFace - Math.abs(camera.position.x),
-      arenaInnerFace - Math.abs(camera.position.z)
-    );
-    const finiteDistance = Number.isFinite(wallDistance) ? wallDistance : 0;
-    const next = edgeSafeMode
-      ? finiteDistance < EDGE_SAFE_EXIT
-      : finiteDistance < EDGE_SAFE_ENTER;
-    if (next === edgeSafeMode) return;
-    edgeSafeMode = next;
-    for (const surface of wallSurfaces) {
-      surface.mesh.material = edgeSafeMode ? surface.edgeSafeMaterial : surface.litMaterial;
-    }
-    renderPipeline.setEdgeSafeMode(edgeSafeMode);
-  }
-
   // Corpo fisico del pavimento (senza mesh: il visual è il riflettore)
   addStaticBox(0, -0.5, 0, floorSize, 1, floorSize, null);
   loadingUI.update(.72, 'ARENA', 'PBR materials, reflective floor and collisions...');
@@ -1125,20 +1139,6 @@
     mesh.position.set(...w.pos);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
-    // In prossimità del muro la priorità è una faccia interna sempre leggibile,
-    // ma SENZA il pop cromatico della vecchia variante a colore piatto blu
-    // (review demo: "le pareti cambiano colore avvicinandosi"). Il materiale di
-    // sicurezza condivide mappe e tinta con quello lit e alza solo l'emissiva
-    // come assicurazione contro il caso limite della faccia in ombra: lo swap
-    // è visivamente impercettibile.
-    const edgeSafeMaterial = new THREE.MeshStandardMaterial({
-      map: tex, normalMap: nrm, roughnessMap, metalnessMap,
-      color: 0x8699ad,
-      roughness: .66, metalness: .24, envMapIntensity: 1.05,
-      emissive: 0x1d3a54, emissiveIntensity: .92,
-      side: THREE.DoubleSide
-    });
-    wallSurfaces.push({ mesh, litMaterial: mat, edgeSafeMaterial });
     addStaticBox(w.pos[0], w.pos[1], w.pos[2], w.size[0], w.size[1], w.size[2], mesh);
   }
 
@@ -1279,7 +1279,7 @@
   pedestal.castShadow = true;
   pedestal.receiveShadow = true;
   scene.add(pedestal);
-  addStaticCylinder(0, 0.3, 0, 1.5, 0.6, null);
+  addStaticCylinder(0, 0.3, 0, 1.8, 0.6, null);
 
   const crystalMat = new THREE.MeshStandardMaterial({ color: 0x0f2233, emissive: 0x00e5ff, emissiveIntensity: 2.0, roughness: 0.2, metalness: 0.1 });
   const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.5), crystalMat);
@@ -1698,6 +1698,11 @@
      ============================================================ */
   const gun = new THREE.Group();
   const railgunView = new THREE.Group();
+  const minigunView = new THREE.Group();
+  const rpgView = new THREE.Group();
+  const flameView = new THREE.Group();
+  // Mappa per la visibilità dell'arma in prima persona (1 gruppi per arma).
+  const weaponViews = { pulse: gun, railgun: railgunView, minigun: minigunView, rpg: rpgView, flame: flameView };
 
   // Livello di dettaglio delle armi: su ULTRA i modelli diventano molto più
   // ricchi geometricamente e graficamente. Il valore iniziale viene letto dalla
@@ -1715,6 +1720,64 @@
     return mesh;
   }
 
+  // Every first-person weapon uses the same physically based surface language:
+  // brushed structural metal, coated armour, dark polymer and a polished trim.
+  // Keeping these values in one factory prevents one gun from looking flat while
+  // another reflects the environment correctly.
+  function createWeaponMaterials({ armour, frame, trim, polymer, glow, glowHot }) {
+    const normalScale = new THREE.Vector2(.16, .16);
+    return {
+      armour: new THREE.MeshPhysicalMaterial({
+        color: armour, metalness: .9, roughness: .2,
+        clearcoat: .72, clearcoatRoughness: .12,
+        envMap: weaponEnvironment, envMapIntensity: 2.35,
+        normalMap: brushedNormal, normalScale,
+        iridescence: .08, iridescenceIOR: 1.35
+      }),
+      frame: new THREE.MeshPhysicalMaterial({
+        color: frame, metalness: .94, roughness: .28,
+        clearcoat: .38, clearcoatRoughness: .2,
+        envMap: weaponEnvironment, envMapIntensity: 2.0, normalMap: brushedNormal,
+        normalScale: new THREE.Vector2(.11, .11)
+      }),
+      trim: new THREE.MeshPhysicalMaterial({
+        color: trim, metalness: .98, roughness: .13,
+        clearcoat: .82, clearcoatRoughness: .08,
+        envMap: weaponEnvironment, envMapIntensity: 2.8
+      }),
+      polymer: new THREE.MeshPhysicalMaterial({
+        color: polymer, metalness: .18, roughness: .43,
+        clearcoat: .48, clearcoatRoughness: .24,
+        envMap: weaponEnvironment, envMapIntensity: 1.35
+      }),
+      glow: new THREE.MeshBasicMaterial({
+        color: glow, toneMapped: false, blending: THREE.AdditiveBlending
+      }),
+      glowHot: new THREE.MeshBasicMaterial({
+        color: glowHot, toneMapped: false, blending: THREE.AdditiveBlending
+      }),
+      glass: new THREE.MeshPhysicalMaterial({
+        color: glow, emissive: glow, emissiveIntensity: .55,
+        metalness: .05, roughness: .06, clearcoat: 1,
+        clearcoatRoughness: .03, envMap: weaponEnvironment, envMapIntensity: 3.2,
+        transparent: true, opacity: .72, depthWrite: false,
+        side: THREE.DoubleSide
+      })
+    };
+  }
+
+  function addCoolingFins(meshes, material, count, startZ, spacing, width, y, height = .012) {
+    for (let i = 0; i < count; i++) {
+      meshes.push(part(new THREE.BoxGeometry(width, height, .018), material, [0, y, startZ - i * spacing]));
+    }
+  }
+
+  function addFasteners(meshes, material, positions, radius = .006) {
+    for (const [x, y, z, rx = Math.PI / 2] of positions) {
+      meshes.push(part(new THREE.CylinderGeometry(radius, radius, .009, 8), material, [x, y, z], [rx, 0, 0]));
+    }
+  }
+
   // --- VX-9 PULSE RIFLE -----------------------------------------------------
   function buildPulseGun(ultra) {
     if (!ultra) return buildPulseGunLite();
@@ -1722,9 +1785,11 @@
   }
   function buildPulseGunLite() {
     const meshes = [];
-    const metal = new THREE.MeshPhysicalMaterial({ color: 0x1a1d24, metalness: 0.85, roughness: 0.32, clearcoat: 0.3, envMapIntensity: 1.0 });
-    const dark  = new THREE.MeshStandardMaterial({ color: 0x0c0e13, metalness: 0.9, roughness: 0.45, envMapIntensity: 0.8 });
-    const strip = new THREE.MeshBasicMaterial({ color: 0x00e5ff });
+    const materials = createWeaponMaterials({
+      armour: 0x283340, frame: 0x080c12, trim: 0x7d91a7,
+      polymer: 0x10151d, glow: 0x00dfff, glowHot: 0xb9fbff
+    });
+    const { armour: metal, frame: dark, glow: strip, glass } = materials;
     meshes.push(
       part(new RoundedBoxGeometry(0.07, 0.11, 0.42, 2, 0.012), metal),
       part(new THREE.BoxGeometry(0.05, 0.15, 0.09), dark, [0, -0.13, 0.03], [0.25, 0, 0]),
@@ -1734,7 +1799,7 @@
       part(new THREE.BoxGeometry(0.012, 0.018, 0.24), strip, [0.041, 0.0, -0.05]),
       part(new RoundedBoxGeometry(.055, .13, .09, 2, .01), dark, [0, -0.12, -0.1], [-0.12, 0, 0]),
       part(new THREE.TorusGeometry(.038, .008, 7, 12, Math.PI), metal, [0, -0.075, -0.015], [0, Math.PI / 2, Math.PI / 2]),
-      part(new THREE.PlaneGeometry(.045, .028), new THREE.MeshBasicMaterial({ color: 0x65f7ff, transparent: true, opacity: .42, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }), [0, .112, -0.065], null, null, true),
+      part(new THREE.PlaneGeometry(.045, .028), glass, [0, .112, -0.065], null, null, true),
       part(new THREE.TorusGeometry(.034, .006, 6, 16), dark, [0, .112, -0.065], null, [1, .72, 1])
     );
     return meshes;
@@ -1743,12 +1808,14 @@
   // VX-9 dettagliato (solo ULTRA): più parti, sfaccettature e accent luminosi.
   function buildPulseGunUltra() {
     const meshes = [];
-    const metal = new THREE.MeshPhysicalMaterial({ color: 0x23262e, metalness: 0.9, roughness: 0.24, clearcoat: 0.55, clearcoatRoughness: 0.18, envMapIntensity: 1.4, sheen: 0.4, sheenColor: 0x334455 });
-    const bronze = new THREE.MeshPhysicalMaterial({ color: 0x4a3520, metalness: 0.95, roughness: 0.2, clearcoat: 0.4, envMapIntensity: 1.2 });
-    const dark = new THREE.MeshPhysicalMaterial({ color: 0x0a0d12, metalness: 0.92, roughness: 0.4, clearcoat: 0.2, envMapIntensity: 1.0 });
-    const strip = new THREE.MeshBasicMaterial({ color: 0x00e5ff, toneMapped: false });
-    const stripHot = new THREE.MeshBasicMaterial({ color: 0x7df6ff, toneMapped: false, blending: THREE.AdditiveBlending });
-    const glass = new THREE.MeshBasicMaterial({ color: 0x65f7ff, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+    const materials = createWeaponMaterials({
+      armour: 0x314050, frame: 0x070b11, trim: 0xb26a25,
+      polymer: 0x111923, glow: 0x00dfff, glowHot: 0xc9fcff
+    });
+    const {
+      armour: metal, frame: dark, trim: bronze,
+      glow: strip, glowHot: stripHot, glass
+    } = materials;
 
     meshes.push(part(new RoundedBoxGeometry(0.075, 0.1, 0.44, 3, 0.014), metal, [0, 0.01, 0.0]));
     meshes.push(part(new THREE.BoxGeometry(0.012, 0.06, 0.3), dark, [0.045, 0.02, 0.02]));
@@ -1782,6 +1849,14 @@
     for (const [x, y, z] of [[0, 0.05, 0.1], [0, 0.05, -0.1], [0.03, -0.02, 0.15]]) {
       meshes.push(part(new THREE.CylinderGeometry(0.006, 0.006, 0.012, 8), bronze, [x, y, z], [Math.PI / 2, 0, 0]));
     }
+    // Floating side armour and a polished charging rail break up the old boxy
+    // silhouette and catch long cyan/magenta streaks from the IBL panels.
+    for (const x of [-.052, .052]) {
+      meshes.push(part(new RoundedBoxGeometry(.014, .072, .24, 2, .005), metal, [x, .005, -.12], [0, 0, x > 0 ? -.08 : .08]));
+      meshes.push(part(new THREE.BoxGeometry(.006, .014, .21), strip, [x * 1.08, .012, -.12], null, null, true));
+    }
+    addCoolingFins(meshes, bronze, 5, -.23, .052, .092, .068, .009);
+    addFasteners(meshes, bronze, [[-.041, .052, .12], [.041, .052, .12], [-.041, -.03, -.05], [.041, -.03, -.05]], .005);
     return meshes;
   }
 
@@ -1792,16 +1867,18 @@
   }
   function buildRailgunLite() {
     const meshes = [];
-    const railMetal = new THREE.MeshPhysicalMaterial({ color: 0x263746, metalness: .94, roughness: .2, clearcoat: .65, emissive: 0x062e44, emissiveIntensity: .45 });
-    const railDark = new THREE.MeshStandardMaterial({ color: 0x080f18, metalness: .96, roughness: .28 });
-    const railGlow = new THREE.MeshBasicMaterial({ color: 0x7df6ff, toneMapped: false, blending: THREE.AdditiveBlending });
+    const materials = createWeaponMaterials({
+      armour: 0x28465e, frame: 0x050c15, trim: 0x9c6330,
+      polymer: 0x0a111a, glow: 0x54eaff, glowHot: 0xd7fcff
+    });
+    const { armour: railMetal, frame: railDark, glow: railGlow } = materials;
     meshes.push(part(new RoundedBoxGeometry(.13, .16, .48, 3, .018), railMetal));
     meshes.push(part(new THREE.BoxGeometry(.1, .17, .2), railDark, [0, -.12, .13], [.18, 0, 0]));
     for (const x of [-.075, .075]) {
       meshes.push(part(new THREE.BoxGeometry(.035, .045, .68), railDark, [x, .025, -.48]));
     }
     for (const [z, idx] of [[-.3, 0], [-.53, 1], [-.76, 2]]) {
-      meshes.push(part(new THREE.TorusGeometry(.072, .012, 8, 18), idx === 1 ? railGlow : railMetal, [0, .025, z], [Math.PI / 2, 0, 0], [1, .62, 1]));
+      meshes.push(part(new THREE.TorusGeometry(.072, .012, 8, 18), idx === 1 ? railGlow : railMetal, [0, .025, z], null, [1, .72, 1]));
     }
     meshes.push(part(new THREE.BoxGeometry(.018, .018, .72), railGlow, [0, .045, -.48], null, null, true));
     meshes.push(part(new THREE.BoxGeometry(.018, .04, .12), railGlow, [0, .13, -.06], null, null, true));
@@ -1812,11 +1889,14 @@
   // conduit di rame, nucleo energetico, alette di raffreddamento e accent luminosi.
   function buildRailgunUltra() {
     const meshes = [];
-    const railMetal = new THREE.MeshPhysicalMaterial({ color: 0x2a3a4a, metalness: .95, roughness: .18, clearcoat: .8, clearcoatRoughness: .15, emissive: 0x062e44, emissiveIntensity: .5, envMapIntensity: 1.5 });
-    const railDark = new THREE.MeshPhysicalMaterial({ color: 0x070d14, metalness: .96, roughness: .25, clearcoat: .3, envMapIntensity: 1.2 });
-    const copper = new THREE.MeshPhysicalMaterial({ color: 0x9a5a1a, metalness: .98, roughness: .22, clearcoat: .5, envMapIntensity: 1.4 });
-    const railGlow = new THREE.MeshBasicMaterial({ color: 0x7df6ff, toneMapped: false, blending: THREE.AdditiveBlending });
-    const railGlowHot = new THREE.MeshBasicMaterial({ color: 0xd5f9ff, toneMapped: false, blending: THREE.AdditiveBlending });
+    const materials = createWeaponMaterials({
+      armour: 0x31536b, frame: 0x040a12, trim: 0xbd7228,
+      polymer: 0x0a111b, glow: 0x51eaff, glowHot: 0xe2fdff
+    });
+    const {
+      armour: railMetal, frame: railDark, trim: copper,
+      glow: railGlow, glowHot: railGlowHot, glass
+    } = materials;
 
     meshes.push(part(new RoundedBoxGeometry(.14, .17, .5, 3, .02), railMetal));
     meshes.push(part(new THREE.BoxGeometry(.12, .02, .42), railDark, [0, .09, -.02]));
@@ -1830,7 +1910,7 @@
     for (let i = 0; i < 6; i++) {
       const z = -.12 - i * .13;
       const glow = i % 2 === 0 ? railGlowHot : railGlow;
-      meshes.push(part(new THREE.TorusGeometry(.078, .014, 10, 24), glow, [0, .035, z], [Math.PI / 2, 0, 0], [1, .62, 1], true));
+      meshes.push(part(new THREE.TorusGeometry(.078, .014, 10, 24), glow, [0, .035, z], null, [1, .72, 1], true));
     }
     meshes.push(part(new THREE.CylinderGeometry(.02, .02, .72, 16), railGlowHot, [0, .05, -.48], [Math.PI / 2, 0, 0], null, true));
     meshes.push(part(new THREE.BoxGeometry(.04, .05, .03), railDark, [0, .13, .18]));
@@ -1847,57 +1927,296 @@
     for (const [x, y, z] of [[.05, .08, .1], [-.05, .08, .1], [.05, .08, -.1], [-.05, .08, -.1]]) {
       meshes.push(part(new THREE.CylinderGeometry(.006, .006, .014, 8), copper, [x, y, z], [Math.PI / 2, 0, 0]));
     }
+    // Split muzzle forks, focusing crystal and rear charge display.
+    for (const x of [-.085, .085]) {
+      meshes.push(part(new RoundedBoxGeometry(.026, .052, .2, 2, .006), railMetal, [x, .025, -.83]));
+      meshes.push(part(new THREE.BoxGeometry(.008, .024, .16), railGlow, [x * .94, .025, -.84], null, null, true));
+    }
+    meshes.push(part(new THREE.OctahedronGeometry(.036, 1), glass, [0, .04, -.82], [0, 0, Math.PI / 4], null, true));
+    meshes.push(part(new RoundedBoxGeometry(.074, .05, .022, 2, .006), railDark, [0, .135, .08]));
+    meshes.push(part(new THREE.PlaneGeometry(.055, .03), glass, [0, .135, .067], null, null, true));
+    addFasteners(meshes, copper, [[-.058, .082, .18], [.058, .082, .18], [-.058, .082, -.18], [.058, .082, -.18]], .005);
+    return meshes;
+  }
+
+  // --- VULCAN (MINIGUN) ------------------------------------------------------
+  // Rotera molto veloce: un gruppo `barrel` con più canne che ruota nel loop.
+  let minigunBarrel = null;
+  function buildMinigunView(ultra) {
+    const meshes = [];
+    const materials = createWeaponMaterials({
+      armour: 0x343a42, frame: 0x080a0d, trim: 0xc46c25,
+      polymer: 0x15171b, glow: 0xff7a25, glowHot: 0xffd08a
+    });
+    const {
+      armour: metal, frame: dark, trim: accent, polymer,
+      glow, glowHot, glass
+    } = materials;
+
+    // Motor housing and removable side armour.
+    meshes.push(part(new RoundedBoxGeometry(.16, .17, .48, 4, .025), metal));
+    meshes.push(part(new RoundedBoxGeometry(.12, .18, .17, 3, .018), polymer, [0, -.105, .14], [.18, 0, 0]));
+    meshes.push(part(new RoundedBoxGeometry(.025, .105, .3, 2, .008), dark, [.09, .005, -.03]));
+    meshes.push(part(new RoundedBoxGeometry(.025, .105, .3, 2, .008), dark, [-.09, .005, -.03]));
+    meshes.push(part(new THREE.CylinderGeometry(.055, .065, .2, ultra ? 20 : 12), metal, [0, .075, .13], [Math.PI / 2, 0, 0]));
+    meshes.push(part(new THREE.CylinderGeometry(.036, .036, .025, 16), glow, [0, .076, .24], [Math.PI / 2, 0, 0], null, true));
+
+    // The previous barrels were vertical cylinders. They now run along the
+    // firing axis and are braced by a rotating central shaft and support rings.
+    const barrel = new THREE.Group();
+    const barrelGeometry = new THREE.CylinderGeometry(.012, .016, .7, ultra ? 16 : 10);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const tube = new THREE.Mesh(barrelGeometry, i % 2 ? dark : metal);
+      tube.position.set(Math.cos(a) * .055, Math.sin(a) * .055, -.48);
+      tube.rotation.x = Math.PI / 2;
+      tube.castShadow = true;
+      barrel.add(tube);
+      const collar = new THREE.Mesh(new THREE.CylinderGeometry(.021, .021, .055, 12), accent);
+      collar.position.set(Math.cos(a) * .055, Math.sin(a) * .055, -.82);
+      collar.rotation.x = Math.PI / 2;
+      collar.castShadow = true;
+      barrel.add(collar);
+    }
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(.013, .013, .72, 12), accent);
+    shaft.position.z = -.47;
+    shaft.rotation.x = Math.PI / 2;
+    barrel.add(shaft);
+    for (const z of [-.22, -.55]) {
+      const brace = new THREE.Mesh(new THREE.TorusGeometry(.063, .011, 10, ultra ? 28 : 18), dark);
+      brace.position.z = z;
+      barrel.add(brace);
+    }
+    const muzzle = new THREE.Mesh(new THREE.CylinderGeometry(.08, .08, .055, ultra ? 24 : 14, 1, true), metal);
+    muzzle.position.z = -.84;
+    muzzle.rotation.x = Math.PI / 2;
+    barrel.add(muzzle);
+    const muzzleLip = new THREE.Mesh(new THREE.TorusGeometry(.079, .012, 10, ultra ? 28 : 18), accent);
+    muzzleLip.position.z = -.87;
+    barrel.add(muzzleLip);
+    meshes.push(barrel);
+
+    // Side drum, visible feed belt, grip and holographic round counter.
+    meshes.push(part(new THREE.CylinderGeometry(.085, .085, .1, ultra ? 24 : 14), dark, [.12, -.015, .13], [0, 0, Math.PI / 2]));
+    meshes.push(part(new THREE.CylinderGeometry(.06, .06, .105, ultra ? 24 : 14), accent, [.12, -.015, .13], [0, 0, Math.PI / 2]));
+    for (let i = 0; i < 5; i++) {
+      meshes.push(part(new RoundedBoxGeometry(.025, .018, .035, 1, .004), accent, [.08 - i * .022, .005 + i * .006, .1 - i * .012], [0, 0, -.22]));
+    }
+    meshes.push(part(new RoundedBoxGeometry(.055, .15, .075, 3, .012), polymer, [0, -.145, .08], [.2, 0, 0]));
+    meshes.push(part(new THREE.TorusGeometry(.032, .006, 8, 18, Math.PI), accent, [0, -.075, .04], [0, Math.PI / 2, Math.PI / 2]));
+    meshes.push(part(new RoundedBoxGeometry(.065, .045, .02, 2, .006), dark, [0, .125, .02]));
+    meshes.push(part(new THREE.PlaneGeometry(.048, .028), glass, [0, .125, .008], null, null, true));
+    meshes.push(part(new THREE.BoxGeometry(.012, .018, .25), glow, [.086, .035, -.04], null, null, true));
+
+    if (ultra) {
+      addCoolingFins(meshes, accent, 6, .05, .05, .17, .09, .009);
+      for (const x of [-.09, .09]) {
+        meshes.push(part(new THREE.CylinderGeometry(.008, .008, .26, 10), glowHot, [x, -.045, -.04], [Math.PI / 2, 0, 0], null, true));
+      }
+      addFasteners(meshes, accent, [[-.08, .06, .16], [.08, .06, .16], [-.08, -.04, -.12], [.08, -.04, -.12]], .0055);
+    }
+    return { meshes, barrel };
+  }
+
+  // --- HELLSTORM (RPG) -------------------------------------------------------
+  function buildRPGView(ultra) {
+    const meshes = [];
+    const materials = createWeaponMaterials({
+      armour: 0x39483c, frame: 0x070b08, trim: 0xd7a12c,
+      polymer: 0x151c16, glow: 0xffba32, glowHot: 0xfff0a8
+    });
+    const {
+      armour: tube, frame: dark, trim: accent, polymer,
+      glow, glowHot, glass
+    } = materials;
+
+    // Layered launch tube with a true dark bore and polished blast bell.
+    meshes.push(part(new THREE.CylinderGeometry(.075, .085, .76, ultra ? 28 : 16), tube, [0, 0, -.25], [Math.PI / 2, 0, 0]));
+    meshes.push(part(new THREE.CylinderGeometry(.096, .125, .13, ultra ? 28 : 16, 1, true), dark, [0, 0, -.69], [Math.PI / 2, 0, 0]));
+    meshes.push(part(new THREE.TorusGeometry(.124, .013, 10, ultra ? 32 : 18), accent, [0, 0, -.76]));
+    meshes.push(part(new THREE.CircleGeometry(.077, ultra ? 28 : 16), dark, [0, 0, -.767], null, null, true));
+    meshes.push(part(new THREE.CylinderGeometry(.09, .075, .08, ultra ? 24 : 14), tube, [0, 0, .17], [Math.PI / 2, 0, 0]));
+
+    // Armoured saddle, shoulder stock and ergonomic fire controls.
+    meshes.push(part(new RoundedBoxGeometry(.14, .09, .28, 3, .018), tube, [0, -.015, -.05]));
+    meshes.push(part(new RoundedBoxGeometry(.11, .065, .28, 3, .014), polymer, [0, .01, .22]));
+    meshes.push(part(new RoundedBoxGeometry(.055, .15, .075, 3, .012), polymer, [0, -.14, .09], [.2, 0, 0]));
+    meshes.push(part(new THREE.TorusGeometry(.034, .006, 8, 18, Math.PI), accent, [0, -.075, .055], [0, Math.PI / 2, Math.PI / 2]));
+    for (const z of [-.16, .04]) {
+      meshes.push(part(new THREE.TorusGeometry(.09, .011, 9, ultra ? 28 : 18), accent, [0, 0, z], null, [1, .94, 1]));
+    }
+
+    // Offset thermal optic and illuminated range ladder.
+    meshes.push(part(new RoundedBoxGeometry(.075, .07, .22, 3, .012), dark, [.095, .08, -.06]));
+    meshes.push(part(new THREE.CylinderGeometry(.033, .04, .06, 18), accent, [.095, .08, -.19], [Math.PI / 2, 0, 0]));
+    meshes.push(part(new THREE.CircleGeometry(.031, 18), glass, [.095, .08, -.222], null, null, true));
+    meshes.push(part(new RoundedBoxGeometry(.052, .038, .018, 2, .005), dark, [.095, .13, .025]));
+    meshes.push(part(new THREE.PlaneGeometry(.038, .024), glass, [.095, .13, .014], null, null, true));
+    meshes.push(part(new THREE.BoxGeometry(.012, .02, .32), glow, [-.076, .048, -.15], null, null, true));
+
+    if (ultra) {
+      for (const x of [-.082, .082]) {
+        for (let i = 0; i < 5; i++) {
+          meshes.push(part(new RoundedBoxGeometry(.018, .035, .055, 1, .004), i % 2 ? tube : dark, [x, -.005, -.23 + i * .075]));
+        }
+      }
+      addCoolingFins(meshes, accent, 5, -.28, .055, .15, .087, .008);
+      addFasteners(meshes, accent, [[-.062, .05, .23], [.062, .05, .23], [-.062, -.05, -.02], [.062, -.05, -.02]], .0055);
+      meshes.push(part(new THREE.BoxGeometry(.01, .018, .22), glowHot, [.078, -.045, -.18], null, null, true));
+    }
+    return meshes;
+  }
+
+  // --- PYRE (FLAMETHROWER) ---------------------------------------------------
+  function buildFlameView(ultra) {
+    const meshes = [];
+    const materials = createWeaponMaterials({
+      armour: 0x533421, frame: 0x0d0705, trim: 0xcf6323,
+      polymer: 0x1c100b, glow: 0xff481c, glowHot: 0xffd078
+    });
+    const {
+      armour: tank, frame: dark, trim: copper, polymer,
+      glow, glowHot, glass
+    } = materials;
+
+    // Central valve block with twin pressurised fuel canisters.
+    meshes.push(part(new RoundedBoxGeometry(.13, .15, .38, 4, .022), dark, [0, 0, -.04]));
+    for (const x of [-.09, .09]) {
+      meshes.push(part(new THREE.CylinderGeometry(.052, .052, .35, ultra ? 24 : 14), tank, [x, -.005, -.015], [Math.PI / 2, 0, 0]));
+      for (const z of [-.11, .08]) {
+        meshes.push(part(new THREE.TorusGeometry(.053, .009, 9, ultra ? 24 : 16), copper, [x, -.005, z]));
+      }
+      meshes.push(part(new THREE.SphereGeometry(.052, ultra ? 18 : 10, ultra ? 12 : 8, 0, Math.PI * 2, 0, Math.PI / 2), tank, [x, -.005, -.19], [Math.PI / 2, 0, 0]));
+    }
+
+    // Long injection nozzle, heat cage and four-pronged burner crown.
+    meshes.push(part(new THREE.CylinderGeometry(.022, .03, .48, ultra ? 20 : 12), copper, [0, .01, -.43], [Math.PI / 2, 0, 0]));
+    for (const z of [-.27, -.42, -.57]) {
+      meshes.push(part(new THREE.TorusGeometry(.052, .009, 9, ultra ? 24 : 16), dark, [0, .01, z]));
+    }
+    for (const [x, y] of [[-.045, 0], [.045, 0], [0, -.035], [0, .055]]) {
+      meshes.push(part(new THREE.CylinderGeometry(.006, .006, .34, 8), tank, [x, y + .01, -.43], [Math.PI / 2, 0, 0]));
+    }
+    meshes.push(part(new THREE.CylinderGeometry(.04, .052, .075, 16, 1, true), dark, [0, .01, -.69], [Math.PI / 2, 0, 0]));
+    meshes.push(part(new THREE.TorusGeometry(.05, .01, 10, 24), copper, [0, .01, -.73]));
+    for (let i = 0; i < 4; i++) {
+      const a = i * Math.PI / 2;
+      meshes.push(part(new RoundedBoxGeometry(.012, .012, .09, 1, .003), copper, [Math.cos(a) * .043, .01 + Math.sin(a) * .043, -.75], [0, 0, a]));
+    }
+    meshes.push(part(new THREE.SphereGeometry(.021, 12, 8), glowHot, [0, .027, -.765], null, null, true));
+
+    // Pistol grip, pressure gauge and a real curved fuel hose.
+    meshes.push(part(new RoundedBoxGeometry(.055, .145, .075, 3, .012), polymer, [0, -.14, .1], [.2, 0, 0]));
+    meshes.push(part(new THREE.TorusGeometry(.034, .006, 8, 18, Math.PI), copper, [0, -.075, .06], [0, Math.PI / 2, Math.PI / 2]));
+    meshes.push(part(new THREE.CylinderGeometry(.038, .038, .022, 18), copper, [.105, .09, -.08], [0, 0, Math.PI / 2]));
+    meshes.push(part(new THREE.CircleGeometry(.032, 18), glass, [.117, .09, -.08], [0, Math.PI / 2, 0], null, true));
+    const hoseCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(.09, .025, .12), new THREE.Vector3(.14, .06, .02),
+      new THREE.Vector3(.13, .07, -.16), new THREE.Vector3(.045, .035, -.27)
+    ]);
+    meshes.push(part(new THREE.TubeGeometry(hoseCurve, ultra ? 20 : 12, .008, 8, false), polymer));
+    meshes.push(part(new THREE.BoxGeometry(.012, .018, .25), glow, [-.072, .04, -.02], null, null, true));
+
+    if (ultra) {
+      addCoolingFins(meshes, copper, 6, -.28, .052, .12, .072, .009);
+      addFasteners(meshes, copper, [[-.052, .052, .12], [.052, .052, .12], [-.052, -.052, -.12], [.052, -.052, -.12]], .005);
+      meshes.push(part(new THREE.BoxGeometry(.012, .018, .27), glowHot, [.072, .04, -.02], null, null, true));
+    }
     return meshes;
   }
 
   // Flash di sparo (additivo, raccolto dal bloom) — tenuti separati dai modelli
   // così i riferimenti restano stabili tra una ricostruzione e l'altra.
-  const flashMat = new THREE.MeshBasicMaterial({
-    color: 0xaef4ff, transparent: true, opacity: 0,
-    blending: THREE.AdditiveBlending, depthWrite: false
-  });
-  const flashMesh = new THREE.Mesh(new THREE.OctahedronGeometry(0.06), flashMat);
-  flashMesh.position.set(0, 0.015, -0.52);
-  const railFlashMat = new THREE.MeshBasicMaterial({
-    color: 0xff8c00, transparent: true, opacity: 0,
-    blending: THREE.AdditiveBlending, depthWrite: false
-  });
-  const railFlashMesh = new THREE.Mesh(new THREE.OctahedronGeometry(.1), railFlashMat);
-  railFlashMesh.position.set(0, .045, -1.02);
+  function createWeaponMuzzleFlash(colorValue, radius, position) {
+    const material = new THREE.MeshBasicMaterial({
+      color: colorValue, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+      toneMapped: false
+    });
+    const mesh = new THREE.Mesh(new THREE.OctahedronGeometry(radius, 1), material);
+    mesh.position.set(...position);
+    mesh.rotation.z = Math.PI / 4;
+    mesh.frustumCulled = false;
+    return mesh;
+  }
+  const flashMesh = createWeaponMuzzleFlash(0xaef4ff, .06, [0, .015, -.58]);
+  const railFlashMesh = createWeaponMuzzleFlash(0xffb247, .1, [0, .04, -1.01]);
+  const minigunFlashMesh = createWeaponMuzzleFlash(0xffd08a, .075, [0, 0, -.9]);
+  const rpgFlashMesh = createWeaponMuzzleFlash(0xffe0a0, .13, [0, 0, -.82]);
+  const flameFlashMesh = createWeaponMuzzleFlash(0xff6a25, .09, [0, .025, -.8]);
+  const weaponFlashMeshes = {
+    pulse: flashMesh,
+    railgun: railFlashMesh,
+    minigun: minigunFlashMesh,
+    rpg: rpgFlashMesh,
+    flame: flameFlashMesh
+  };
 
   const muzzleLight = new THREE.PointLight(0x9ff5ff, 0, 14, 2);
   muzzleLight.position.set(0.25, -0.18, -0.9);
 
+  function triggerMuzzleFlash(id, intensity, scale) {
+    const flash = weaponFlashMeshes[id];
+    const view = weaponViews[id];
+    if (!flash || !view) return;
+    flash.material.opacity = .96;
+    flash.scale.setScalar(scale);
+    muzzleLight.color.set(id === 'pulse' ? 0x9ff5ff : id === 'railgun' ? 0xffb247 : 0xff7a32);
+    muzzleLight.intensity = intensity;
+    muzzleLight.position.set(
+      view.position.x + flash.position.x,
+      view.position.y + flash.position.y,
+      view.position.z + flash.position.z
+    );
+  }
+
   // Ricostruisce i modelli in base al livello di dettaglio corrente.
-  function disposeMesh(mesh) {
-    if (mesh.geometry) mesh.geometry.dispose();
-    if (mesh.material) {
-      if (Array.isArray(mesh.material)) mesh.material.forEach(m => m.dispose());
-      else mesh.material.dispose();
-    }
+  function disposeMesh(root) {
+    const geometries = new Set();
+    const materials = new Set();
+    root.traverse(object => {
+      if (object.geometry) geometries.add(object.geometry);
+      if (Array.isArray(object.material)) object.material.forEach(material => materials.add(material));
+      else if (object.material) materials.add(object.material);
+    });
+    geometries.forEach(geometry => geometry.dispose());
+    materials.forEach(material => material.dispose());
   }
   function applyWeaponDetail() {
     const ultra = weaponDetailUltra;
-    for (const child of [...gun.children]) {
-      if (child !== flashMesh) { gun.remove(child); disposeMesh(child); }
+    for (const [id, view] of Object.entries(weaponViews)) {
+      const protectedFlash = weaponFlashMeshes[id];
+      const disposable = new THREE.Group();
+      for (const child of [...view.children]) {
+        if (child === protectedFlash) continue;
+        view.remove(child);
+        disposable.add(child);
+      }
+      disposeMesh(disposable);
+      disposable.clear();
+      if (protectedFlash.parent !== view) view.add(protectedFlash);
     }
-    for (const child of [...railgunView.children]) {
-      if (child !== railFlashMesh) { railgunView.remove(child); disposeMesh(child); }
-    }
-    gun.add(flashMesh);
-    railgunView.add(railFlashMesh);
+    minigunBarrel = null;
     gun.add(...buildPulseGun(ultra));
     railgunView.add(...buildRailgun(ultra));
+    const minigun = buildMinigunView(ultra);
+    minigunBarrel = minigun.barrel;
+    minigunView.add(...minigun.meshes);
+    rpgView.add(...buildRPGView(ultra));
+    flameView.add(...buildFlameView(ultra));
   }
 
   gun.position.set(0.25, -0.21, -0.45);
   railgunView.position.set(.25, -.21, -.45);
+  minigunView.position.set(.25, -.21, -.45);
+  rpgView.position.set(.25, -.21, -.45);
+  flameView.position.set(.25, -.21, -.45);
   railgunView.visible = false;
+  minigunView.visible = false;
+  rpgView.visible = false;
+  flameView.visible = false;
   applyWeaponDetail();
-  camera.add(gun, railgunView, muzzleLight);
-  const weaponFillLight = new THREE.PointLight(0x91bfff, 1.2, 2.4, 2);
-  weaponFillLight.position.set(-.15, .12, .12);
-  camera.add(weaponFillLight);
+  camera.add(gun, railgunView, minigunView, rpgView, flameView, muzzleLight);
   scene.add(camera);   // necessario affinché arma e luce annesse vengano renderizzate
 
   let gunRecoil = 0;   // rinculo visivo dell'arma
@@ -1929,15 +2248,55 @@
     ammo: CONFIG.magazineSize, reserve: CONFIG.reserveAmmo,
     weapon: 'pulse', railgunUnlocked: false,
     railgunAmmo: 0, railgunReserve: 0,
+    minigunUnlocked: false, minigunAmmo: 0, minigunReserve: 0,
+    rpgUnlocked: false, rpgAmmo: 0, rpgReserve: 0,
+    flameUnlocked: false, flameAmmo: 0, flameReserve: 0,
     reloading: false, reloadTimer: 0,
     score: 0, combo: 1, comboTimer: 0,
     wave: 1, waveKills: 0, waveTargets: 5, waveDelay: 0,
     dead: false, respawnTimer: 0, lastDamage: -99,
-    shots: 0, hits: 0, started: false
+    shots: 0, hits: 0, started: false,
+    gameOver: false,
+    victory: false,
+    lives: CONFIG.maxLives, maxLives: CONFIG.maxLives
   };
+
+  // Helper per l'accesso uniforme allo stato di ogni arma (caricatore, riserva,
+  // sblocco). Il pulse usa le chiavi base `ammo`/`reserve`; le altre armi
+  // usano `<id>Ammo` / `<id>Reserve` / `<id>Unlocked`.
+  function weaponUnlocked(id) {
+    if (id === 'pulse') return true;
+    if (id === 'railgun') return gameState.railgunUnlocked;
+    if (id === 'minigun') return gameState.minigunUnlocked;
+    if (id === 'rpg') return gameState.rpgUnlocked;
+    if (id === 'flame') return gameState.flameUnlocked;
+    return false;
+  }
+  function weaponAmmo(id) {
+    return id === 'pulse' ? gameState.ammo : (gameState[`${id}Ammo`] ?? 0);
+  }
+  function weaponReserve(id) {
+    return id === 'pulse' ? gameState.reserve : (gameState[`${id}Reserve`] ?? 0);
+  }
+  function setWeaponAmmo(id, ammo, reserve) {
+    if (id === 'pulse') { gameState.ammo = ammo; gameState.reserve = reserve; }
+    else { gameState[`${id}Ammo`] = ammo; gameState[`${id}Reserve`] = reserve; }
+  }
+  function unlockWeapon(id) {
+    if (id === 'railgun') gameState.railgunUnlocked = true;
+    else if (id === 'minigun') gameState.minigunUnlocked = true;
+    else if (id === 'rpg') gameState.rpgUnlocked = true;
+    else if (id === 'flame') gameState.flameUnlocked = true;
+  }
+  function weaponTuning(id) { return WEAPON_TUNING[id] || WEAPON_TUNING.pulse; }
+  // Elenco delle armi sbloccate, in ordine di "slot" (1-5).
+  function availableWeapons() {
+    return ['pulse', 'railgun', 'minigun', 'rpg', 'flame'].filter(weaponUnlocked);
+  }
 
   const hudController = new HudController();
   hudController.maxShield = CONFIG.maxShield;
+  hudController.maxLives = CONFIG.maxLives;
   const audio = AudioEngine.getInstance(muted => hudController.setMuted(muted));
   // N8: l'HUD riflette subito il mute persistito (prima restava su IMMERSIVE).
   hudController.setMuted(audio.muted);
@@ -1962,28 +2321,37 @@
   function showHitmarker(kill=false){hitmarkerEl.classList.toggle('kill',kill);restartClass(hitmarkerEl,'active');audio.hit(kill);}
   function showScore(amount,label){scorePopEl.textContent=`+${amount} ${label}`;restartClass(scorePopEl,'show');}
   function updateHUD(){
-    hudController.render(gameState);
-    hudController.renderBoss(droneSystem.apex);
+    // Espone all'HUD lo stato dell'arma corrente (munizioni, riserva, nome,
+    // capienza caricatore) così il render è uniforme per tutte le 5 armi.
+    const w = gameState.weapon;
+    const tuning = weaponTuning(w);
+    hudController.render({
+      ...gameState,
+      _ammo: weaponAmmo(w),
+      _reserve: weaponReserve(w),
+      _weaponName: t(tuning.nameKey),
+      _magazineSize: tuning.magazineSize
+    });
+    hudController.renderBoss(droneSystem.getBossHudState());
   }
 
   function setWeapon(nextWeapon, announce = true) {
-    const next = nextWeapon === 'railgun' ? 'railgun' : 'pulse';
-    if (next === 'railgun' && !gameState.railgunUnlocked) {
+    const next = WEAPON_TUNING[nextWeapon] ? nextWeapon : 'pulse';
+    if (!weaponUnlocked(next)) {
       if (announce) toast(`<b>ARMORY</b> · ${t('toast.weaponLocked')}`);
       return false;
     }
     if (gameState.weapon === next) {
-      gun.visible = next === 'pulse';
-      railgunView.visible = next === 'railgun';
+      for (const id of Object.keys(weaponViews)) weaponViews[id].visible = (id === next);
       return true;
     }
     gameState.weapon = next;
     gameState.reloading = false;
     gameState.reloadTimer = 0;
-    gun.visible = next === 'pulse';
-    railgunView.visible = next === 'railgun';
+    for (const id of Object.keys(weaponViews)) weaponViews[id].visible = (id === next);
     if (announce) {
-      toast(`<b>${t(next === 'railgun' ? 'weapon.railgun' : 'weapon.pulse')}</b> · ${t(next === 'railgun' ? 'toast.railgunReady' : 'toast.pulseReady')}`);
+      const tuning = weaponTuning(next);
+      toast(`<b>${t(tuning.nameKey)}</b> · ${tuning.displayName ? `${tuning.displayName} ONLINE` : t(next === 'railgun' ? 'toast.railgunReady' : 'toast.pulseReady')}`);
       audio.ui();
     }
     updateHUD();
@@ -2002,21 +2370,34 @@
     bossBarEl.style.display = visible ? '' : 'none';
     // I controlli touch compaiono solo durante l'azione su dispositivi touch.
     if (touchMode) touchControlsEl.classList.toggle('active', visible);
-    // Nasconde la barra del mouse su touch.
-    if (touchMode) crosshairEl.style.display = visible ? 'none' : 'none';
+    // Mirino: visibile anche in modalità touch (viewfinder deploy su mobile).
+    if (touchMode) crosshairEl.style.display = visible ? 'block' : 'none';
   }
 
   // L1: copy dell'overlay di pausa/reset centralizzato, così il cambio lingua
   // runtime può rigenerarlo senza duplicare stringhe nei call site.
   function applyOverlayStateCopy(resetVariant = false) {
     if (!gameState.started) return; // start: coperto dai data-i18n statici
-    overlayEl.querySelector('h1').innerHTML = t(resetVariant ? 'overlay.title.reset' : 'overlay.title.paused');
-    overlayEl.querySelector('.sub').textContent = t(resetVariant ? 'overlay.sub.reset' : 'overlay.sub.paused');
-    overlayEl.querySelector('.brief').textContent = t(resetVariant ? 'overlay.brief.reset' : 'overlay.brief.paused', {
-      wave: String(gameState.wave).padStart(2, '0'),
-      score: String(Math.round(gameState.score)).padStart(6, '0')
-    });
-    overlayEl.querySelector('.cta').textContent = t('overlay.cta.resume');
+    const gameOver = gameState.gameOver === true;
+    const victory = gameState.victory === true;
+    overlayEl.querySelector('h1').innerHTML = victory
+      ? t('overlay.title.victory')
+      : gameOver ? t('overlay.title.gameOver')
+      : t(resetVariant ? 'overlay.title.reset' : 'overlay.title.paused');
+    overlayEl.querySelector('.sub').textContent = victory
+      ? t('overlay.sub.victory')
+      : gameOver ? t('overlay.sub.gameOver')
+      : t(resetVariant ? 'overlay.sub.reset' : 'overlay.sub.paused');
+    overlayEl.querySelector('.brief').textContent = t(
+      victory ? 'overlay.brief.victory'
+        : gameOver ? 'overlay.brief.gameOver'
+          : (resetVariant ? 'overlay.brief.reset' : 'overlay.brief.paused'),
+      {
+        wave: String(gameState.wave).padStart(2, '0'),
+        score: String(Math.round(gameState.score)).padStart(6, '0')
+      }
+    );
+    overlayEl.querySelector('.cta').textContent = t(victory || gameOver ? 'overlay.cta.restart' : 'overlay.cta.resume');
   }
 
   // L1: cambio lingua runtime — testi statici (data-i18n), HUD dinamico,
@@ -2034,27 +2415,25 @@
 
   function startReload(){
     if(!gameState.started||gameState.reloading||gameState.dead)return;
-    if (gameState.weapon === 'railgun') {
-      if (!gameState.railgunUnlocked || gameState.railgunAmmo >= RAILGUN_TUNING.magazineSize || gameState.railgunReserve <= 0) return;
-      gameState.reloading = true;
-      gameState.reloadTimer = RAILGUN_TUNING.reloadTime;
-      audio.reload();
-      toast(`<b>${t('weapon.railgun')}</b> · ${t('toast.reload')}`);
-      updateHUD();
-      return;
-    }
-    if(gameState.ammo===CONFIG.magazineSize||gameState.reserve<=0)return;
-    gameState.reloading=true;gameState.reloadTimer=CONFIG.reloadTime;audio.reload();toast(`<b>${t('weapon.pulse')}</b> · ${t('toast.reload')}`);updateHUD();
+    const w = gameState.weapon;
+    const tuning = weaponTuning(w);
+    const ammo = weaponAmmo(w);
+    const reserve = weaponReserve(w);
+    if (ammo >= tuning.magazineSize || reserve <= 0) return;
+    gameState.reloading = true;
+    gameState.reloadTimer = tuning.reloadTime;
+    audio.reload();
+    toast(`<b>${t(tuning.nameKey)}</b> · ${t('toast.reload')}`);
+    updateHUD();
   }
   function completeReload(){
-    if (gameState.weapon === 'railgun') {
-      const needed = RAILGUN_TUNING.magazineSize - gameState.railgunAmmo;
-      const taken = Math.min(needed, gameState.railgunReserve);
-      gameState.railgunAmmo += taken;
-      gameState.railgunReserve -= taken;
-    } else {
-      const needed=CONFIG.magazineSize-gameState.ammo,taken=Math.min(needed,gameState.reserve);gameState.ammo+=taken;gameState.reserve-=taken;
-    }
+    const w = gameState.weapon;
+    const tuning = weaponTuning(w);
+    const ammo = weaponAmmo(w);
+    const reserve = weaponReserve(w);
+    const needed = tuning.magazineSize - ammo;
+    const taken = Math.min(needed, reserve);
+    setWeaponAmmo(w, ammo + taken, reserve - taken);
     gameState.reloading=false;audio.ui();updateHUD();
   }
 
@@ -2152,6 +2531,85 @@
     color: 0xffe2a0, transparent: true, opacity: .82,
     blending: THREE.AdditiveBlending, depthWrite: false
   });
+  // Cuore = pickup di una vita: ogni Apex (boss d'ondata) ne lascia cadere uno.
+  // Geometria/materiali condivisi (come ammoPickup*): i cuori a terra non
+  // allocano risorse per istanza.
+  const heartPickups=[];
+  const heartShape = new THREE.Shape();
+  heartShape.moveTo(.5, .5);
+  heartShape.bezierCurveTo(.5, .5, .4, 0, 0, 0);
+  heartShape.bezierCurveTo(-.6, 0, -.6, .7, -.6, .7);
+  heartShape.bezierCurveTo(-.6, 1.1, -.3, 1.54, .5, 1.9);
+  heartShape.bezierCurveTo(1.2, 1.54, 1.6, 1.1, 1.6, .7);
+  heartShape.bezierCurveTo(1.6, .7, 1.6, 0, 1, 0);
+  heartShape.bezierCurveTo(.7, 0, .5, .5, .5, .5);
+  const heartGeometry = new THREE.ExtrudeGeometry(heartShape, {
+    depth: .16, bevelEnabled: true, bevelSize: .05, bevelThickness: .05, bevelSegments: 3
+  });
+  const heartRingGeometry = new THREE.TorusGeometry(.5, .03, 6, 24);
+  const heartMaterial = new THREE.MeshStandardMaterial({
+    color: 0xff3b5c, emissive: 0x9a0a2c, emissiveIntensity: 1.6, metalness: .4, roughness: .3
+  });
+  const heartRingMaterial = new THREE.MeshBasicMaterial({
+    color: 0xff8fa5, transparent: true, opacity: .7,
+    blending: THREE.AdditiveBlending, depthWrite: false
+  });
+
+  function spawnHeartDrop(position) {
+    const group = new THREE.Group();
+    const heart = new THREE.Mesh(heartGeometry, heartMaterial);
+    // Centra la shape (x 0..1.6, y 0..1.9) sull'origine del gruppo: la translate
+    // va scalata SULLA scala del mesh (p' = position + scale*p), altrimenti il
+    // cuore finisce ~0.7u più in basso (mezzo sotto il pavimento).
+    heart.position.set(-.16, -.19, 0);
+    heart.scale.setScalar(.2);
+    group.add(heart);
+    const ring = new THREE.Mesh(heartRingGeometry, heartRingMaterial);
+    ring.rotation.x = Math.PI / 2;
+    ring.scale.setScalar(.62);
+    group.add(ring);
+    const startY = Math.max(.85, Number.isFinite(position?.y) ? position.y : .85);
+    group.position.set(
+      Number.isFinite(position?.x) ? position.x : playerBody.position.x,
+      startY,
+      Number.isFinite(position?.z) ? position.z : playerBody.position.z
+    );
+    group.traverse(object => { if (object.isMesh) object.castShadow = true; });
+    scene.add(group);
+    heartPickups.push({ group, age: 0, startY, baseY: .68, phase: Math.random() * Math.PI * 2 });
+  }
+
+  function updateHeartPickups(delta, time) {
+    for (let i = heartPickups.length - 1; i >= 0; i--) {
+      const pickup = heartPickups[i];
+      pickup.age += delta;
+      const settle = Math.min(1, pickup.age / .45);
+      pickup.group.position.y = THREE.MathUtils.lerp(pickup.startY, pickup.baseY, settle)
+        + Math.sin(time * 3.1 + pickup.phase) * .08;
+      pickup.group.rotation.y += delta * 1.8;
+      // A vite piene il cuore resta a terra (coerente con B8 per le munizioni):
+      // non viene consumato né spamma toast finché il giocatore sta sopra.
+      if (gameState.lives < gameState.maxLives
+        && pickup.group.position.distanceToSquared(playerBody.position) <= 1.15 * 1.15) {
+        gameState.lives = Math.min(gameState.maxLives, gameState.lives + 1);
+        audio.pickup();
+        toast(`<b>${t('toast.heart')}</b> · ${t('toast.lifeGained')}`);
+        updateHUD();
+        scene.remove(pickup.group);
+        heartPickups.splice(i, 1);
+        continue;
+      }
+      if (pickup.age >= CONFIG.heartDropLifetime) {
+        scene.remove(pickup.group);
+        heartPickups.splice(i, 1);
+      }
+    }
+  }
+
+  function clearHeartPickups() {
+    for (const pickup of heartPickups) scene.remove(pickup.group);
+    heartPickups.length = 0;
+  }
   // Drop unico del primo Apex: visuale distinta dal normale rifornimento, con
   // rotaie parallele e bobine energetiche in stile railgun arena shooter.
   const railgunPickups=[];
@@ -2180,11 +2638,18 @@
   let aliveEnemyCount = 0;
   let apexSpawned = false;
   let railgunDropSpawned = false;
+  // S7: cooldown del danno da contatto della carica VANGUARD (una volta per
+  // ~0.9s invece di ogni frame: 16 frame di overlap facevano ~350 danno).
+  let apexChargeContactCooldown = 0;
   const droneSystem = new DroneSystem({
     scene,
     camera,
     targetLayer: targetLayerEl,
     targetProvider: () => playerTarget.set(playerBody.position.x, playerBody.position.y + .5, playerBody.position.z),
+    // M9: limite dell'arena dei droni derivato dalla stessa geometria del
+    // giocatore (arenaSize/wallThick/playerRadius): se l'arena cambia, il volo
+    // dei droni segue i muri invece di restare a ±18 fisso.
+    arenaLimit: playerArenaLimit,
     onFire: drone => spawnHostileShot(drone),
     onTelegraph: drone => {
       const projected = drone.position.clone().project(camera);
@@ -2202,12 +2667,19 @@
 
 
   function spawnWave(announce=true){
-    const count=Math.min(4+gameState.wave,9);gameState.waveTargets=count;gameState.waveKills=0;gameState.waveDelay=0;
+    // S6: i campi minati VEX non devono sopravvivere al cambio d'ondata.
+    clearVexMines();
+    const encounter=getBossEncounter(gameState.wave);
+    const count=encounter.kind==='standard'?Math.min(4+gameState.wave,9):0;
+    gameState.waveTargets=encounter.kind==='standard'?count:encounter.bossCount;
+    gameState.waveKills=0;gameState.waveDelay=0;
     apexSpawned=false;
     aliveEnemyCount=droneSystem.spawnWave(gameState.wave,count);
     // A3: stinger audio distintivo solo per le nuove ondate annunciate.
-    if(announce){showWave();audio.waveStart();}
-    toast(`<b>SCANNER</b> · ${t('toast.scanner',{count})}`);updateHUD();
+    if(announce&&encounter.kind==='standard'){showWave();audio.waveStart();}
+    if(encounter.kind==='standard')toast(`<b>SCANNER</b> · ${t('toast.scanner',{count})}`);
+    else spawnApexUnit();
+    updateHUD();
   }
 
   function spawnHostileShot(drone,dmg){
@@ -2227,13 +2699,31 @@
   const apexShockwaves=[];     // anelli visivi dell'onda d'urto di VEX
 
   function spawnApexUnit(){
-    // Crea l'Apex dell'ondata corrente: scende dall'alto, annunciato con banner dedicato.
-    const apex=droneSystem.spawnApex(gameState.wave);
+    const encounter=getBossEncounter(gameState.wave);
     apexSpawned=true;
+    if(encounter.kind==='gauntlet'){
+      const apexes=droneSystem.spawnApexSquad(gameState.wave);
+      showWave(t('apex.gauntlet.title'),t('apex.gauntlet.subtitle'));
+      audio.apexGauntletStart();
+      toast(`<b>APX-COUNCIL</b> · ${t('toast.gauntlet')}`);
+      updateHUD();
+      return apexes;
+    }
+    if(encounter.kind==='final'){
+      const mega=droneSystem.spawnMegaBoss(gameState.wave);
+      showWave(t('apex.final.title'),t('apex.final.subtitle'));
+      audio.megaBossStart();
+      toast(`<b>OMEGA</b> · ${t('toast.mega',{name:t(mega.nameKey)})}`);
+      updateHUD();
+      return [mega];
+    }
+    // Crea l'Apex standard dell'ondata corrente: scende dall'alto.
+    const apex=droneSystem.spawnApex(gameState.wave);
     showWave(t('apex.title',{name:t(apex.nameKey),tier:apex.tier}),t('apex.subtitle'));
     audio.apexStart();
     toast(`<b>APX-T${apex.tier}</b> · ${t('toast.apex',{name:t(apex.nameKey)})}`);
     updateHUD();
+    return [apex];
   }
 
   function damageApex(apex,amount,position,countHit=true){
@@ -2247,23 +2737,37 @@
     if(result.armorBroken){toast(`<b>${apexi18n}</b> · ${t('toast.armor')}`);audio.apexArmorBreak(panForWorld(impactPosition));}
     if(result.phaseChanged){toast(`<b>${apexi18n}</b> · ${t('toast.phase')}`);audio.apexPhase(panForWorld(impactPosition));}
     if(result.killed){
-      const earned=Math.round(APEX_TUNING.scoreKill*gameState.combo);
+      // S5: l'eliminazione dell'Apex conta nell'obiettivo dell'ondata e alza
+      // il combo come per i droni (prima la barra missione restava a 5/5).
+      gameState.waveKills++;
+      gameState.combo=Math.min(CONFIG.comboMax,gameState.combo+CONFIG.comboKillStep);
+      const bossScore=apex.mega?ENDGAME_TUNING.megaBoss.scoreKill:APEX_TUNING.scoreKill;
+      const earned=Math.round(bossScore*gameState.combo);
       gameState.score+=earned;
-      showScore(earned,t('score.apex'));
+      showScore(earned,t(apex.mega?'score.mega':'score.apex'));
       audio.apexKill(panForWorld(impactPosition));
       const healed=Math.min(APEX_TUNING.healKill,Math.max(0,CONFIG.maxHealth-gameState.health));
       gameState.health+=healed;
       spawnAmmoDrop(impactPosition);
       spawnAmmoDrop({x:impactPosition.x+(apex.random()>.5?1.4:-1.4),y:impactPosition.y,z:impactPosition.z+(apex.random()>.5?1.2:-1.2)});
+      // Ogni boss d'ondata lascia cadere un cuore: una vita recuperabile.
+      spawnHeartDrop(impactPosition);
       // Il boss dell'ondata 1 è la ricompensa di progressione: lascia una
       // railgun persistente, raccolta dal giocatore entrando nel suo raggio.
       if(gameState.wave===1)spawnRailgunDrop(impactPosition);
+      // I boss successivi droppano le armi nuove: VULCAN, HELLSTORM, PYRE.
+      // Ogni spawnWeaponDrop gating internamente sull'onda (ogni 4, stesso
+      // archetipo) e sullo stato di sblocco: se il drop è mancato/scaduto,
+      // riappare alla prossima ondata dello stesso archetipo (T2).
+      spawnWeaponDrop('minigun',impactPosition);
+      spawnWeaponDrop('rpg',impactPosition);
+      spawnWeaponDrop('flame',impactPosition);
       explosionSystem.explode(impactPosition,apex.coreMaterial.emissive.getHex());
       // Secondo scoppio più ampio per la kill speciale (post-frame).
       window.setTimeout(()=>{
-        if(!gameState.dead&&droneSystem.apex&&!droneSystem.apex.alive)explosionSystem.explode(impactPosition,apex.coreMaterial.emissive.getHex());
+        if(!gameState.dead&&!apex.alive)explosionSystem.explode(impactPosition,apex.coreMaterial.emissive.getHex());
       },60);
-      toast(`<b>${apexi18n}</b> · ${t('toast.apexDown')}`);
+      toast(`<b>${apexi18n}</b> · ${t(apex.mega?'toast.megaDown':'toast.apexDown')}`);
       if(healed>0)toast(`<b>RECOVERY</b> · ${t('toast.heal',{amount:healed})}`);
       if(apex.archetypeId==='vex')spawnMinis(impactPosition,apex);
     }else{
@@ -2291,6 +2795,45 @@
   function handleApexAttack(apex,type){
     const color=apex.coreMaterial.emissive.getHex();
     if(type==='charge'){audio.apexCharge();return;}
+    if(type==='megaSpiral'){
+      const count=28+apex.megaPhase*4;
+      for(let i=0;i<count;i++){
+        const a=i/count*Math.PI*2+elapsed*.7;
+        const vel=new THREE.Vector3(Math.cos(a),Math.sin(i*.9)*.12,Math.sin(a)).multiplyScalar(14+apex.megaPhase);
+        spawnApexProjectile(apex,vel,color);
+      }
+      audio.megaSpiral();
+      return;
+    }
+    if(type==='megaLance'){
+      const base=new THREE.Vector3(
+        playerBody.position.x-apex.group.position.x,
+        (playerBody.position.y+.5)-apex.group.position.y,
+        playerBody.position.z-apex.group.position.z
+      ).normalize();
+      const rays=7+apex.megaPhase*2;
+      for(let i=0;i<rays;i++){
+        const offset=i-(rays-1)/2;
+        const d=base.clone().applyAxisAngle(axisY,offset*.055);
+        spawnApexProjectile(apex,d.multiplyScalar(23),0xffffff);
+      }
+      audio.megaLance();
+      return;
+    }
+    if(type==='megaBombard'){
+      const count=8+apex.megaPhase*2;
+      for(let i=0;i<count;i++){
+        const target=new THREE.Vector3(
+          playerBody.position.x+(apex.random()-.5)*10,
+          playerBody.position.y+.5,
+          playerBody.position.z+(apex.random()-.5)*10
+        );
+        const d=target.sub(apex.group.position).normalize().multiplyScalar(12+apex.random()*4);
+        spawnApexProjectile(apex,d,i%2?color:0xff4f5f);
+      }
+      audio.megaBombard();
+      return;
+    }
     if(type==='radial'){
       const count=12+Math.min(6,apex.tier*2);
       for(let i=0;i<count;i++){
@@ -2346,7 +2889,7 @@
   }
 
   function summonMinions(apex){
-    const count=apex.tier>=2?4:APEX_TUNING.sentinelMinions;
+    const count=apex.mega?6:apex.tier>=2?4:APEX_TUNING.sentinelMinions;
     for(let i=0;i<count;i++){
       const mini=droneSystem.createDrone(droneSystem.drones.length,count);
       mini.health=Math.max(80,Math.round(90+gameState.wave*10));mini.maxHealth=mini.health;
@@ -2433,10 +2976,11 @@
     );
     const len=Math.hypot(push.x,push.z);
     if(len>.01){push.x/=len;push.z/=len;}
-    playerBody.velocity.x+=push.x*7;
-    playerBody.velocity.z+=push.z*7;
-    damagePlayer(8);
-    audio.apexShockwave();
+    const force=apex.mega?14:7;
+    playerBody.velocity.x+=push.x*force;
+    playerBody.velocity.z+=push.z*force;
+    damagePlayer(apex.mega?22:8);
+    if(apex.mega)audio.megaShockwave();else audio.apexShockwave();
   }
 
   function updateApexShockwaves(delta){
@@ -2533,6 +3077,120 @@
     railgunPickups.length = 0;
   }
 
+  // --- Drop delle armi nuove (VULCAN/HELLSTORM/PYRE) dai boss dopo il primo. ---
+  // Ogni arma viene sbloccata una volta sola (wave 2/3/4) e, se il giocatore
+  // la raccoglie, resta in possesso per la run. Riusa la stessa logica del
+  // drop railgun ma con un visuale dedicato per arma.
+  const weaponPickups = [];
+  const weaponDropSpawned = { minigun: false, rpg: false, flame: false };
+  const wpMetal = new THREE.MeshStandardMaterial({ color: 0x2a3a46, metalness: .9, roughness: .3, emissive: 0x0a2a3a, emissiveIntensity: .4 });
+  const wpDark = new THREE.MeshStandardMaterial({ color: 0x0c0f13, metalness: .92, roughness: .4 });
+  const wpAccent = new THREE.MeshBasicMaterial({ color: 0xffb24a, toneMapped: false, blending: THREE.AdditiveBlending });
+
+  function buildWeaponPickupVisual(id) {
+    const group = new THREE.Group();
+    if (id === 'minigun') {
+      const drum = new THREE.Mesh(new THREE.CylinderGeometry(.15, .15, .12, 12), wpMetal);
+      drum.rotation.x = Math.PI / 2;
+      group.add(drum);
+      for (let i = 0; i < 3; i++) {
+        const a = (i / 3) * Math.PI * 2;
+        const b = new THREE.Mesh(new THREE.CylinderGeometry(.026, .026, .32, 8), wpDark);
+        b.rotation.x = Math.PI / 2;
+        b.position.set(Math.cos(a) * .11, Math.sin(a) * .11, -.16);
+        group.add(b);
+      }
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(.15, .02, 8, 18), wpAccent);
+      ring.rotation.x = Math.PI / 2;
+      group.add(ring);
+    } else if (id === 'rpg') {
+      const tube = new THREE.Mesh(new THREE.CylinderGeometry(.1, .1, .62, 14), wpDark);
+      tube.rotation.x = Math.PI / 2;
+      group.add(tube);
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(.1, .02, 8, 20), wpAccent);
+      ring.rotation.x = Math.PI / 2;
+      group.add(ring);
+      const nose = new THREE.Mesh(new THREE.ConeGeometry(.09, .16, 12), wpMetal);
+      nose.rotation.x = -Math.PI / 2;
+      nose.position.z = -.38;
+      group.add(nose);
+    } else {
+      const tank = new THREE.Mesh(new THREE.CylinderGeometry(.11, .11, .16, 12), wpMetal);
+      tank.rotation.z = Math.PI / 2;
+      group.add(tank);
+      const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(.032, .032, .22, 8), wpDark);
+      nozzle.rotation.x = Math.PI / 2;
+      nozzle.position.z = -.22;
+      group.add(nozzle);
+      const flameG = new THREE.Mesh(new THREE.SphereGeometry(.05, 8, 8), wpAccent);
+      flameG.position.z = -.34;
+      group.add(flameG);
+    }
+    group.traverse(o => { if (o.isMesh) o.castShadow = true; });
+    return group;
+  }
+
+  function spawnWeaponDrop(id, position) {
+    if (id === 'railgun') { spawnRailgunDrop(position); return; }
+    const tuning = WEAPON_TUNING[id];
+    // T2: la guardia era `wave === unlockWave` (solo onda 2/3/4). Dato che il
+    // roster cicla ogni 4 ondate (2,6,10 = stesso archetipo), si riapre il drop
+    // alle ondate successive dello stesso archetipo finché l'arma non è stata
+    // raccolta — evita il soft-lock se il primo drop scade/è mancato.
+    const waveOk = gameState.wave >= tuning.unlockWave
+      && (gameState.wave - tuning.unlockWave) % 4 === 0;
+    if (!tuning || !waveOk || weaponUnlocked(id) || weaponDropSpawned[id]) return;
+    const group = buildWeaponPickupVisual(id);
+    group.rotation.y = Math.PI * .25;
+    group.rotation.z = -.16;
+    const startY = Math.max(.85, Number.isFinite(position?.y) ? position.y : .85);
+    group.position.set(
+      Number.isFinite(position?.x) ? position.x : playerBody.position.x,
+      startY,
+      Number.isFinite(position?.z) ? position.z : playerBody.position.z
+    );
+    scene.add(group);
+    weaponPickups.push({ id, group, age: 0, startY, baseY: .68, phase: Math.random() * Math.PI * 2 });
+    weaponDropSpawned[id] = true;
+    toast(`<b>${t(tuning.nameKey)}</b> · ${t('toast.weaponDrop')}`);
+  }
+
+  function updateWeaponPickups(delta, time) {
+    for (let i = weaponPickups.length - 1; i >= 0; i--) {
+      const pickup = weaponPickups[i];
+      pickup.age += delta;
+      const settle = Math.min(1, pickup.age / .65);
+      pickup.group.position.y = THREE.MathUtils.lerp(pickup.startY, pickup.baseY, settle)
+        + Math.sin(time * 3.1 + pickup.phase) * .1;
+      pickup.group.rotation.y += delta * 1.8;
+
+      if (pickup.group.position.distanceToSquared(playerBody.position) <= 1.65 * 1.65) {
+        const tuning = WEAPON_TUNING[pickup.id];
+        unlockWeapon(pickup.id);
+        setWeaponAmmo(pickup.id, tuning.magazineSize, tuning.reserveAmmo);
+        scene.remove(pickup.group);
+        weaponPickups.splice(i, 1);
+        setWeapon(pickup.id, false);
+        audio.railgunPickup();
+        toast(`<b>${t(tuning.nameKey)}</b> · ${t('toast.weaponReady')}`);
+        updateHUD();
+        continue;
+      }
+      if (pickup.age >= RAILGUN_TUNING.pickupLifetime) {
+        scene.remove(pickup.group);
+        weaponPickups.splice(i, 1);
+        // T2: il drop è scaduto senza essere raccolto → riapri la possibilità
+        // di un nuovo drop alla prossima ondata dello stesso archetipo.
+        weaponDropSpawned[pickup.id] = false;
+      }
+    }
+  }
+
+  function clearWeaponPickups() {
+    for (const pickup of weaponPickups) scene.remove(pickup.group);
+    weaponPickups.length = 0;
+  }
+
   function updateAmmoPickups(delta, time) {
     for (let i = ammoPickups.length - 1; i >= 0; i--) {
       const pickup = ammoPickups[i];
@@ -2544,26 +3202,18 @@
       pickup.mesh.children[1].rotation.z += delta * 3.7;
 
       if (pickup.mesh.position.distanceToSquared(playerBody.position) <= 1.15 * 1.15) {
-        // Quando la railgun è in possesso, ogni rifornimento di munizioni vale
-        // 1 sparo della railgun e va alla riserva (da cui si ricarica il colpo).
-        // Anche qui vale B8: a riserva piena il pickup resta a terra.
-        if (gameState.railgunUnlocked) {
-          if (gameState.railgunReserve >= RAILGUN_TUNING.reserveAmmo) continue;
-          gameState.railgunReserve += 1;
+        // Il rifornimento riempie la riserva dell'arma AGGANCIATA (quella in
+        // mano). Vale B8: a riserva piena il pickup resta a terra.
+        const w = gameState.weapon;
+        const tuning = weaponTuning(w);
+        const reserve = weaponReserve(w);
+        // Armi con riserva (pulse, minigun, rpg, flame): riempie la riserva.
+        const room = tuning.reserveAmmo - reserve;
+        if (room > 0) {
+          const amount = Math.min(CONFIG.ammoDropAmount, room);
+          setWeaponAmmo(w, weaponAmmo(w), reserve + amount);
           audio.pickup();
-          toast(`<b>${t('weapon.railgun')}</b> · ${t('toast.ammo',{amount:1})}`);
-          updateHUD();
-          scene.remove(pickup.mesh);
-          ammoPickups.splice(i, 1);
-          continue;
-        }
-        const amount = Math.min(CONFIG.ammoDropAmount, CONFIG.reserveAmmo - gameState.reserve);
-        // B8: a riserva piena il pickup NON viene consumato (resta a terra finché
-        // non serve); nessun toast spam finché il giocatore resta sopra il drop.
-        if (amount > 0) {
-          gameState.reserve += amount;
-          audio.pickup();
-          toast(`<b>${t('toast.resupply')}</b> · ${t('toast.ammo',{amount})}`);
+          toast(`<b>${t(tuning.nameKey)}</b> · ${t('toast.ammo',{amount})}`);
           updateHUD();
           scene.remove(pickup.mesh);
           ammoPickups.splice(i, 1);
@@ -2605,7 +3255,25 @@
     if(gameState.dead)return;
     let remaining=amount;if(gameState.shield>0){const absorbed=Math.min(gameState.shield,remaining);gameState.shield-=absorbed;remaining-=absorbed;}
     gameState.health=Math.max(0,gameState.health-remaining);gameState.lastDamage=elapsed;audio.hurt();restartClass(damageVignetteEl,'flash');cameraDamageKick=Math.min(.16,cameraDamageKick+.055);
-    if(gameState.health<=0){gameState.dead=true;gameState.respawnTimer=2.2;gameState.combo=1;showWave(t('wave.lost.title'),t('wave.lost.sub'));toast(`<b>${t('toast.warning')}</b> · ${t('toast.critical')}`);}
+    if(gameState.health<=0){
+      // Ogni morte consuma una vita ("Link lost"): a vite esaurite la run
+      // termina e riparte pulita dall'ondata 1 (vedi respawn in updateGameplay).
+      gameState.lives=Math.max(0,gameState.lives-1);
+      gameState.dead=true;
+      gameState.combo=1;
+      if(gameState.lives<=0){
+        // Link terminato: la run finisce. Niente respawn automatico — allo
+        // scadere del timer apriamo il menu GAME OVER (vedi endGameOver).
+        gameState.gameOver=true;
+        gameState.respawnTimer=2.4;
+        showWave(t('wave.gameOver.title'),t('wave.gameOver.sub'));
+        toast(`<b>${t('toast.warning')}</b> · ${t('toast.gameOver')}`);
+      }else{
+        gameState.respawnTimer=2.2;
+        showWave(t('wave.lost.title'),t('wave.lost.sub'));
+        toast(`<b>${t('toast.warning')}</b> · ${t('toast.lifeLost',{lives:gameState.lives})}`);
+      }
+    }
     updateHUD();
   }
 
@@ -2613,22 +3281,56 @@
     gameState.health=CONFIG.maxHealth;gameState.shield=CONFIG.maxShield;gameState.stamina=CONFIG.maxStamina;gameState.dead=false;resetPlayerBody();showWave(t('wave.restored.title'),t('wave.restored.sub'));
   }
 
+  // GAME OVER: vite esaurite — la run termina qui. Congela la simulazione e
+  // apre l'overlay in stato di fine partita (titolo GAME OVER, CTA = RESTART
+  // RUN). Su desktop esce dal pointer lock così il CTA è cliccabile.
+  function endGameOver(){
+    if (touchMode) playing = false;
+    clearPlayerInput();
+    // L14: i cuori a terra non devono restare congelati dietro l'overlay
+    // GAME OVER — puliti subito, già coperti da clearHeartPickups nel reset.
+    clearHeartPickups();
+    syncHudVisibility();
+    overlayEl.style.display = 'flex';
+    applyOverlayStateCopy(false);
+    if (!touchMode && document.pointerLockElement) document.exitPointerLock();
+  }
+
+  function endVictory(){
+    if(gameState.victory)return;
+    gameState.victory=true;
+    if(touchMode)playing=false;
+    clearPlayerInput();
+    clearHostileShots();
+    audio.victory();
+    showWave(t('wave.victory.title'),t('wave.victory.sub'));
+    syncHudVisibility();
+    overlayEl.style.display='flex';
+    applyOverlayStateCopy(false);
+    if(!touchMode&&document.pointerLockElement)document.exitPointerLock();
+  }
+
   function updateDrones(delta,time){
     if (!gameState.started && !isGameplayActive()) return;
     // N7: gli spawn dei minion/split aggiungono droni durante la run; il flag
     // apexSpawned evita che ogni frame provi a ri-generare l'Apex dell'ondata.
     aliveEnemyCount=droneSystem.update(delta,time,{active:isGameplayActive(),dead:gameState.dead});
-    const apexAlive=droneSystem.updateApex(delta,time,{active:isGameplayActive(),dead:gameState.dead});
+    const apexAliveCount=droneSystem.updateApex(delta,time,{active:isGameplayActive(),dead:gameState.dead});
     // Carica VANGUARD: danno da contatto mentre è in carica.
-    const apex=droneSystem.apex;
-    if(apex&&apex.alive&&apex.state==='charge'&&apex.chargeDir&&isGameplayActive()&&!gameState.dead){
-      const dx=apex.group.position.x-playerBody.position.x;
-      const dz=apex.group.position.z-playerBody.position.z;
-      if(dx*dx+dz*dz<(apex.radius+.75)*(apex.radius+.75))damagePlayer(APEX_TUNING.chargeContactDmg);
+    if(apexChargeContactCooldown>0)apexChargeContactCooldown-=delta;
+    for(const apex of droneSystem.apexes){
+      if(apex.alive&&apex.state==='charge'&&apex.chargeDir&&isGameplayActive()&&!gameState.dead){
+        const dx=apex.group.position.x-playerBody.position.x;
+        const dz=apex.group.position.z-playerBody.position.z;
+        if(apexChargeContactCooldown<=0&&dx*dx+dz*dz<(apex.radius+.75)*(apex.radius+.75)){
+          damagePlayer(APEX_TUNING.chargeContactDmg);
+          apexChargeContactCooldown=.9;
+        }
+      }
     }
     if(aliveEnemyCount===0&&gameState.waveDelay<=0){
       if(!apexSpawned)spawnApexUnit();
-      else if(!apexAlive)gameState.waveDelay=2.8;
+      else if(apexAliveCount===0)gameState.waveDelay=gameState.wave===ENDGAME_TUNING.finalWave?4.2:2.8;
     }
     updateVexMines(delta,time);
     updateApexShockwaves(delta);
@@ -2663,15 +3365,15 @@
     function mapPoint(wx,wz){const dx=wx-playerBody.position.x,dz=wz-playerBody.position.z;return {x:(dx*Math.cos(yaw)-dz*Math.sin(yaw))*scale,y:-(-dx*Math.sin(yaw)-dz*Math.cos(yaw))*scale};}
     const pad=mapPoint(CONFIG.padPos.x,CONFIG.padPos.z);c.fillStyle='#ff2d95';c.fillRect(pad.x-4,pad.y-4,8,8);
     for(const d of drones){if(!d.alive)continue;const p=mapPoint(d.group.position.x,d.group.position.z);if(Math.hypot(p.x,p.y)>w*.44)continue;c.save();c.translate(p.x,p.y);c.rotate(Math.PI/4);c.fillStyle='#ff465f';c.shadowColor='#ff3155';c.shadowBlur=12;c.fillRect(-5,-5,10,10);c.restore();}
-    // Apex: blip più grande e pulsante sul radar.
-    const rApex=droneSystem.apex;
-    if(rApex&&rApex.alive){
+    // Apex: tutti i boss del gauntlet hanno un blip indipendente.
+    for(const rApex of droneSystem.apexes){
+      if(!rApex.alive)continue;
       const p=mapPoint(rApex.group.position.x,rApex.group.position.z);
       if(Math.hypot(p.x,p.y)<=w*.46){
         const pulse=1+.25*Math.sin(time*6);
-        const size=(5+Math.min(3,rApex.tier))*pulse;
+        const size=(rApex.mega?11:5+Math.min(3,rApex.tier))*pulse;
         c.save();c.translate(p.x,p.y);
-        c.fillStyle=droneSystem.apex.coreMaterial?('#'+rApex.coreMaterial.emissive.getHex().toString(16).padStart(6,'0')):'#ff4f5f';
+        c.fillStyle=rApex.coreMaterial?('#'+rApex.coreMaterial.emissive.getHex().toString(16).padStart(6,'0')):'#ff4f5f';
         c.shadowColor=c.fillStyle;c.shadowBlur=16;
         c.beginPath();c.arc(0,0,size,0,Math.PI*2);c.fill();
         c.restore();
@@ -2686,21 +3388,96 @@
     if(gameState.reloading){gameState.reloadTimer-=delta;if(gameState.reloadTimer<=0)completeReload();}
     if(gameState.comboTimer>0){gameState.comboTimer-=delta;if(gameState.comboTimer<=0)gameState.combo=1;}
     if(time-gameState.lastDamage>CONFIG.shieldRegenDelay&&gameState.shield<CONFIG.maxShield&&!gameState.dead)gameState.shield=Math.min(CONFIG.maxShield,gameState.shield+delta*CONFIG.shieldRegen);
-    if(gameState.waveDelay>0){gameState.waveDelay-=delta;if(gameState.waveDelay<=0){gameState.wave++;gameState.shield=Math.min(CONFIG.maxShield,gameState.shield+CONFIG.waveBonusShield);gameState.reserve=Math.min(CONFIG.reserveAmmo,gameState.reserve+CONFIG.waveBonusAmmo);toast(`<b>${t('hud.wave',{wave:String(gameState.wave).padStart(2,'0')})}</b> · ${t('toast.waveBonus',{shield:CONFIG.waveBonusShield,ammo:CONFIG.waveBonusAmmo})}`);spawnWave(true);}}
-    if(gameState.dead){gameState.respawnTimer-=delta;if(gameState.respawnTimer<=0)respawnPlayer();}
+    if(gameState.waveDelay>0&&!gameState.dead){
+      gameState.waveDelay-=delta;
+      if(gameState.waveDelay<=0){
+        if(gameState.wave>=ENDGAME_TUNING.finalWave){endVictory();}
+        else{
+          gameState.wave++;
+          gameState.shield=Math.min(CONFIG.maxShield,gameState.shield+CONFIG.waveBonusShield);
+          const wb=gameState.weapon,wbt=weaponTuning(wb),wbr=weaponReserve(wb);
+          setWeaponAmmo(wb,weaponAmmo(wb),Math.min(wbt.reserveAmmo,wbr+CONFIG.waveBonusAmmo));
+          toast(`<b>${t('hud.wave',{wave:String(gameState.wave).padStart(2,'0')})}</b> · ${t('toast.waveBonus',{shield:CONFIG.waveBonusShield,ammo:CONFIG.waveBonusAmmo})}`);
+          spawnWave(true);
+        }
+      }
+    }
+    if(gameState.dead){
+      gameState.respawnTimer-=delta;
+      if(gameState.respawnTimer<=0){
+        // Vite esaurite → GAME OVER: si congela la simulazione e si apre l'overlay.
+        if(gameState.lives<=0)endGameOver();
+        else respawnPlayer();
+      }
+    }
     updateHUD();
   }
 
   spawnWave(false);
   loadingUI.update(.94, 'SHADER WARMUP', 'Precompiling graphics pipelines...');
-  // G1: precompila le pipeline WebGPU di tutti i materiali in scena e della
-  // catena di post-processing durante il loading, così il primo frame, il
-  // primo colpo e la prima esplosione non pagano la compilazione shader.
-  try {
-    await renderer.compileAsync(scene, camera);
-  } catch (error) {
-    console.warn('VIBE shader warmup skipped', error);
+  // G1: precompila TUTTI i materiali in scena prima del loop di animazione.
+  // renderer.compileAsync() da solo non basta: _projectObject() salta gli
+  // oggetti con visible===false, i frustum-culled fuori dal frustum della
+  // camera e i materiali con visible===false. Quei mesh, alla prima visibilità
+  // a run-time, compilerebbero su più frame in renderObjectDirect (updateBeforeNode
+  // / build) bloccando il main thread ~3-4s. Qui forziamo visione totale,
+  // compiliamo e ripristiniamo lo stato originale in finally.
+  // La scena include la camera (scene.add(camera)), quindi anche le armi/
+  // railgun nascosti attaccati alla camera vengono coperti dal traverse.
+  async function precompileAllMaterials() {
+    const restore = [];
+    // Passo 1 — luci e loro antenati: MAI forzare visible=true su questi nodi.
+    // compileAsync() costruisce il render list che aggrega le luci visibili nel
+    // lightsNode; se a compile-time il set di luci differisse dal runtime, ogni
+    // materiale verrebbe ricompilato al primo frame di gioco (freeze) e i
+    // renderObject stale venirebbero riusati con slot di luce disallineati
+    // (effetto: scena più scura). Luce nascosta = stessa luce assente a runtime
+    // E a compile: il set resta identico.
+    const lightPaths = new Set();
+    scene.traverse((object) => {
+      if (object.isLight) {
+        for (let ancestor = object.parent; ancestor; ancestor = ancestor.parent) lightPaths.add(ancestor);
+      }
+    });
+    // Passo 2 — forzo la copertura totale dei MESH (non delle luci):
+    //  - visible=true su renderable e contenitori nascosti (compila anche gli
+    //    oggetti che al boot hanno visible=false: railgun, rail beam, ondate
+    //    d'urto, puff fumo...);
+    //  - frustumCulled=false su ogni renderable (i mesh fuori dal frustum della
+    //    camera di boot: facciate, ambiente, droni sparsi per l'arena...);
+    //  - material.visible=true per i materiali nascosti.
+    // Lo stato originale viene ripristinato in finally.
+    scene.traverse((object) => {
+      if (!object.isLight && !lightPaths.has(object) && object.visible === false) {
+        object.visible = true;
+        restore.push(() => { object.visible = false; });
+      }
+      if (object.isMesh || object.isSprite || object.isPoints || object.isLine || object.isLineSegments || object.isInstancedMesh) {
+        if (object.frustumCulled === true) {
+          object.frustumCulled = false;
+          restore.push(() => { object.frustumCulled = true; });
+        }
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        for (const material of materials) {
+          if (material && material.visible === false) {
+            material.visible = true;
+            restore.push(() => { material.visible = false; });
+          }
+        }
+      }
+    });
+    try {
+      await renderer.compileAsync(scene, camera);
+    } catch (error) {
+      console.warn('VIBE shader warmup skipped', error);
+    } finally {
+      for (let i = restore.length - 1; i >= 0; i--) restore[i]();
+    }
   }
+  // G1: il loading screen e l'input utente restano bloccati finché questa
+  // await non risolve: finishBoot() (che mostra il CTA) arriva dopo, e il loop
+  // di animazione parte solo a bootGame() completato.
+  await precompileAllMaterials();
   try {
     renderPipeline.render(0, 0);
   } catch (error) {
@@ -2718,6 +3495,9 @@
   let jumpQueued = false;
   let triggerDown = false;
   let fireCooldown = 0;
+  // T8: throttle del suono del lanciafiamme (il fuoco è ~20 tick/s; il suono
+  // viene riprodotto al massimo ogni ~0.12s per limitare la creazione di nodi).
+  let flameSoundTimer = 0;
 
   // --- MOBILE / TOUCH ---------------------------------------------------------
   // touchMode/highEndDevice sono rilevati in alto (danno anche il dettaglio armi).
@@ -2729,7 +3509,8 @@
     fire: false, jump: false, melee: false, reload: false, sprint: false, weapon: false
   };
   // True quando la simulazione è attiva (desktop: pointer lock; touch: playing).
-  const isGameplayActive = () => (touchMode ? playing : locked) && gameState.started && !gameStartLoading;
+  const isGameplayActive = () => (touchMode ? playing : locked)
+    && gameState.started && !gameStartLoading && !gameState.victory;
   // Input attivo (solo pointer lock / playing, senza gameState.started né
   // gameStartLoading): usato dal flusso di avvio, che è proprio ciò che imposta
   // gameState.started = true e che tiene gameStartLoading = true durante l'asincrono.
@@ -2746,10 +3527,11 @@
   const touchBtnWeapon = document.getElementById('touch-btn-weapon');
   const touchBtnJump = document.getElementById('touch-btn-jump');
   const touchBtnSprint = document.getElementById('touch-btn-sprint');
+  const touchBtnPause = document.getElementById('touch-btn-pause');
   const rotateOverlayEl = document.getElementById('rotate-overlay');
   // Stato per-josystick (tracciato per touch.identifier).
   const leftStick = { id: null, anchorX: 0, anchorY: 0 };
-  const rightStick = { id: null, anchorX: 0, anchorY: 0 };
+  const rightStick = { id: null, anchorX: 0, anchorY: 0, lastX: 0, lastY: 0 };
   const STICK_RADIUS = 46; // raggio (px) dello stick virtuale
   const AIM_SENSITIVITY = 0.0044;
 
@@ -2810,10 +3592,13 @@
     const gameplayInput = isGameplayActive();
     if (e.code === 'Space' && gameplayInput) jumpQueued = true;
     if (e.code === 'KeyR' && gameplayInput) startReload();
-    if (e.code === 'KeyQ' && gameplayInput && gameState.railgunUnlocked) setWeapon(gameState.weapon === 'railgun' ? 'pulse' : 'railgun');
+    if (e.code === 'KeyQ' && gameplayInput) cycleWeapon(1);
     // Scorrimento armi con i numeri da 1 in avanti sulla tastiera.
     if (e.code === 'Digit1' && gameplayInput) setWeapon('pulse');
-    if (e.code === 'Digit2' && gameplayInput && gameState.railgunUnlocked) setWeapon('railgun');
+    if (e.code === 'Digit2' && gameplayInput && weaponUnlocked('railgun')) setWeapon('railgun');
+    if (e.code === 'Digit3' && gameplayInput && weaponUnlocked('minigun')) setWeapon('minigun');
+    if (e.code === 'Digit4' && gameplayInput && weaponUnlocked('rpg')) setWeapon('rpg');
+    if (e.code === 'Digit5' && gameplayInput && weaponUnlocked('flame')) setWeapon('flame');
     if (e.code === 'KeyM') audio.toggle();
   });
   document.addEventListener('keyup', (e) => { keys[e.code] = false; });
@@ -2847,7 +3632,7 @@
   // Scorrimento delle armi con la rotella del mouse: cicla tra le armi
   // effettivamente disponibili (la railgun solo se sbloccata).
   function cycleWeapon(direction) {
-    const available = gameState.railgunUnlocked ? ['pulse', 'railgun'] : ['pulse'];
+    const available = availableWeapons();
     const idx = available.indexOf(gameState.weapon);
     const next = available[(idx + direction + available.length) % available.length];
     setWeapon(next);
@@ -2862,14 +3647,23 @@
   function startGame(event) {
     if (event.target.closest('.settings-panel')) return;
     audio.start().catch(error => console.warn('VIBE audio startup skipped', error));
+    // GAME OVER: il CTA riavvia una run pulita prima di rientrare in simulazione.
+    if (gameState.gameOver || gameState.victory) {
+      gameState.gameOver = false;
+      gameState.victory = false;
+      resetLevel();
+    }
     if (touchMode) {
       playing = true;
       requestLandscape();
       syncHudVisibility();
+      // Chiude il menu subito, anche al resume: beginSimulationStart() esce
+      // presto quando la partita è già partita e non riaprirebbe l'overlay.
+      overlayEl.style.display = 'none';
       beginSimulationStart();
     } else {
       const req = document.body.requestPointerLock();
-      if (req && typeof req.catch === 'function') req.catch(() => {});
+      if (req && typeof req.catch === 'function') req.catch(() => console.warn('VIBE pointer lock request rejected — overlay stays open'));
     }
   }
   overlayEl.addEventListener('click', startGame);
@@ -2897,19 +3691,25 @@
       ? Math.abs(window.orientation) === 90 ? false : true
       : (window.innerHeight > window.innerWidth);
   }
+  // Pausa (touch): equivalente della pausa desktop (Esc → rilascio pointer
+  // lock) ma senza pointer lock — congelando la simulazione e mostrando
+  // l'overlay. È il target del pulsante PAUSE touch e del guard di rotazione.
+  function pauseGame() {
+    if (!isGameplayActive()) return;
+    playing = false;
+    clearPlayerInput();
+    syncHudVisibility();
+    overlayEl.style.display = 'flex';
+    applyOverlayStateCopy(false);
+  }
+
   function updateRotateGuard() {
     if (!touchMode) return;
     const portrait = isPortrait();
     rotateOverlayEl.hidden = !portrait;
     document.body.classList.toggle('rotate-blocked', portrait);
     // Se il gioco è in corsa e il dispositivo torna in portrait, metti in pausa.
-    if (portrait && playing && gameState.started) {
-      playing = false;
-      clearPlayerInput();
-      syncHudVisibility();
-      overlayEl.style.display = 'flex';
-      applyOverlayStateCopy(false);
-    }
+    if (portrait && playing && gameState.started) pauseGame();
   }
   function requestLandscape() {
     if (typeof screen !== 'undefined' && screen.orientation && screen.orientation.lock) {
@@ -2934,6 +3734,8 @@
         rightStick.id = t.identifier;
         rightStick.anchorX = t.clientX;
         rightStick.anchorY = t.clientY;
+        rightStick.lastX = t.clientX;
+        rightStick.lastY = t.clientY;
         touchRStickEl.style.left = `${t.clientX}px`;
         touchRStickEl.style.top = `${t.clientY}px`;
         touchRStickEl.classList.add('active');
@@ -2971,8 +3773,14 @@
         touchInput.moveZ = dy * mag;
         touchLThumbEl.style.transform = `translate(${dx * mag * STICK_RADIUS}px, ${dy * mag * STICK_RADIUS}px)`;
       } else if (t.identifier === rightStick.id) {
-        const dx = t.clientX - rightStick.anchorX;
-        const dy = t.clientY - rightStick.anchorY;
+        // Mira con delta incrementale rispetto all'evento precedente: usare la
+        // distanza assoluta dall'ancor (anchorX/anchorY) sommandola a ogni
+        // touchmove faceva ruotare la camera in modo quadratico (∝ drag² e
+        // rate di eventi) e la faceva derapare con un dito fermo.
+        const dx = t.clientX - rightStick.lastX;
+        const dy = t.clientY - rightStick.lastY;
+        rightStick.lastX = t.clientX;
+        rightStick.lastY = t.clientY;
         const d = Math.hypot(dx, dy);
         const mag = Math.min(1, d / STICK_RADIUS);
         // Mira: il delta viene convertito in rotazione camera.
@@ -2996,6 +3804,8 @@
         touchInput.moveZ = 0;
       } else if (t.identifier === rightStick.id) {
         rightStick.id = null;
+        rightStick.lastX = 0;
+        rightStick.lastY = 0;
         touchRStickEl.classList.remove('active');
       }
     }
@@ -3018,6 +3828,12 @@
   touchBtnSprint.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); if (isGameplayActive()) touchInput.sprint = true; }, { passive: false });
   touchBtnSprint.addEventListener('touchend', (e) => { e.preventDefault(); e.stopPropagation(); touchInput.sprint = false; }, { passive: false });
   touchBtnSprint.addEventListener('touchcancel', (e) => { touchInput.sprint = false; });
+  // Pausa: tap singolo sul pulsante PAUSE (in alto a destra).
+  touchBtnPause.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (isGameplayActive()) pauseGame();
+  }, { passive: false });
 
   window.addEventListener('blur', () => {
     clearPlayerInput();
@@ -3294,10 +4110,12 @@
 
   function fireBullet() {
     if (!gameState.started || gameStartLoading || gameState.dead || gameState.reloading || meleeTimer > 0) return;
-    if (gameState.weapon === 'railgun') {
-      fireRailgun();
-      return;
-    }
+    const w = gameState.weapon;
+    if (w === 'railgun') { fireRailgun(); return; }
+    if (w === 'minigun') { fireMinigun(); return; }
+    if (w === 'rpg') { fireRPG(); return; }
+    if (w === 'flame') { fireFlame(); return; }
+    // --- PULSE (VX-9) ---
     // Il cooldown va verificato QUI e non solo nel ramo di fuoco automatico: il
     // gestore mousedown chiamava fireBullet() senza controllarlo, quindi
     // cliccando rapidamente si superava CONFIG.fireRate (cadenza limitata solo
@@ -3312,16 +4130,26 @@
     crosshairFireTimer = .1;
     updateHUD();
     bulletDir.set(0, 0, -1).applyQuaternion(camera.quaternion);
-    bulletOrigin.copy(camera.position).addScaledVector(bulletDir, 0.6);
+    spawnProjectile(bulletDir, CONFIG.bulletSpeed, CONFIG.bulletDamage);
+    // Muzzle flash + rinculo
+    triggerMuzzleFlash('pulse', 30, 2.2 + Math.random() * 1.5);
+    gunRecoil = 0.06;
+  }
+
+  // Crea un proiettile (body fisico + mesh + tracer) e lo aggiunge alla lista.
+  // `damage` è il danno applicato in updateBullets al contatto; `type` abilita
+  // comportamenti speciali (es. 'missile' per l'RPG con esplosione ad area).
+  function spawnProjectile(dir, speed, damage, type = 'bullet') {
+    bulletOrigin.copy(camera.position).addScaledVector(dir, 0.6);
     // C5: clamp dell'origine entro i limiti dell'arena (come camera e corpi), così
     // un colpo sparato con la schiena al muro non nasce dentro/oltre la parete.
     bulletOrigin.x = THREE.MathUtils.clamp(bulletOrigin.x, -arenaInnerFace + .2, arenaInnerFace - .2);
     bulletOrigin.z = THREE.MathUtils.clamp(bulletOrigin.z, -arenaInnerFace + .2, arenaInnerFace - .2);
 
     const body = new CANNON.Body({ mass: CONFIG.bulletMass, material: matBullet, allowSleep: false });
-    body.addShape(new CANNON.Sphere(CONFIG.bulletRadius));
+    body.addShape(new CANNON.Sphere(type === 'missile' ? .16 : CONFIG.bulletRadius));
     body.position.set(bulletOrigin.x, bulletOrigin.y, bulletOrigin.z);
-    body.velocity.set(bulletDir.x * CONFIG.bulletSpeed, bulletDir.y * CONFIG.bulletSpeed, bulletDir.z * CONFIG.bulletSpeed);
+    body.velocity.set(dir.x * speed, dir.y * speed, dir.z * speed);
     body.collisionFilterGroup = COLLISION.BULLET;
     body.collisionFilterMask = COLLISION.STATIC | COLLISION.CRATE;
     world.addBody(body);
@@ -3330,14 +4158,14 @@
     mesh.position.copy(bulletOrigin);
     // Halo luminoso additivo attaccato al proiettile: il bloom lo raccoglie e
     // forma l'alone attorno al colpo (e compare nel riflesso del pavimento).
-    mesh.add(makeGlowSprite(0x8fe8ff, 0.55));
+    mesh.add(makeGlowSprite(type === 'missile' ? 0xffc24a : 0x8fe8ff, type === 'missile' ? 0.9 : 0.55));
     scene.add(mesh);
 
     // Tracer luminoso (segmento additivo dietro il proiettile). La geometria è
     // per-colpo (contiene il segmento), il materiale è condiviso.
     const tracerGeo = new THREE.BufferGeometry();
     tracerGeo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(6), 3));
-    const tracer = new THREE.Line(tracerGeo, shotTrailMaterial(0xffffff, 1));
+    const tracer = new THREE.Line(tracerGeo, shotTrailMaterial(type === 'missile' ? 0xffc24a : 0xffffff, 1));
     scene.add(tracer);
 
     const bullet = {
@@ -3347,16 +4175,116 @@
       impactSet: false,
       impact: new CANNON.Vec3(),
       prev: new CANNON.Vec3(bulletOrigin.x, bulletOrigin.y, bulletOrigin.z),
-      targetHit: false
+      targetHit: false,
+      targetRef: null,
+      damage,
+      type
     };
     body.addEventListener('collide', () => { bullet.hit = true; });
     bullets.push(bullet);
+    return bullet;
+  }
 
-    // Muzzle flash + rinculo
-    muzzleLight.intensity = 30;
-    flashMesh.material.opacity = 0.95;
-    flashMesh.scale.setScalar(2.2 + Math.random() * 1.5);
-    gunRecoil = 0.06;
+  // --- VULCAN (MINIGUN): cadenza altissima, canne che ruotano, leggero spread. ---
+  function fireMinigun() {
+    if (fireCooldown > 0) return;
+    const tuning = WEAPON_TUNING.minigun;
+    if (gameState.minigunAmmo <= 0) { audio.dry(); if (gameState.minigunReserve > 0) startReload(); fireCooldown = .2; return; }
+    gameState.minigunAmmo--;
+    gameState.shots++;
+    fireCooldown = tuning.fireRate;
+    audio.playShoot();
+    crosshairFireTimer = .1;
+    updateHUD();
+    bulletDir.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    // Spread leggero per la raffica.
+    bulletDir.x += (Math.random() - .5) * tuning.spread * 2;
+    bulletDir.y += (Math.random() - .5) * tuning.spread * 2;
+    bulletDir.normalize();
+    spawnProjectile(bulletDir, tuning.bulletSpeed, tuning.damage);
+    triggerMuzzleFlash('minigun', 26, 1.8 + Math.random() * 1.2);
+    gunRecoil = .04;
+  }
+
+  // --- HELLSTORM (RPG): un razzo che esplode a contatto. ---
+  function fireRPG() {
+    if (fireCooldown > 0) return;
+    const tuning = WEAPON_TUNING.rpg;
+    if (gameState.rpgAmmo <= 0) {
+      if (gameState.rpgReserve <= 0) {
+        if (fireCooldown <= 0) { audio.dry(); fireCooldown = .5; }
+        return;
+      }
+      audio.dry();
+      startReload();
+      fireCooldown = .3;
+      return;
+    }
+    gameState.rpgAmmo--;
+    gameState.shots++;
+    fireCooldown = tuning.cooldown;
+    audio.railgun(panForWorld(camera.position)); // riuso boato lanciatore
+    crosshairFireTimer = .18;
+    updateHUD();
+    bulletDir.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    spawnProjectile(bulletDir, tuning.bulletSpeed, tuning.damage, 'missile');
+    triggerMuzzleFlash('rpg', 40, 2.2);
+    gunRecoil = .12;
+  }
+
+  // --- PYRE (FLAMETHROWER): getto corto e largo, danno in continuo entro il
+  // cono. Ogni tick applica il danno a ogni nemico nel raggio/cono. ---
+  function fireFlame() {
+    if (fireCooldown > 0) return;
+    const tuning = WEAPON_TUNING.flame;
+    if (gameState.flameAmmo <= 0) { audio.dry(); if (gameState.flameReserve > 0) startReload(); fireCooldown = .2; return; }
+    gameState.flameAmmo--;
+    fireCooldown = tuning.fireRate;
+    crosshairFireTimer = .1;
+    updateHUD();
+    // Danno ai droni nel cono (distanza ORizzontale + angolo orizzontale).
+    // T6: sia la direzione di mira sia l'offset sono proiettati sul piano XZ,
+    // così un drone sopra/sotto il giocatore non bypassa il cono (prima
+    // flameOffset.y=0 zeroizzava il vettore → normalize()=NaN → falso positivo).
+    // `flameAim` è locale: `bulletDir` resta 3D per la fiamma visiva (spawnFlameBurst).
+    flameAim.set(0, 0, -1).applyQuaternion(camera.quaternion).setY(0).normalize();
+    const origin = camera.position;
+    const cosCone = Math.cos(tuning.cone);
+    for (const drone of drones) {
+      if (!drone.alive) continue;
+      flameOffset.copy(drone.group.position).sub(origin);
+      flameOffset.y = 0;
+      const dist = flameOffset.length();
+      if (dist > tuning.range || dist < .001) continue; // dist≈0 (sopra) → fuori cono
+      flameOffset.normalize();
+      if (flameOffset.dot(flameAim) < cosCone) continue;
+      damageDrone(drone, tuning.damage, drone.group.position.clone(), false);
+    }
+    // Anche tutti gli Apex se nel cono.
+    for (const apex of droneSystem.apexes) {
+      if (!apex.alive) continue;
+      flameOffset.copy(apex.group.position).sub(origin);
+      flameOffset.y = 0;
+      const dist = flameOffset.length();
+      if (dist <= tuning.range && dist >= .001) {
+        flameOffset.normalize();
+        if (flameOffset.dot(flameAim) >= cosCone) {
+          damageApex(apex, tuning.damage, apex.group.position.clone(), false);
+        }
+      }
+    }
+    // Fiamma visiva (particelle corte e larghe).
+    spawnFlameBurst();
+    // T8: suono del lanciafiamme throttled (niente 2 noise-burst per tick).
+    flameSoundTimer -= tuning.fireRate;
+    if (flameSoundTimer <= 0) { audio.flame(); flameSoundTimer = .12; }
+    triggerMuzzleFlash('flame', 22, 1.6 + Math.random() * .8);
+    gunRecoil = .02;
+  }
+
+  // Getto di fiamma visivo: delega al pool additivo di ExplosionSystem.
+  function spawnFlameBurst() {
+    explosionSystem.flameBurst(camera.position, bulletDir);
   }
 
   function meleeAttack() {
@@ -3383,8 +4311,8 @@
       closestDistance = along;
     }
     // Il melee può colpire anche l'Apex (raggio più ampio).
-    const apexTarget = droneSystem.apex;
-    if (apexTarget && apexTarget.alive) {
+    for (const apexTarget of droneSystem.apexes) {
+      if (!apexTarget.alive) continue;
       meleeTarget.copy(apexTarget.group.position).sub(meleeOrigin);
       const along = meleeTarget.dot(meleeDirection);
       if (along > .1 && along < CONFIG.meleeRange) {
@@ -3418,6 +4346,8 @@
   // per colpo nel percorso caldo di fireBullet).
   const bulletDir = new THREE.Vector3();
   const bulletOrigin = new THREE.Vector3();
+  const flameOffset = new THREE.Vector3();
+  const flameAim = new THREE.Vector3();
   const railDirection = new THREE.Vector3();
   const railOrigin = new THREE.Vector3();
   const railEnd = new THREE.Vector3();
@@ -3435,6 +4365,13 @@
     if (!gameState.started || gameStartLoading || gameState.dead || gameState.reloading || meleeTimer > 0) return;
     if (fireCooldown > 0) return;
     if (gameState.railgunAmmo <= 0) {
+      // L12: nessuna munizione E nessuna riserva: un solo "click" secco e un
+      // cooldown lungo, così il loop di auto-fire non riproduce il dry ~5/s
+      // mentre il grilletto resta premuto (startReload non può partire).
+      if (gameState.railgunReserve <= 0) {
+        if (fireCooldown <= 0) { audio.dry(); fireCooldown = .5; }
+        return;
+      }
       audio.dry();
       startReload();
       fireCooldown = .2;
@@ -3487,8 +4424,8 @@
     }
     // La railgun può ferire gli Apex, ma conserva il loro ruolo: il oneshot è
     // riservato ai droni semplici sopra, mentre qui usa un danno dedicato.
-    const apexTarget = droneSystem.apex;
-    if (apexTarget && apexTarget.alive) {
+    for (const apexTarget of droneSystem.apexes) {
+      if (!apexTarget.alive) continue;
       railTargetOffset.copy(apexTarget.position).sub(railOrigin);
       const along = railTargetOffset.dot(railDirection);
       if (along > .1 && along <= closestDistance) {
@@ -3512,8 +4449,7 @@
     explosionSystem.sparkBurst(railEnd, closestDrone || closestApex ? 0xffb347 : 0xff8c00, 24);
     crosshairFireTimer = .18;
     gunRecoil = .11;
-    railFlashMesh.material.opacity = .98;
-    railFlashMesh.scale.setScalar(1.8);
+    triggerMuzzleFlash('railgun', 44, 1.8);
     updateHUD();
   }
 
@@ -3552,17 +4488,19 @@
           bulletSegment.closestPointToPoint(drone.group.position,true,bulletClosest);
           if (bulletClosest.distanceToSquared(drone.group.position) <= drone.radius * drone.radius) {
             b.hit=true;b.targetHit=true;b.impact.set(bulletClosest.x,bulletClosest.y,bulletClosest.z);b.impactSet=true;
-            damageDrone(drone,CONFIG.bulletDamage,bulletClosest.clone());
+            b.targetRef = drone;
+            damageDrone(drone,b.damage,bulletClosest.clone());
             break;
           }
         }
-        // Sweep contro l'Apex (raggio più ampio, tier-scalato).
-        if (!b.hit && droneSystem.apex && droneSystem.apex.alive) {
-          const apexDrone = droneSystem.apex;
+        // Sweep contro tutti gli Apex (wave 9 ne schiera quattro insieme).
+        for (const apexDrone of droneSystem.apexes) {
+          if (b.hit || !apexDrone.alive) continue;
           bulletSegment.closestPointToPoint(apexDrone.group.position,true,bulletClosest);
           if (bulletClosest.distanceToSquared(apexDrone.group.position) <= apexDrone.radius * apexDrone.radius) {
             b.hit=true;b.targetHit=true;b.impact.set(bulletClosest.x,bulletClosest.y,bulletClosest.z);b.impactSet=true;
-            damageApex(apexDrone,CONFIG.bulletDamage,bulletClosest.clone());
+            b.targetRef = apexDrone;
+            damageApex(apexDrone,b.damage,bulletClosest.clone());
           }
         }
       }
@@ -3596,7 +4534,32 @@
         b.impactSet = true;
       }
 
-      if (b.hit) { explosionSystem.sparkBurst(new THREE.Vector3(b.impact.x,b.impact.y,b.impact.z),b.targetHit?0x72efff:0xffd19a,b.targetHit?14:9); if (!b.targetHit) audio.playImpact({pan:panForWorld(b.impact)}); }
+      if (b.hit) {
+        const impact = new THREE.Vector3(b.impact.x, b.impact.y, b.impact.z);
+        if (b.type === 'missile') {
+          // HELLSTORM: esplosione ad area sul punto di impatto. Il bersaglio
+          // colpito in diretta è già stato danneggiato dallo sweep: lo si
+          // esclude per evitare il doppio danno (220 + 220).
+          explosionSystem.explode(impact, 0xffc857);
+          audio.explode(panForWorld(impact));
+          const blastRadius = WEAPON_TUNING.rpg.blastRadius;
+          const blastRadiusSq = blastRadius * blastRadius;
+          for (const drone of drones) {
+            if (!drone.alive || drone === b.targetRef) continue;
+            if (drone.group.position.distanceToSquared(impact) <= blastRadiusSq) {
+              damageDrone(drone, b.damage, drone.group.position.clone());
+            }
+          }
+          for (const apexM of droneSystem.apexes) {
+            if (apexM.alive && apexM !== b.targetRef && apexM.group.position.distanceToSquared(impact) <= blastRadiusSq) {
+              damageApex(apexM, b.damage, apexM.group.position.clone());
+            }
+          }
+        } else {
+          explosionSystem.sparkBurst(impact, b.targetHit ? 0x72efff : 0xffd19a, b.targetHit ? 14 : 9);
+          if (!b.targetHit) audio.playImpact({ pan: panForWorld(impact) });
+        }
+      }
 
       if (b.hit || b.age >= CONFIG.bulletLifetime) {
         disposeBullet(b);
@@ -3628,6 +4591,8 @@
     clearHostileShots();
     clearAmmoPickups();
     clearRailgunPickups();
+    clearWeaponPickups();
+    clearHeartPickups();
     clearRailBeam();
     explosionSystem.reset();
     renderPipeline.reset();
@@ -3635,12 +4600,25 @@
     gameState.health = CONFIG.maxHealth;
     gameState.shield = CONFIG.maxShield;
     gameState.stamina = CONFIG.maxStamina;
+    gameState.lives = CONFIG.maxLives;
+    gameState.maxLives = CONFIG.maxLives;
+    gameState.gameOver = false;
+    gameState.victory = false;
     gameState.ammo = CONFIG.magazineSize;
     gameState.reserve = CONFIG.reserveAmmo;
     gameState.weapon = 'pulse';
     gameState.railgunUnlocked = false;
     gameState.railgunAmmo = 0;
     gameState.railgunReserve = 0;
+    gameState.minigunUnlocked = false;
+    gameState.minigunAmmo = 0;
+    gameState.minigunReserve = 0;
+    gameState.rpgUnlocked = false;
+    gameState.rpgAmmo = 0;
+    gameState.rpgReserve = 0;
+    gameState.flameUnlocked = false;
+    gameState.flameAmmo = 0;
+    gameState.flameReserve = 0;
     gameState.reloading = false;
     gameState.reloadTimer = 0;
     gameState.score = 0;
@@ -3653,16 +4631,24 @@
     gameState.dead = false;
     gameState.respawnTimer = 0;
     gameState.lastDamage = -99;
+    // L13: il dirty-check del crosshair (lo stato 'firing') va azzerato col
+    // reset — prima la classe poteva restare appiccicata fino a ~0.18s dopo.
+    crosshairFireTimer = 0;
+    crosshairFiring = false;
     gameState.shots = 0;
     gameState.hits = 0;
     gameState.started = wasStarted;
     railgunDropSpawned = false;
+    weaponDropSpawned.minigun = false;
+    weaponDropSpawned.rpg = false;
+    weaponDropSpawned.flame = false;
 
     elapsed = 0;
     accumulator = 0;
     fpsFrames = 0;
     fpsTimer = 0;
     radarTimer = 0;
+    ammoDropTimer = 10;
     yaw = 0;
     pitch = 0;
     cameraDamageKick = 0;
@@ -3675,10 +4661,11 @@
     meleeTimer = 0;
     gunRecoil = 0;
     muzzleLight.intensity = 0;
-    flashMesh.material.opacity = 0;
-    railFlashMesh.material.opacity = 0;
-    gun.visible = true;
-    railgunView.visible = false;
+    for (const flash of Object.values(weaponFlashMeshes)) {
+      flash.material.opacity = 0;
+      flash.scale.setScalar(1);
+    }
+    for (const id of Object.keys(weaponViews)) weaponViews[id].visible = (id === 'pulse');
     clearVexMines();
     for (const s of apexShockwaves) { scene.remove(s.mesh); s.mesh.geometry.dispose(); s.mesh.material.dispose(); }
     apexShockwaves.length = 0;
@@ -3708,6 +4695,9 @@
   let radarTimer = 0;
   let fpsFrames = 0;
   let fpsTimer = 0;
+  // Rifornimento periodico: ogni 10s un drop di munizioni in posizione casuale,
+  // così il giocatore non resta mai a secco.
+  let ammoDropTimer = 10;
   let frameErrorCount = 0;
   let degradedNoticeShown = false;
 
@@ -3766,8 +4756,25 @@
       if (triggerDown && fireCooldown <= 0) fireBullet();
 
       updateDrones(delta, elapsed);
-      updateAmmoPickups(delta, elapsed);
-      updateRailgunPickups(delta, elapsed);
+      // S4: i pickup (cuori, munizioni, railgun) non sono collezionabili durante
+      // la finestra di morte/respawn — il corpo non deve "raccogliere" nulla.
+      if (!gameState.dead) {
+        updateAmmoPickups(delta, elapsed);
+        updateRailgunPickups(delta, elapsed);
+        updateWeaponPickups(delta, elapsed);
+        updateHeartPickups(delta, elapsed);
+        // Rifornimento periodico: ogni 10s un drop di munizioni in una posizione
+        // casuale dell'arena, per non restare mai senza munizioni.
+        ammoDropTimer -= delta;
+        if (ammoDropTimer <= 0) {
+          ammoDropTimer = 10;
+          const limit = arenaInnerFace - 1.5;
+          spawnAmmoDrop({
+            x: (Math.random() * 2 - 1) * limit,
+            z: (Math.random() * 2 - 1) * limit
+          });
+        }
+      }
       updateBullets(delta);
       updateHostileShots(delta);
       updateGameplay(delta, elapsed);
@@ -3792,7 +4799,8 @@
       wave:gameState.wave,
       health:gameState.health,
       combo:gameState.combo,
-      apexAlive:!!(droneSystem.apex && droneSystem.apex.alive)
+      apexAlive:droneSystem.apexes.some(apex=>apex.alive),
+      finalBossAlive:droneSystem.apexes.some(apex=>apex.alive&&apex.mega)
     });
 
     // Jump pad: pulsazione soft + rotazione freccia
@@ -3821,7 +4829,10 @@
     camera.rotation.x = pitch;
 
     const speed = Math.hypot(playerBody.velocity.x, playerBody.velocity.z);
-    const moving = isGrounded && speed > 1.5;
+    // L10: con il gioco in pausa non si avanza il bob (moving=false) — prima
+    // velocity/isGrounded restavano congelati e il bob continuava dietro
+    // l'overlay.
+    const moving = isGameplayActive() && isGrounded && speed > 1.5;
     if (moving) bobPhase += delta * (7 + speed * 0.35);
     else bobPhase *= Math.max(0, 1 - delta * 6);
     const bobAmp = Math.min(speed / CONFIG.moveSpeed, 1) * 0.032;
@@ -3829,7 +4840,10 @@
     camera.position.x += Math.cos(bobPhase * 0.5) * bobAmp * 0.5;
     // G4: abbassamento morbido e recupero rapido dopo un atterraggio.
     landingKick = Math.max(0, landingKick - delta * 2.6);
-    camera.position.y -= Math.sin(landingKick * Math.PI) * .085;
+    // L8: dip monotono — sin(kick·π/2) va da 0 (impatto nullo) a 1 (impatto
+    // massimo). Prima sin(kick·π) era ~0 a kick=1.0 (atterraggio più duro),
+    // quindi il dip cresceva mentre il kick decadeva: intuito invertito.
+    camera.position.y -= Math.sin(landingKick * Math.PI * 0.5) * .085;
     constrainCameraToArena();
     camera.rotation.z = Math.sin(bobPhase * .5) * bobAmp * .32;
     cameraDamageKick = Math.max(0, cameraDamageKick - delta * .8);
@@ -3840,9 +4854,10 @@
 
     // Muzzle flash e rinculo
     muzzleLight.intensity = Math.max(0, muzzleLight.intensity - delta * 200);
-    flashMesh.material.opacity = Math.max(0, flashMesh.material.opacity - delta * 14);
-    flashMesh.scale.multiplyScalar(Math.max(0, 1 - delta * 14));
-    railFlashMesh.scale.multiplyScalar(Math.max(0, 1 - delta * 14));
+    for (const flash of Object.values(weaponFlashMeshes)) {
+      flash.material.opacity = Math.max(0, flash.material.opacity - delta * 14);
+      flash.scale.multiplyScalar(Math.max(0, 1 - delta * 14));
+    }
     gunRecoil = Math.max(0, gunRecoil - delta * 0.35);
     gun.position.z = -0.45 + gunRecoil;
     gun.position.x = 0.25 + Math.cos(bobPhase * .5) * bobAmp * .85;
@@ -3855,10 +4870,23 @@
     gun.rotation.x = -meleeSwing * 1.12 - reloadDip * .55;
     gun.rotation.y = meleeSwing * .38;
     gun.rotation.z = Math.cos(bobPhase * .5) * bobAmp * .65 + meleeSwing * .18;
-    railgunView.position.x = gun.position.x;
-    railgunView.position.y = gun.position.y;
-    railgunView.position.z = gun.position.z;
-    railgunView.rotation.copy(gun.rotation);
+    // Le altre armi in prima persona seguono bob/rinculo del pulse.
+    const viewX = gun.position.x;
+    const viewY = gun.position.y;
+    const viewZ = gun.position.z;
+    for (const id of ['railgun', 'minigun', 'rpg', 'flame']) {
+      const v = weaponViews[id];
+      v.position.x = viewX;
+      v.position.y = viewY;
+      v.position.z = viewZ;
+      v.rotation.copy(gun.rotation);
+    }
+    // VULCAN: le canne ruotano velocemente quando si spara (o in idle lento).
+    if (minigunBarrel) {
+      const spin = gameState.weapon === 'minigun' && (triggerDown || fireCooldown < WEAPON_TUNING.minigun.fireRate * 2)
+        ? 22 : 1.2;
+      minigunBarrel.rotation.z += delta * spin;
+    }
     // N7: dirty-check — le classi DOM si aggiornano solo quando lo stato cambia.
     if (hudSprinting !== isSprinting) { hudSprinting = isSprinting; gameHudEl.classList.toggle('sprinting', isSprinting); }
     crosshairFireTimer = Math.max(0, crosshairFireTimer - delta);
@@ -3899,11 +4927,8 @@
     }
 
     // Render WebGPU/TSL con GTAO, bloom, SMAA, grana, grading, shockwave e vignetta.
-    // Negli ultimi metri dal muro disattiva solo i pass opzionali (e alza
-    // l'emissiva delle pareti): la scena base resta sempre disponibile e il
-    // movimento non può trasformare una precisione di profondità in un frame
-    // nero. Il riflesso del pavimento invece resta SEMPRE attivo.
-    updateEdgeSafeMode();
+    // La posizione del giocatore non modifica mai né questo percorso né i
+    // materiali illuminati dell'arena.
     renderPipeline.render(delta, elapsed);
     explosionSystem.finishWarmup();
     frameErrorCount = 0;
@@ -3913,9 +4938,8 @@
       // modo controllato invece di lasciare la pagina bloccata.
       frameErrorCount++;
       if (frameErrorCount === 1) console.error('VIBE frame error', error);
-      // Il render base viene mantenuto da RenderPipelineController anche se
-      // una shader/post-processing compilation fallisce. Non fermare il loop
-      // per errori isolati: il frame successivo può recuperare normalmente.
+      // Questo fallback riguarda errori della simulazione esterni alla pipeline;
+      // gli errori post-processing vengono isolati e ritentati dal controller.
       accumulator = Math.min(accumulator, FIXED_STEP);
       try {
         renderer.setRenderTarget(null);

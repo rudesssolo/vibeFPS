@@ -1,47 +1,17 @@
 import * as THREE from 'three';
 import { makeRng } from './rng.js';
+import { fillNormalArray, luminanceFromCanvas, normalTextureFromArray } from './normal-map.js';
 
 // M5: generatori di texture/canvas procedurale estratti da index.html.
 // Funzioni pure che dipendono solo da document, THREE e makeRng.
 
-// Converte una canvas colore in normal map procedurale (dalla luminanza).
+// Converte una canvas colore in normal map procedurale (dalla luminanza RGB).
+// Il kernel di conversione è condiviso con facade-system.js (normal-map.js).
 export function canvasToNormalTexture(colorCanvas, strength, repeat, aniso) {
   const w = colorCanvas.width, h = colorCanvas.height;
-  const ctx = colorCanvas.getContext('2d');
-  const img = ctx.getImageData(0, 0, w, h);
-  const d = img.data;
-  const lum = new Float32Array(w * h);
-  for (let i = 0; i < w * h; i++) {
-    lum[i] = (0.2126 * d[i * 4] + 0.7152 * d[i * 4 + 1] + 0.0722 * d[i * 4 + 2]) / 255;
-  }
-  const out = new Uint8ClampedArray(w * h * 4);
-  for (let y = 0; y < h; y++) {
-    const yp = ((y + h - 1) % h) * w, yn = ((y + 1) % h) * w, yc = y * w;
-    for (let x = 0; x < w; x++) {
-      const xl = lum[yc + ((x + w - 1) % w)];
-      const xr = lum[yc + ((x + 1) % w)];
-      const yu = lum[yp + x];
-      const yd = lum[yn + x];
-      let nx = (xl - xr) * strength;
-      let ny = (yu - yd) * strength;
-      let nz = 1.0;
-      const inv = 1 / Math.sqrt(nx * nx + ny * ny + nz * nz);
-      nx *= inv; ny *= inv; nz *= inv;
-      const idx = (yc + x) * 4;
-      out[idx]     = Math.round((nx * 0.5 + 0.5) * 255);
-      out[idx + 1] = Math.round((ny * 0.5 + 0.5) * 255);
-      out[idx + 2] = Math.round((nz * 0.5 + 0.5) * 255);
-      out[idx + 3] = 255;
-    }
-  }
-  const c = document.createElement('canvas');
-  c.width = w; c.height = h;
-  c.getContext('2d').putImageData(new ImageData(out, w, h), 0, 0);
-  const tex = new THREE.CanvasTexture(c);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(repeat[0], repeat[1]);
-  tex.anisotropy = aniso;
-  return tex;
+  const lum = luminanceFromCanvas(colorCanvas, 'rgb');
+  const out = fillNormalArray(lum, new Uint8ClampedArray(w * h * 4), w, h, strength);
+  return normalTextureFromArray(out, w, h, { anisotropy: aniso, repeat });
 }
 
 // Mappe PBR derivate da una canvas colore (risoluzione configurabile, 512 di

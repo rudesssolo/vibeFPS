@@ -27,6 +27,8 @@ import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import BloomNode from 'three/addons/tsl/display/BloomNode.js';
 import { smaa } from 'three/addons/tsl/display/SMAANode.js';
 
+const PERSISTENT_FAILURE_FRAMES = 60;
+
 // Bloom a 1/4 della risoluzione di output: equivalente di
 // `UnrealBloomPass.resolution = (window.innerWidth/4, ...)`. `setSize()` viene
 // invocato da `updateBefore()` a ogni frame con la dimensione del drawing
@@ -48,7 +50,7 @@ class QuarterResolutionBloomNode extends BloomNode {
 }
 
 export class RenderPipelineController {
-  constructor({ renderer, scene, camera, graphics }) {
+  constructor({ renderer, scene, camera, graphics, onPersistentFailure = null }) {
     this.renderer = renderer;
     this.scene = scene;
     this.camera = camera;
@@ -59,13 +61,10 @@ export class RenderPipelineController {
     this.shockwaveStrength = uniform(0);
     this.aspect = uniform(window.innerWidth / Math.max(1, window.innerHeight));
     this.progress = 1;
-    this.postProcessingEnabled = true;
     this.postProcessingError = null;
-    // A camera pressed against the perimeter is a deliberately conservative
-    // rendering case: the optional screen-space passes have very little useful
-    // information there and can amplify depth precision artifacts. The game
-    // keeps the base scene alive while the edge-safe material is active.
-    this.edgeSafeMode = false;
+    this.consecutivePostProcessingErrors = 0;
+    this.persistentFailureReported = false;
+    this.onPersistentFailure = onPersistentFailure || (() => {});
 
     this.pipeline = new THREE.RenderPipeline(renderer);
     // outputColorTransform=false + renderOutput() esplicito (sotto): la pipeline
@@ -190,14 +189,13 @@ export class RenderPipelineController {
     this.progress = 1;
     this.shockwaveProgress.value = 1;
     this.shockwaveStrength.value = 0;
+    this.postProcessingError = null;
+    this.consecutivePostProcessingErrors = 0;
+    this.persistentFailureReported = false;
   }
 
   setQuality(profile) {
     this.aoPass.samples.value = profile.gtaoSamples;
-  }
-
-  setEdgeSafeMode(enabled) {
-    this.edgeSafeMode = Boolean(enabled);
   }
 
   resize(width, height) {
@@ -213,30 +211,50 @@ export class RenderPipelineController {
       this.shockwaveProgress.value = this.progress;
       this.shockwaveStrength.value = .032 * (1 - this.progress);
     }
-    if (this.edgeSafeMode || !this.postProcessingEnabled) {
-      this.renderBaseScene();
-      return;
-    }
-
+    // RenderPipeline.render() temporarily changes these renderer properties.
+    // Three.js restores them only on its success path, so an exception would
+    // otherwise leak NoToneMapping/working color space into every later frame.
+    const rendererState = {
+      toneMapping: this.renderer.toneMapping,
+      outputColorSpace: this.renderer.outputColorSpace,
+      xrEnabled: this.renderer.xr?.enabled
+    };
+    let renderError = null;
     try {
       this.pipeline.render();
     } catch (error) {
-      // A shader/resource failure must not stop gameplay. Keep the normal
-      // scene render alive and permanently bypass only the optional post chain
-      // for this renderer instance; the next page load can retry compilation.
-      this.postProcessingEnabled = false;
-      this.postProcessingError = error;
-      console.error('VIBE post-processing disabled', error);
-      this.renderBaseScene();
+      renderError = error;
+    } finally {
+      this.renderer.toneMapping = rendererState.toneMapping;
+      this.renderer.outputColorSpace = rendererState.outputColorSpace;
+      if (this.renderer.xr && rendererState.xrEnabled !== undefined) {
+        this.renderer.xr.enabled = rendererState.xrEnabled;
+      }
     }
-  }
 
-  renderBaseScene() {
-    // A failed post pass may leave an intermediate target/MRT selected. Reset
-    // both before drawing to the visible canvas.
+    if (!renderError) {
+      this.postProcessingError = null;
+      this.consecutivePostProcessingErrors = 0;
+      this.persistentFailureReported = false;
+      return true;
+    }
+
+    // A transient resize/compilation failure must not latch the game into the
+    // visually darker raw renderer. Leave the last complete canvas frame in
+    // place, reset leaked targets, and retry the normal pipeline next frame.
+    this.postProcessingError = renderError;
+    this.consecutivePostProcessingErrors++;
     this.renderer.setRenderTarget(null);
     this.renderer.setMRT?.(null);
-    this.renderer.render(this.scene, this.camera);
+    if (this.consecutivePostProcessingErrors === 1) {
+      console.error('VIBE post-processing frame skipped; retrying', renderError);
+    }
+    if (this.consecutivePostProcessingErrors >= PERSISTENT_FAILURE_FRAMES
+      && !this.persistentFailureReported) {
+      this.persistentFailureReported = true;
+      this.onPersistentFailure(renderError);
+    }
+    return false;
   }
 
   dispose() {

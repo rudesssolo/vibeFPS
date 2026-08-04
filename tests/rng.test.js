@@ -29,3 +29,15 @@ test('default seed is stable and not NaN', () => {
   const first = rng();
   assert.ok(Number.isFinite(first) && first >= 0 && first < 1);
 });
+
+test('invalid seeds (negative, zero, NaN) never produce out-of-range output (L1)', () => {
+  for (const seed of [-5, -2147483647, 0, NaN]) {
+    const rng = makeRng(seed);
+    for (let i = 0; i < 500; i++) {
+      const value = rng();
+      assert.ok(Number.isFinite(value) && value >= 0 && value < 1, `seed ${seed}: out of range ${value}`);
+    }
+  }
+  // seed 0/negativo cadono su un default deterministico (niente NaN/Infinity).
+  assert.ok(Number.isFinite(makeRng(-42)()));
+});

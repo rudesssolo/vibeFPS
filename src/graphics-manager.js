@@ -75,6 +75,8 @@ export class GraphicsManager {
 
     if (this.autoTier === 'autoHigh' && this.lowWindows >= 6 && this.cooldown <= 0) {
       this.autoTier = 'autoLow';
+      // L15: il cooldown è conteggiato in sample FPS (updateFPS è chiamato con
+      // delta=0.5s da index.html), non in secondi: 30 sample ≈ 15s di gioco.
       this.cooldown = 30;
       this.lowWindows = 0;
       this.applyCurrent(false);

@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { DRONE_TUNING, APEX_TUNING, getApexStats } from './config.js';
+import {
+  DRONE_TUNING, APEX_TUNING, APEX_ROSTER, ENDGAME_TUNING,
+  getApexStats, getApexStatsFor, getMegaBossStats
+} from './config.js';
 import { makeRng } from './rng.js';
 
 const clampLength = (vector, max) => {
@@ -9,11 +12,15 @@ const clampLength = (vector, max) => {
 };
 
 export class DroneSystem {
-  constructor({ scene, camera, targetLayer, targetProvider, onFire, onTelegraph, onApexAttack, onApexContact, onApexMine, onApexSummon, onApexShockwave, onApexTelegraph }) {
+  constructor({ scene, camera, targetLayer, targetProvider, onFire, onTelegraph, onApexAttack, onApexContact, onApexMine, onApexSummon, onApexShockwave, onApexTelegraph, arenaLimit }) {
     this.scene = scene;
     this.camera = camera;
     this.targetLayer = targetLayer;
     this.targetProvider = targetProvider;
+    // M9: il limite dell'arena dei droni è iniettato da index.html (derivato da
+    // CONFIG.arenaSize/wallThick/playerRadius) per evitare il drift tra il
+    // perimetro fisico dei muri e il volo dei droni. Default: DRONE_TUNING.
+    this.arenaLimit = arenaLimit ?? DRONE_TUNING.arenaLimit;
     this.onFire = onFire;
     this.onTelegraph = onTelegraph || (() => {});
     // Callback per gli attacchi/effetti speciali degli Apex.
@@ -47,6 +54,9 @@ export class DroneSystem {
     this.spikeGeometry = new THREE.ConeGeometry(.16, .5, 6);
     this.orbitGeometry = new THREE.SphereGeometry(.2, 12, 10);
     this.miniGeometry = new THREE.SphereGeometry(.28, 12, 10);
+    this.apexes = [];
+    // Primary alive Apex retained for older consumers; multi-boss-aware code
+    // uses apexes/getAliveApexes/getBossHudState.
     this.apex = null;
   }
 
@@ -65,20 +75,19 @@ export class DroneSystem {
   }
 
   clearApex() {
-    if (!this.apex) return;
-    if (this.apex.group) this.scene.remove(this.apex.group);
-    if (this.apex.marker) this.apex.marker.remove();
-    if (this.apex.coreMaterial) this.apex.coreMaterial.dispose();
-    if (this.apex.eye?.material) this.apex.eye.material.dispose();
-    if (this.apex.eyeHalo?.material) this.apex.eyeHalo.material.dispose();
-    if (this.apex.ring?.material) this.apex.ring.material.dispose();
-    if (this.apex.afterimage?.material) this.apex.afterimage.material.dispose();
-    for (const part of this.apex.parts || []) {
-      // darkMaterial è CONDIVISO con le ali di ogni drone e con gli Apex futuri
-      // (spine, blade, lowerPlate lo riusano): disporlo qui liberava risorse GPU
-      // di un materiale ancora in scena, a ogni cambio di Apex.
-      if (part.material && part.material !== this.darkMaterial) part.material.dispose();
+    for (const apex of this.apexes) {
+      if (apex.group) this.scene.remove(apex.group);
+      if (apex.marker) apex.marker.remove();
+      if (apex.coreMaterial) apex.coreMaterial.dispose();
+      if (apex.eye?.material) apex.eye.material.dispose();
+      if (apex.eyeHalo?.material) apex.eyeHalo.material.dispose();
+      if (apex.ring?.material) apex.ring.material.dispose();
+      for (const thruster of apex.thrusters || []) thruster.material.dispose();
+      for (const part of apex.parts || []) {
+        if (part.material && part.material !== this.darkMaterial) part.material.dispose();
+      }
     }
+    this.apexes.length = 0;
     this.apex = null;
   }
 
@@ -89,18 +98,19 @@ export class DroneSystem {
     return this.drones.length;
   }
 
-  /** Crea (o sostituisce) l'Apex di fine ondata per l'ondata data. */
-  spawnApex(wave) {
-    this.clearApex();
+  /** Crea un Apex. Di default sostituisce l'incontro attivo. */
+  spawnApex(wave, { stats = null, clear = true, index = 0, total = 1 } = {}) {
+    if (clear) this.clearApex();
     this.wave = wave;
-    const stats = getApexStats(wave);
-    const random = makeRng(9900 + wave * 137);
-    const angle = random() * Math.PI * 2;
-    const radius = 12 + random() * 3;
-    const anchor = new THREE.Vector3(Math.sin(angle) * radius, 14, Math.cos(angle) * radius + 4);
-    const built = this.buildApexVisual(stats);
+    const resolvedStats = stats || getApexStats(wave);
+    const random = makeRng(9900 + wave * 137 + index * 977);
+    const angle = total > 1 ? index / total * Math.PI * 2 + .35 : random() * Math.PI * 2;
+    const radius = resolvedStats.mega ? 8.5 : 11.5 + random() * 2;
+    const anchor = new THREE.Vector3(Math.sin(angle) * radius, 14, Math.cos(angle) * radius);
+    const built = this.buildApexVisual(resolvedStats);
     const group = new THREE.Group();
     group.add(built.visual);
+    group.scale.setScalar(resolvedStats.visualScale || 1);
     group.position.copy(anchor);
     this.scene.add(group);
 
@@ -112,10 +122,11 @@ export class DroneSystem {
     const markerState = marker.querySelector('.target-state');
 
     const apex = {
-      id: 'APX',
-      archetypeId: stats.archetype.id,
-      nameKey: stats.nameKey,
-      tier: stats.tier,
+      id: resolvedStats.mega ? 'OMEGA' : `APX-${index + 1}`,
+      archetypeId: resolvedStats.archetype.id,
+      nameKey: resolvedStats.nameKey,
+      tier: resolvedStats.tier,
+      mega: Boolean(resolvedStats.mega),
       group,
       visual: built.visual,
       core: built.core,
@@ -136,30 +147,71 @@ export class DroneSystem {
       desiredVelocity: new THREE.Vector3(),
       random,
       phase: random() * 7,
-      health: stats.maxHealth,
-      maxHealth: stats.maxHealth,
-      radius: stats.radius,
+      health: resolvedStats.maxHealth,
+      maxHealth: resolvedStats.maxHealth,
+      radius: resolvedStats.radius,
       fireTimer: 2,
       alive: true,
       spawnTimer: APEX_TUNING.spawnDescent,
       state: 'spawn',
       stateTimer: 0,
       attackCooldown: 1.6,
-      damage: stats.damage,
-      speed: stats.speed,
+      damage: resolvedStats.damage,
+      speed: resolvedStats.speed,
       // Per-archetipo: armatura, blink, fasi, cariche.
-      armor: stats.archetype.id === 'vanguard' ? Math.round(stats.maxHealth * .42) : 0,
-      armorMax: stats.archetype.id === 'vanguard' ? Math.round(stats.maxHealth * .42) : 0,
+      armor: resolvedStats.archetype.id === 'vanguard' ? Math.round(resolvedStats.maxHealth * .42) : 0,
+      armorMax: resolvedStats.archetype.id === 'vanguard' ? Math.round(resolvedStats.maxHealth * .42) : 0,
       armorBroken: false,
       blinkCooldown: 1.2,
       mineTimer: 2.4,
       shockwaveTimer: 5,
       chargeCount: 0,
       telegraphing: false,
-      summonTimer: 6
+      summonTimer: resolvedStats.mega ? 5 : 6,
+      megaPhase: 1,
+      megaAttackIndex: 0
     };
-    this.apex = apex;
+    this.apexes.push(apex);
+    this.apex = this.apexes.find(candidate => candidate.alive) || apex;
     return apex;
+  }
+
+  spawnApexSquad(wave = ENDGAME_TUNING.gauntletWave) {
+    this.clearApex();
+    return APEX_ROSTER.map((archetype, index) => this.spawnApex(wave, {
+      stats: getApexStatsFor(archetype, ENDGAME_TUNING.gauntletTier),
+      clear: false,
+      index,
+      total: APEX_ROSTER.length
+    }));
+  }
+
+  spawnMegaBoss(wave = ENDGAME_TUNING.finalWave) {
+    return this.spawnApex(wave, { stats: getMegaBossStats() });
+  }
+
+  getAliveApexes() {
+    return this.apexes.filter(apex => apex.alive);
+  }
+
+  getBossHudState() {
+    const alive = this.getAliveApexes();
+    if (!alive.length) return null;
+    if (this.apexes.length === 1) {
+      const apex = alive[0];
+      return {
+        ...apex,
+        stateLabel: apex.mega ? `Ω-${apex.megaPhase}` : `T-${apex.tier}`
+      };
+    }
+    return {
+      alive: true,
+      nameKey: 'apex.council',
+      tier: ENDGAME_TUNING.gauntletTier,
+      stateLabel: `${alive.length} ACTIVE`,
+      health: alive.reduce((sum, apex) => sum + Math.max(0, apex.health), 0),
+      maxHealth: this.apexes.reduce((sum, apex) => sum + apex.maxHealth, 0)
+    };
   }
 
   /** Costruisce la silhouette visiva dell'Apex per archetipo e restituisce i riferimenti. */
@@ -249,7 +301,46 @@ export class DroneSystem {
         }
         break;
       }
+      case 'overlord': {
+        coreScale = 1.85;
+        // Corona tetra-assiale: leggibile anche a grande distanza e distinta
+        // dalle silhouette del roster standard.
+        for (let i = 0; i < 8; i++) {
+          const spike = new THREE.Mesh(this.spikeGeometry, i % 2 ? this.darkMaterial : new THREE.MeshBasicMaterial({ color: stats.color }));
+          const a = i / 8 * Math.PI * 2;
+          spike.position.set(Math.cos(a) * .78, Math.sin(i * 1.7) * .22, Math.sin(a) * .78);
+          spike.rotation.x = -Math.PI / 2;
+          spike.rotation.z = a;
+          spike.scale.set(1.4, 2.2, 1.4);
+          parts.push(spike);
+        }
+        for (let i = 0; i < 4; i++) {
+          const orb = new THREE.Mesh(
+            this.orbitGeometry,
+            new THREE.MeshBasicMaterial({ color: stats.color, transparent: true, opacity: .9, blending: THREE.AdditiveBlending, depthWrite: false })
+          );
+          orb.userData.overlordOrbitIndex = i;
+          orb.scale.setScalar(1.35);
+          parts.push(orb);
+        }
+        const crown = new THREE.Mesh(
+          this.ringGeometry,
+          new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .7, blending: THREE.AdditiveBlending, depthWrite: false })
+        );
+        crown.userData.overlordCrown = true;
+        crown.rotation.x = Math.PI / 2;
+        crown.scale.setScalar(2.8);
+        parts.push(crown);
+        break;
+      }
     }
+
+    // T1: le parti specifiche dell'archetipo (armor, lame, afterimage, orbs,
+    // spuntoni) restavano solo in `parts` (per il dispose) e non venivano mai
+    // aggiunte al gruppo visivo: tutti gli Apex apparivano identici. Qui le
+    // aggiungiamo al `visual` (filter `isMesh` perché `parts` può contenere
+    // anche voci di solo materiale, come { material: secondRing.material }).
+    for (const p of parts) if (p.isMesh) visual.add(p);
 
     // Corpo, occhio, due anelli, propulsori: comuni a tutti gli archetipi.
     const core = new THREE.Mesh(this.coreGeometry, coreMaterial);
@@ -489,7 +580,7 @@ export class DroneSystem {
           steering.addScaledVector(offset.normalize(), (DRONE_TUNING.separationRadius - distance) * 3.8);
         }
       }
-      const edge = DRONE_TUNING.arenaLimit;
+      const edge = this.arenaLimit;
       if (Math.abs(drone.position.x) > edge - 2.2) steering.x += -Math.sign(drone.position.x) * 9;
       if (Math.abs(drone.position.z) > edge - 2.2) steering.z += -Math.sign(drone.position.z) * 9;
       if (drone.position.y < DRONE_TUNING.minAltitude) steering.y += 10;
@@ -553,18 +644,28 @@ export class DroneSystem {
     return { hit: true, killed, position: drone.position.clone() };
   }
 
-  /** Aggiorna l'Apex (movimento, stati per archetipo, animazioni). Ritorna la vita. */
+  /** Aggiorna tutti gli Apex attivi e ritorna quanti sono ancora vivi. */
   updateApex(delta, time, { active = true, dead = false } = {}) {
-    const apex = this.apex;
+    let alive = 0;
+    for (const apex of this.apexes) {
+      if (this.updateSingleApex(apex, delta, time, { active, dead })) alive++;
+    }
+    this.apex = this.apexes.find(apex => apex.alive) || this.apexes[0] || null;
+    return alive;
+  }
+
+  updateSingleApex(apex, delta, time, { active = true, dead = false } = {}) {
     if (!apex || !apex.alive) return false;
     const target = this.targetProvider();
-    const edge = DRONE_TUNING.arenaLimit;
+    const edge = this.arenaLimit;
 
     // Fase di discesa: scende dall'alto senza attaccare.
     if (apex.spawnTimer > 0) {
       apex.spawnTimer -= delta;
       const progress = 1 - Math.max(0, apex.spawnTimer) / APEX_TUNING.spawnDescent;
-      apex.position.y = THREE.MathUtils.lerp(16, 5.2, Math.min(1, progress));
+      // L18: l'ancor di spawn è a y=14 (spawnApex); partire la lerp da 16
+      // faceva saltare l'Apex a 16 al primo frame di discesa (pop verso l'alto).
+      apex.position.y = THREE.MathUtils.lerp(14, 5.2, Math.min(1, progress));
       apex.group.position.copy(apex.position);
       apex.ring.rotation.z += delta * 2;
       apex.secondRing.rotation.z -= delta * 1.4;
@@ -626,6 +727,16 @@ export class DroneSystem {
           orbitIndex++;
         }
       }
+    } else if (apex.archetypeId === 'overlord') {
+      for (const part of apex.parts) {
+        const orbitIndex = part.userData?.overlordOrbitIndex;
+        if (orbitIndex !== undefined) {
+          const a = time * (1.15 + apex.megaPhase * .18) + orbitIndex * Math.PI / 2;
+          part.position.set(Math.cos(a) * 1.25, Math.sin(a * 1.7) * .45, Math.sin(a) * 1.25);
+        } else if (part.userData?.overlordCrown) {
+          part.rotation.z += delta * (1.2 + apex.megaPhase * .35);
+        }
+      }
     }
     return true;
   }
@@ -649,8 +760,8 @@ export class DroneSystem {
           }
         } else if (apex.state === 'charge') {
           if (apex.stateTimer <= 0
-            || Math.abs(apex.position.x) > DRONE_TUNING.arenaLimit - 1.5
-            || Math.abs(apex.position.z) > DRONE_TUNING.arenaLimit - 1.5) {
+            || Math.abs(apex.position.x) > this.arenaLimit - 1.5
+            || Math.abs(apex.position.z) > this.arenaLimit - 1.5) {
             apex.state = 'recover';
             apex.stateTimer = 1.5;
             apex.chargeDir.set(0, 0, 0);
@@ -659,8 +770,18 @@ export class DroneSystem {
         } else if (apex.state === 'recover') {
           apex.desiredVelocity.set(0, 0, 0);
           if (apex.stateTimer <= 0) {
-            apex.chargeCount = 0;
-            apex.state = 'patrol';
+            // L3: abilità extra di tier 2 di VANGUARD — doppia carica (come per
+            // le altre l'abilità è gate sul tier, non sul campo extraAbility).
+            if (apex.tier >= 2 && apex.chargeCount < 1) {
+              apex.chargeCount++;
+              apex.state = 'telegraph';
+              apex.stateTimer = .85;
+              apex.telegraphing = true;
+              this.onApexTelegraph(apex);
+            } else {
+              apex.chargeCount = 0;
+              apex.state = 'patrol';
+            }
           }
         } else {
           const orbitPoint = this.temp3.set(
@@ -700,8 +821,8 @@ export class DroneSystem {
             target.y + 2,
             target.z + (apex.random() - .5) * 5
           );
-          blinkTarget.x = THREE.MathUtils.clamp(blinkTarget.x, -DRONE_TUNING.arenaLimit + 2, DRONE_TUNING.arenaLimit - 2);
-          blinkTarget.z = THREE.MathUtils.clamp(blinkTarget.z, -DRONE_TUNING.arenaLimit + 2, DRONE_TUNING.arenaLimit - 2);
+          blinkTarget.x = THREE.MathUtils.clamp(blinkTarget.x, -this.arenaLimit + 2, this.arenaLimit - 2);
+          blinkTarget.z = THREE.MathUtils.clamp(blinkTarget.z, -this.arenaLimit + 2, this.arenaLimit - 2);
           if (apex.afterimage) apex.afterimage.material.opacity = .75;
           apex.position.copy(blinkTarget);
           apex.velocity.set(0, 0, 0);
@@ -728,9 +849,15 @@ export class DroneSystem {
           target.y + 3,
           target.z + Math.cos(time * .36 + apex.phase) * 5
         );
-        apex.desiredVelocity.copy(orbitPoint).sub(apex.position);
-        apex.desiredVelocity.y = 0;
-        if (apex.desiredVelocity.lengthSq() > 1) apex.desiredVelocity.setLength(apex.speed * .7);
+        // S2: anche VEX si ferma durante 'recover' (telegraph per mine/
+        // shockwave) come VANGUARD/WRAITH/SENTINEL: prima orbitava comunque.
+        if (apex.state === 'recover') {
+          apex.desiredVelocity.set(0, 0, 0);
+        } else {
+          apex.desiredVelocity.copy(orbitPoint).sub(apex.position);
+          apex.desiredVelocity.y = 0;
+          if (apex.desiredVelocity.lengthSq() > 1) apex.desiredVelocity.setLength(apex.speed * .7);
+        }
         if (canAct && apex.mineTimer <= 0) {
           apex.mineTimer = 7;
           apex.state = 'recover';
@@ -779,6 +906,39 @@ export class DroneSystem {
         break;
       }
 
+      case 'overlord': {
+        if (apex.state === 'barrage' || apex.state === 'recover') {
+          apex.desiredVelocity.set(0, 0, 0);
+          if (apex.stateTimer <= 0) {
+            apex.state = 'patrol';
+            apex.telegraphing = false;
+          }
+        } else {
+          const orbitPoint = this.temp3.set(
+            target.x + Math.sin(time * .2 + apex.phase) * 8,
+            target.y + 5,
+            target.z + Math.cos(time * .18 + apex.phase) * 8
+          );
+          apex.desiredVelocity.copy(orbitPoint).sub(apex.position);
+          apex.desiredVelocity.y = 0;
+          if (apex.desiredVelocity.lengthSq() > 1) apex.desiredVelocity.setLength(apex.speed);
+        }
+        if (canAct && apex.attackCooldown <= 0 && apex.state === 'patrol') {
+          const attack = apex.megaAttackIndex++ % 4;
+          const cooldown = Math.max(2.5, 4.6 - apex.megaPhase * .45);
+          apex.attackCooldown = cooldown;
+          apex.state = 'barrage';
+          apex.stateTimer = attack === 2 ? 1.25 : .85;
+          apex.telegraphing = true;
+          this.onApexTelegraph(apex);
+          if (attack === 0) this.onApexAttack(apex, 'megaSpiral');
+          else if (attack === 1) this.onApexAttack(apex, 'megaLance');
+          else if (attack === 2) this.onApexAttack(apex, 'megaBombard');
+          else this.onApexShockwave(apex);
+        }
+        break;
+      }
+
       default: {
         const orbitPoint = this.temp3.set(
           target.x + Math.sin(time * .4 + apex.phase) * 5,
@@ -793,7 +953,7 @@ export class DroneSystem {
 
     // Fuoco a distanza comune, diverso per archetipo.
     apex.fireTimer -= delta;
-    if (canAct && distanceXZ < 34 && apex.fireTimer <= 0 && apex.state === 'patrol') {
+    if (!apex.mega && canAct && distanceXZ < 34 && apex.fireTimer <= 0 && apex.state === 'patrol') {
       if (apex.archetypeId === 'wraith') {
         this.onApexAttack(apex, 'burst');
         apex.fireTimer = 3.6;
@@ -829,11 +989,22 @@ export class DroneSystem {
     apex.coreMaterial.emissive.setHex(0xff173c);
     apex.coreMaterial.emissiveIntensity = 2.7;
     const killed = apex.health <= 0;
-    const prevPhase = apex.sentinelPhase || 1;
+    const prevPhase = apex.mega ? (apex.megaPhase || 1) : (apex.sentinelPhase || 1);
     if (killed) {
       apex.alive = false;
       apex.group.visible = false;
       apex.marker.style.display = 'none';
+    } else if (apex.mega) {
+      const ratio = apex.health / apex.maxHealth;
+      const phase = ratio > .75 ? 1 : ratio > .5 ? 2 : ratio > .25 ? 3 : 4;
+      if (phase !== prevPhase) {
+        apex.megaPhase = phase;
+        apex.state = 'recover';
+        apex.stateTimer = 1.4;
+        apex.attackCooldown = .8;
+        this.onApexSummon(apex);
+        this.onApexShockwave(apex);
+      }
     } else if (apex.archetypeId === 'sentinel') {
       const ratio = apex.health / apex.maxHealth;
       const phase = ratio > APEX_TUNING.sentinelPhase2Hp ? 1 : ratio > APEX_TUNING.sentinelPhase3Hp ? 2 : 3;
@@ -843,7 +1014,8 @@ export class DroneSystem {
         apex.stateTimer = 1.2;
       }
     }
-    return { hit: true, killed, armorBroken, phaseChanged: apex.sentinelPhase !== prevPhase, position: apex.position.clone() };
+    const currentPhase = apex.mega ? (apex.megaPhase || 1) : (apex.sentinelPhase || 1);
+    return { hit: true, killed, armorBroken, phaseChanged: currentPhase !== prevPhase, position: apex.position.clone() };
   }
 
   updateMarkers() {
@@ -897,9 +1069,10 @@ export class DroneSystem {
       }
     }
 
-    // Marker dedicato per l'Apex di fine ondata.
-    if (this.apex && this.apex.alive) {
-      const apex = this.apex;
+    // Marker dedicati: nel gauntlet dell'ondata 9 tutti e quattro gli Apex
+    // restano tracciabili contemporaneamente.
+    for (const apex of this.apexes) {
+      if (!apex.alive) continue;
       const projected = this.markerProjected.copy(apex.position);
       const distance = projected.distanceTo(this.camera.position);
       projected.project(this.camera);
@@ -914,7 +1087,7 @@ export class DroneSystem {
       const left = Math.round((screenX * .5 + .5) * width);
       const top = Math.round((-screenY * .5 + .5) * height);
       const state = !visible ? 'THREAT' : apex.telegraphing ? 'TELEGRAPH' : apex.state === 'recover' ? 'STAGGERED' : '';
-      const range = `${distance.toFixed(0)}M · APX-T${apex.tier}`;
+      const range = `${distance.toFixed(0)}M · ${apex.mega ? 'OMEGA' : `APX-T${apex.tier}`}`;
       if (apex.lastOffscreen !== !visible) {
         apex.lastOffscreen = !visible;
         apex.marker.classList.toggle('offscreen', !visible);

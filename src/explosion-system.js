@@ -153,9 +153,9 @@ export class ExplosionSystem {
     // illuminazione e self-shadow), invece dei puff sprite billboarded.
     //
     // La costruzione del materiale compila un grafo TSL non banale: un errore
-    // lì non deve impedire il boot dell'intera simulazione. Stessa politica di
-    // RenderPipelineController, che in caso di fallimento bypassa il post e
-    // tiene vivo il rendering di base.
+    // lì non deve impedire il boot dell'intera simulazione. Se il solo effetto
+    // volumetrico fallisce, viene disattivato senza alterare il rendering della
+    // scena o la sua illuminazione.
     try {
       this.volumetric = new VolumetricSmokeSystem(scene);
     } catch (error) {
@@ -295,6 +295,30 @@ export class ExplosionSystem {
     }
   }
 
+  // Getto di fiamma del lanciafiamme: particelle additivo che avanzano in avanti
+  // (direzione) con spread, vita corta e gravità minima. Riusa il pool additivo.
+  flameBurst(position, direction, strength = 1) {
+    // T9: count ridotto (5 invece di 10) per non saturare il pool additivo
+    // (il fuoco è continuo, ~20 burst/s × 5 = 100 particelle/s < 720 del pool).
+    const count = Math.max(3, Math.round(5 * this.particleScale));
+    for (let i = 0; i < count; i++) {
+      const spread = this.randomDirection(2, .3);
+      const vel = new THREE.Vector3(direction.x, direction.y, direction.z).normalize()
+        .multiplyScalar((6 + Math.random() * 5) * strength)
+        .add(spread);
+      this.additive.spawn({
+        position,
+        velocity: vel,
+        color: Math.random() < .5 ? 0xff6a1f : 0xffc24a,
+        life: .2 + Math.random() * .24,
+        sizeStart: 5 + Math.random() * 5,
+        sizeEnd: .6,
+        gravity: 1.5,
+        drag: .8
+      });
+    }
+  }
+
   explode(position, accent = 0x66efff) {
     const sparkCount = Math.round(48 * this.particleScale);
     // Il budget dei puff arriva dal profilo qualità (già scalato per tier): non
@@ -376,7 +400,17 @@ export class ExplosionSystem {
   }
 
   spawnLight(position) {
-    const light = this.lights.slice(0, this.lightLimit).find(item => !item.userData.active) || this.lights[0];
+    const pool = this.lights.slice(0, this.lightLimit);
+    // L20: con tutti gli slot attivi si riusa quello più vecchio (age maggiore,
+    // più vicino alla scadenza) invece di lights[0], che tagliava di netto
+    // l'esplosione appena nata che lo occupava.
+    let light = pool.find(item => !item.userData.active);
+    if (!light) {
+      for (const item of pool) {
+        if (!light || item.userData.age > light.userData.age) light = item;
+      }
+    }
+    if (!light) return;
     light.position.copy(position);
     light.color.setHex(Math.random() < .28 ? 0x71eaff : 0xff9354);
     light.intensity = this.lightLimit >= 8 ? 48 : 32;

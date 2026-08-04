@@ -11,6 +11,7 @@
  *      (percorso di fallback), con WebGPU il boot completa normalmente.
  *
  * Uso:  npm run smoke
+ *       SMOKE_WEAPON=railgun npm run smoke  # forza il modello Ultra scelto
  *
  * Richiede playwright e un browser chromium (`npx playwright install chromium`).
  * La risoluzione di playwright prova, in ordine: $PLAYWRIGHT_MODULE,
@@ -24,6 +25,9 @@ import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const BOOT_TIMEOUT_MS = 90000;
+const SMOKE_WAVE = Number(process.env.SMOKE_WAVE || 1);
+const SMOKE_WEAPON = process.env.SMOKE_WEAPON || '';
+const VALID_SMOKE_WEAPONS = new Set(['pulse', 'railgun', 'minigun', 'rpg', 'flame']);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -61,6 +65,25 @@ function serveStatic() {
     if (!filePath.startsWith(ROOT)) { res.writeHead(403); res.end(); return; }
     fs.readFile(filePath, (error, data) => {
       if (error) { res.writeHead(404); res.end('not found'); return; }
+      // Smoke modes alter only the in-memory response: production HTML never
+      // receives debug state, cheats, or forced weapon visibility.
+      if (filePath === path.join(ROOT, 'index.html')) {
+        let source = data.toString('utf8');
+        if (SMOKE_WAVE === 9 || SMOKE_WAVE === 10) {
+          source = source.replace('wave: 1, waveKills: 0, waveTargets: 5', `wave: ${SMOKE_WAVE}, waveKills: 0, waveTargets: 5`);
+        }
+        if (VALID_SMOKE_WEAPONS.has(SMOKE_WEAPON)) {
+          source = source.replace(
+            "let weaponDetailUltra = (getStoredQualityMode() === 'ultra') && !(touchMode && !highEndDevice);",
+            'let weaponDetailUltra = true;'
+          );
+          source = source.replace(
+            'applyWeaponDetail();',
+            `applyWeaponDetail();\n  for (const [id, view] of Object.entries(weaponViews)) view.visible = id === ${JSON.stringify(SMOKE_WEAPON)};`
+          );
+        }
+        data = Buffer.from(source);
+      }
       res.writeHead(200, { 'content-type': MIME[path.extname(filePath)] || 'application/octet-stream' });
       res.end(data);
     });
@@ -97,6 +120,11 @@ async function main() {
       ]
     });
     const page = await browser.newPage();
+    if (VALID_SMOKE_WEAPONS.has(SMOKE_WEAPON)) {
+      await page.addInitScript(() => {
+        try { localStorage.setItem('vibefps.quality', 'ultra'); } catch { /* opaque origin before navigation */ }
+      });
+    }
     page.on('pageerror', error => failures.push(`pageerror: ${String(error).slice(0, 300)}`));
     page.on('console', message => {
       if (message.type() === 'error') failures.push(`console.error: ${message.text().slice(0, 300)}`);
@@ -116,7 +144,9 @@ async function main() {
         overlayClass: document.getElementById('overlay')?.className || '',
         gpuUnavailable: document.getElementById('overlay')?.classList.contains('gpu-unavailable'),
         warningVisible: !document.getElementById('gpu-warning')?.hidden,
-        adapter
+        adapter,
+        apexMarkers: document.querySelectorAll('.apex-marker').length,
+        bossHp: document.getElementById('boss-hp')?.textContent || ''
       };
     });
 
@@ -129,12 +159,19 @@ async function main() {
     if (process.env.SMOKE_REQUIRE_WEBGPU === '1' && !state.adapter) {
       failures.push('SMOKE_REQUIRE_WEBGPU=1 ma nessun adapter WebGPU: il boot reale non è stato eseguito');
     }
+    if (state.adapter && SMOKE_WAVE === 9 && state.apexMarkers !== 4) {
+      failures.push(`wave 9: attesi 4 marker Apex, trovati ${state.apexMarkers}`);
+    }
+    if (state.adapter && SMOKE_WAVE === 10 && (state.apexMarkers !== 1 || !state.bossHp.includes('24000'))) {
+      failures.push(`wave 10: mega-boss non inizializzato correttamente (marker=${state.apexMarkers}, hp="${state.bossHp}")`);
+    }
     if (failures.length) {
       console.error('[smoke] FALLITO:');
       for (const failure of failures) console.error(`  - ${failure}`);
       process.exit(1);
     }
-    console.log(`[smoke] OK — boot completato (${state.adapter ? 'adapter WebGPU attivo' : 'fallback senza adapter verificato'} · overlay: "${state.overlayClass}"), nessun errore, nessuna risorsa mancante.`);
+    const weaponLabel = VALID_SMOKE_WEAPONS.has(SMOKE_WEAPON) ? ` · weapon ${SMOKE_WEAPON} Ultra` : '';
+    console.log(`[smoke] OK — boot wave ${SMOKE_WAVE} completato (${state.adapter ? 'adapter WebGPU attivo' : 'fallback senza adapter verificato'}${weaponLabel} · overlay: "${state.overlayClass}"), nessun errore, nessuna risorsa mancante.`);
   } catch (error) {
     console.error(`[smoke] FALLITO: ${String(error).slice(0, 400)}`);
     process.exit(1);

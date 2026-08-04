@@ -38,8 +38,9 @@ test('activeCount non va in deriva quando il pool si riempie (regressione)', () 
   // tetto sull'overdraw.
   const { system } = makeSystem({ smokePuffs: 999 });
   assert.equal(system.maxActive, system.maximum, 'il tetto non copre tutto il pool');
-  // Gli spawn in eccesso riciclano uno slot GIÀ contato in activeCount: prima
-  // veniva incrementato una seconda volta e il contatore non tornava mai a zero.
+  // Gli spawn in eccesso vengono RIFIUTATI (L5: nessun pop di un volume visibile)
+  // e non incrementano mai activeCount: prima il ramo di riciclo incrementava
+  // una seconda volta e il contatore non tornava mai a zero.
   for (let i = 0; i < system.maximum * 3; i++) system.spawn({ ...basePuff, life: 10 });
   const reallyActive = system.puffs.filter(puff => puff.active).length;
   assert.equal(system.activeCount, reallyActive);

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { makeRng } from './rng.js';
+import { fillNormalArray, fillNormalRow, luminanceFromCanvas, normalTextureFromArray } from './normal-map.js';
 
 function canvasTexture(canvas, { color = false, anisotropy = 1 } = {}) {
   const texture = new THREE.CanvasTexture(canvas);
@@ -13,27 +14,9 @@ function canvasTexture(canvas, { color = false, anisotropy = 1 } = {}) {
 function heightToNormal(heightCanvas, strength, anisotropy) {
   const width = heightCanvas.width;
   const height = heightCanvas.height;
-  const source = heightCanvas.getContext('2d').getImageData(0, 0, width, height).data;
-  const output = new Uint8ClampedArray(width * height * 4);
-  const sample = (x, y) => source[((y + height) % height * width + (x + width) % width) * 4] / 255;
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      let nx = (sample(x - 1, y) - sample(x + 1, y)) * strength;
-      let ny = (sample(x, y - 1) - sample(x, y + 1)) * strength;
-      let nz = 1;
-      const length = 1 / Math.hypot(nx, ny, nz);
-      nx *= length; ny *= length; nz *= length;
-      const offset = (y * width + x) * 4;
-      output[offset] = (nx * .5 + .5) * 255;
-      output[offset + 1] = (ny * .5 + .5) * 255;
-      output[offset + 2] = (nz * .5 + .5) * 255;
-      output[offset + 3] = 255;
-    }
-  }
-  const canvas = document.createElement('canvas');
-  canvas.width = width; canvas.height = height;
-  canvas.getContext('2d').putImageData(new ImageData(output, width, height), 0, 0);
-  return canvasTexture(canvas, { anisotropy });
+  const lum = luminanceFromCanvas(heightCanvas, 'red');
+  const output = fillNormalArray(lum, new Uint8ClampedArray(width * height * 4), width, height, strength);
+  return normalTextureFromArray(output, width, height, { anisotropy });
 }
 
 // N1/B9: la conversione a 2048px è un loop su ~4,2M pixel che in forma sincrona
@@ -46,28 +29,13 @@ const yieldMainThread = () => new Promise(resolve => setTimeout(resolve, 0));
 async function heightToNormalAsync(heightCanvas, strength, anisotropy) {
   const width = heightCanvas.width;
   const height = heightCanvas.height;
-  const source = heightCanvas.getContext('2d').getImageData(0, 0, width, height).data;
+  const lum = luminanceFromCanvas(heightCanvas, 'red');
   const output = new Uint8ClampedArray(width * height * 4);
-  const sample = (x, y) => source[((y + height) % height * width + (x + width) % width) * 4] / 255;
   for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      let nx = (sample(x - 1, y) - sample(x + 1, y)) * strength;
-      let ny = (sample(x, y - 1) - sample(x, y + 1)) * strength;
-      let nz = 1;
-      const length = 1 / Math.hypot(nx, ny, nz);
-      nx *= length; ny *= length; nz *= length;
-      const offset = (y * width + x) * 4;
-      output[offset] = (nx * .5 + .5) * 255;
-      output[offset + 1] = (ny * .5 + .5) * 255;
-      output[offset + 2] = (nz * .5 + .5) * 255;
-      output[offset + 3] = 255;
-    }
+    fillNormalRow(lum, output, width, height, y, strength);
     if (y % CHUNK_ROWS === CHUNK_ROWS - 1) await yieldMainThread();
   }
-  const canvas = document.createElement('canvas');
-  canvas.width = width; canvas.height = height;
-  canvas.getContext('2d').putImageData(new ImageData(output, width, height), 0, 0);
-  return canvasTexture(canvas, { anisotropy });
+  return normalTextureFromArray(output, width, height, { anisotropy });
 }
 
 function createFacadeCanvases(resolution) {
@@ -279,19 +247,39 @@ export class FacadeSystem {
   // N1: rebuild asincrono chunked per le alte risoluzioni (transizione ULTRA).
   // Fire-and-forget da setQuality: un errore lascia attive le mappe correnti.
   async rebuildMaterialsAsync(resolution) {
-    const generation = ++this.buildGeneration;
-    let nextMaps;
-    try {
-      nextMaps = await createFacadeMapsAsync(resolution, this.anisotropy);
-    } catch (error) {
-      console.warn('VIBE facade rebuild failed, keeping current maps', error);
-      return;
-    }
-    if (generation !== this.buildGeneration) {
-      disposeMaps(nextMaps);
-      return;
-    }
-    this.applyMaps(nextMaps, resolution);
+    // N10/L33: single-flight con coalescenza — al massimo una build (es. 2048²)
+    // alla volta. Le richieste arrivate durante una build in corso si accodano
+    // e l'ultima vince: prima AUTO→ULTRA→AUTO lanciava due rebuild concorrenti
+    // (~50-100MB di lavoro sprecato e un hitch di frame).
+    this.pendingBuildResolution = resolution;
+    if (this.buildPromise) return;
+    const run = async () => {
+      try {
+        while (this.pendingBuildResolution != null) {
+          const target = this.pendingBuildResolution;
+          this.pendingBuildResolution = null;
+          // Target già applicato (richiesta duplicata in coda): salta.
+          if (target === this.resolution) continue;
+          const generation = ++this.buildGeneration;
+          let nextMaps;
+          try {
+            nextMaps = await createFacadeMapsAsync(target, this.anisotropy);
+          } catch (error) {
+            console.warn('VIBE facade rebuild failed, keeping current maps', error);
+            continue;
+          }
+          if (generation !== this.buildGeneration) {
+            disposeMaps(nextMaps);
+            continue;
+          }
+          this.applyMaps(nextMaps, target);
+        }
+      } finally {
+        this.buildPromise = null;
+      }
+    };
+    this.buildPromise = run();
+    this.buildPromise.catch(() => {});
   }
 
   applyMaps(nextMaps, resolution) {

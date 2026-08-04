@@ -107,6 +107,7 @@ export const APEX_ROSTER = Object.freeze(APEX_ROSTER_BASE.map(a => Object.freeze
 
 export const APEX_TUNING = Object.freeze({
   tierMultiplier: 1.35, // statistiche × per tier
+  hpMultiplier: 4,      // vita dei boss ×4 (richiesta utente)
   rosterSize: 4,        // un archetipo per ondata, ciclo ogni 4
   spawnDescent: 2.6,    // secondi di discesa in aria prima di attivarsi
   chargeSpeed: 14,      // carica VANGUARD
@@ -123,17 +124,100 @@ export const APEX_TUNING = Object.freeze({
   ammoDropGuaranteed: true
 });
 
+// Endgame della demo: due cicli completi del roster, gauntlet e boss finale.
+export const ENDGAME_TUNING = Object.freeze({
+  gauntletWave: 9,
+  finalWave: 10,
+  gauntletTier: 3,
+  megaBoss: Object.freeze({
+    id: 'overlord',
+    nameKey: 'apex.overlord',
+    color: 0xc76dff,
+    maxHealth: 24000,
+    speed: 3.1,
+    damage: 34,
+    radius: 4.05,
+    visualScale: 3,
+    scoreKill: 5000
+  })
+});
+
 // Railgun ricompensata dal primo Apex. Ha un caricatore a colpo singolo e un
 // raggio istantaneo: il danno enorme vale per i droni semplici, mentre il
 // danno separato per gli Apex evita che l'arma annulli il combattimento boss.
+// Tuning per tutte le armi. Ogni arma ha caricatore, riserva, cadenza, tempo
+// di ricarica e danno. Le armi nuove (minigun, rpg, flamethrower) vengono
+// droppate dai boss dopo il primo (onda 2/3/4) e sbloccate una volta sola.
+export const WEAPON_TUNING = Object.freeze({
+  pulse: Object.freeze({
+    nameKey: 'weapon.pulse',
+    magazineSize: 30,
+    reserveAmmo: 180,
+    fireRate: 0.12,
+    reloadTime: 1.35,
+    damage: 34,
+    projectile: true,
+    bulletSpeed: 60,
+    unlockWave: 0
+  }),
+  railgun: Object.freeze({
+    nameKey: 'weapon.railgun',
+    magazineSize: 1,
+    reserveAmmo: 5,
+    cooldown: 1.15,
+    reloadTime: 1.2,
+    damage: 9999,
+    apexDamage: 180,
+    range: 100,
+    projectile: false,
+    unlockWave: 1
+  }),
+  minigun: Object.freeze({
+    nameKey: 'weapon.minigun',
+    displayName: 'VULCAN',
+    magazineSize: 120,
+    reserveAmmo: 480,
+    fireRate: 0.04,
+    reloadTime: 3.0,
+    damage: 12,
+    spinUp: 0.4,
+    projectile: true,
+    bulletSpeed: 90,
+    spread: 0.02,
+    unlockWave: 2
+  }),
+  rpg: Object.freeze({
+    nameKey: 'weapon.rpg',
+    displayName: 'HELLSTORM',
+    magazineSize: 1,
+    reserveAmmo: 8,
+    cooldown: 1.7,
+    reloadTime: 2.2,
+    damage: 220,
+    blastRadius: 5,
+    projectile: true,
+    bulletSpeed: 28,
+    unlockWave: 3
+  }),
+  flame: Object.freeze({
+    nameKey: 'weapon.flame',
+    displayName: 'PYRE',
+    magazineSize: 80,
+    reserveAmmo: 320,
+    fireRate: 0.05,
+    reloadTime: 2.5,
+    damage: 5,
+    range: 8,
+    cone: 0.6,
+    projectile: false,
+    unlockWave: 4
+  })
+});
+
+// T3: RAILGUN_TUNING deriva da WEAPON_TUNING.railgun (unica fonte di verità),
+// con solo il tempo di vita del pickup aggiunto.
 export const RAILGUN_TUNING = Object.freeze({
-  magazineSize: 1,
-  reserveAmmo: 5,
-  cooldown: 1.15,
-  reloadTime: 1.2,
-  range: 100,
-  damage: 9999,
-  apexDamage: 180,
+  ...WEAPON_TUNING.railgun,
   pickupLifetime: 90
 });
 
@@ -148,17 +232,53 @@ export function getApexArchetype(wave) {
 // Statistiche scalate di un Apex per l'ondata data.
 export function getApexStats(wave) {
   const { archetype, tier } = getApexArchetype(wave);
-  const m = Math.pow(APEX_TUNING.tierMultiplier, tier - 1);
+  return getApexStatsFor(archetype, tier);
+}
+
+// Statistiche di un archetipo specifico, usate dal gauntlet dell'ondata 9.
+export function getApexStatsFor(archetypeOrId, tier = 1) {
+  const archetype = typeof archetypeOrId === 'string'
+    ? APEX_ROSTER.find(entry => entry.id === archetypeOrId) || APEX_ROSTER[0]
+    : archetypeOrId || APEX_ROSTER[0];
+  const safeTier = Math.max(1, Math.floor(Number(tier) || 1));
+  const m = Math.pow(APEX_TUNING.tierMultiplier, safeTier - 1);
   return {
     archetype,
-    tier,
-    maxHealth: Math.round(archetype.baseHp * m),
+    tier: safeTier,
+    maxHealth: Math.round(archetype.baseHp * APEX_TUNING.hpMultiplier * m),
     speed: archetype.baseSpeed * m,
     damage: Math.round(archetype.baseDamage * m),
     radius: archetype.radius,
     color: archetype.color,
     nameKey: archetype.nameKey
   };
+}
+
+export function getMegaBossStats() {
+  const mega = ENDGAME_TUNING.megaBoss;
+  return {
+    archetype: mega,
+    tier: 4,
+    maxHealth: mega.maxHealth,
+    speed: mega.speed,
+    damage: mega.damage,
+    radius: mega.radius,
+    color: mega.color,
+    nameKey: mega.nameKey,
+    visualScale: mega.visualScale,
+    mega: true
+  };
+}
+
+export function getBossEncounter(wave) {
+  const safeWave = Math.max(1, Math.floor(Number(wave) || 1));
+  if (safeWave === ENDGAME_TUNING.gauntletWave) {
+    return { kind: 'gauntlet', bossCount: APEX_ROSTER.length, final: false };
+  }
+  if (safeWave >= ENDGAME_TUNING.finalWave) {
+    return { kind: 'final', bossCount: 1, final: true };
+  }
+  return { kind: 'standard', bossCount: 1, final: false };
 }
 
 function safeStorage() {

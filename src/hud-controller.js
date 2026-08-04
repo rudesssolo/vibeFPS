@@ -13,7 +13,6 @@ export class HudController {
       reserve: document.getElementById('reserve'),
       ammoCells: document.getElementById('ammo-cells'),
       weaponName: document.getElementById('weapon-name'),
-      weaponMode: document.getElementById('weapon-mode'),
       reload: document.getElementById('reload-message'),
       score: document.getElementById('score'),
       combo: document.getElementById('combo'),
@@ -28,7 +27,10 @@ export class HudController {
       bossBar: document.getElementById('boss-bar'),
       bossName: document.getElementById('boss-name'),
       bossFill: document.getElementById('boss-fill'),
-      bossState: document.getElementById('boss-state')
+      bossHp: document.getElementById('boss-hp'),
+      bossState: document.getElementById('boss-state'),
+      livesValue: document.getElementById('lives-value'),
+      livesHearts: document.getElementById('lives-hearts')
     };
     if (!this.ui.ammoCells.children.length) {
       for (let i = 0; i < 15; i++) this.ui.ammoCells.appendChild(document.createElement('i'));
@@ -36,6 +38,7 @@ export class HudController {
     this.last = {};
     this.graphicsStatus = 'AUTO // HIGH';
     this.maxShield = 75; // valore massimo scudo (M2); allineato in index.html con CONFIG.maxShield
+    this.maxLives = 3;   // vite massime; allineato in index.html con CONFIG.maxLives
     this.onboardingTimer = null;
   }
 
@@ -63,25 +66,50 @@ export class HudController {
       this.ui.staminaValue.textContent = String(Math.ceil(stamina)).padStart(3, '0');
       last.stamina = stamina;
     }
-    const railgunActive = state.weapon === 'railgun';
-    const ammo = railgunActive ? (state.railgunAmmo ?? 0) : state.ammo;
-    const reserve = railgunActive ? (state.railgunReserve ?? 0) : state.reserve;
-    const weaponName = t(railgunActive ? 'weapon.railgun' : 'weapon.pulse');
-    const weaponMode = t(railgunActive ? 'weapon.railgunMode' : 'weapon.pulseMode');
+    // Vite: contatore + cuori. A vite piene si può perdere comunque la carry
+    // (dirty-check) ma i cuori restano 3 accesi; il pickup è gestito in gioco.
+    const lives = Math.max(0, Math.floor(state.lives ?? this.maxLives));
+    const maxLives = Math.max(1, Math.floor(state.maxLives ?? this.maxLives));
+    if (last.lives !== lives || last.livesMax !== maxLives) {
+      while (this.ui.livesHearts.children.length < maxLives) {
+        const heart = document.createElement('span');
+        heart.className = 'life-heart';
+        heart.textContent = '♥';
+        this.ui.livesHearts.appendChild(heart);
+      }
+      while (this.ui.livesHearts.children.length > maxLives) {
+        this.ui.livesHearts.lastElementChild.remove();
+      }
+      const hearts = this.ui.livesHearts.children;
+      for (let i = 0; i < hearts.length; i++) hearts[i].classList.toggle('full', i < lives);
+      this.ui.livesValue.textContent = String(lives);
+      last.lives = lives;
+      last.livesMax = maxLives;
+    }
+    // --- Arma corrente (uniforme per tutte le armi: ammo/riserva/nome/capienza
+    // vengono passati da index.html via _ammo/_reserve/_weaponName/_magazineSize).
+    const ammo = state._ammo ?? state.ammo ?? 0;
+    const reserve = state._reserve ?? state.reserve ?? 0;
+    const weaponName = state._weaponName ?? t('weapon.pulse');
+    const magSize = state._magazineSize ?? 30;
     if (last.weaponName !== weaponName) {
       this.ui.weaponName.textContent = weaponName;
       last.weaponName = weaponName;
     }
-    if (last.weaponMode !== weaponMode) {
-      this.ui.weaponMode.textContent = weaponMode;
-      last.weaponMode = weaponMode;
-    }
-    if (last.ammo !== ammo || last.railgunActive !== railgunActive) {
-      this.ui.ammo.textContent = String(ammo).padStart(railgunActive ? 1 : 2, '0');
+    if (last.ammo !== ammo || last.magSize !== magSize) {
+      this.ui.ammo.textContent = String(ammo).padStart(magSize <= 1 ? 1 : (magSize >= 100 ? 3 : 2), '0');
       const cells = this.ui.ammoCells.children;
-      for (let i = 0; i < cells.length; i++) cells[i].classList.toggle('empty', railgunActive ? i >= ammo : i * 2 >= ammo);
+      // Per armi a colpo singolo (railgun, magSize 1) mostra solo il primo cell:
+      // la cella 0 è piena SOLO se c'è ancora una munizione (T5).
+      if (magSize <= 1) {
+        const hasShot = ammo > 0;
+        for (let i = 0; i < cells.length; i++) cells[i].classList.toggle('empty', i >= 1 || !hasShot);
+      } else {
+        const perCell = magSize / cells.length;
+        for (let i = 0; i < cells.length; i++) cells[i].classList.toggle('empty', i * perCell >= ammo);
+      }
       last.ammo = ammo;
-      last.railgunActive = railgunActive;
+      last.magSize = magSize;
     }
     if (last.reserve !== reserve) {
       this.ui.reserve.textContent = String(reserve).padStart(3, '0');
@@ -109,7 +137,9 @@ export class HudController {
     const objective = `${state.waveKills}/${state.waveTargets}`;
     if (last.objective !== objective) {
       this.ui.objective.textContent = `${t('mission.objective')} · ${objective}`;
-      this.ui.missionFill.style.width = `${state.waveTargets ? state.waveKills / state.waveTargets * 100 : 0}%`;
+      // S5: clamp a 100% — l'eliminazione dell'Apex conta in waveKills e può
+      // superare il target (es. 6/5) senza rompere la barra.
+      this.ui.missionFill.style.width = `${state.waveTargets ? Math.min(100, state.waveKills / state.waveTargets * 100) : 0}%`;
       last.objective = objective;
     }
     if (last.wave !== state.wave) {
@@ -159,7 +189,7 @@ export class HudController {
       this.ui.bossName.textContent = name;
       this.last.bossName = name;
     }
-    const state = `T-${apex.tier}`;
+    const state = apex.stateLabel || `T-${apex.tier}`;
     if (this.last.bossState !== state) {
       this.ui.bossState.textContent = state;
       this.last.bossState = state;
@@ -168,6 +198,13 @@ export class HudController {
     if (this.last.bossPct !== pct) {
       this.ui.bossFill.style.width = `${pct}%`;
       this.last.bossPct = pct;
+    }
+    // Numerico: mostra la life effettiva (es. "840 / 1680") così il ×N dell'HP
+    // dei boss è visibile, non solo la barra percentuale.
+    const hp = `${Math.max(0, Math.round(apex.health))} / ${Math.round(apex.maxHealth)}`;
+    if (this.last.bossHp !== hp) {
+      this.ui.bossHp.textContent = hp;
+      this.last.bossHp = hp;
     }
   }
 

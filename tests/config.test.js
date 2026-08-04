@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getStoredMix, storeMix, getStoredQualityMode, storeQualityMode, getStoredMuted, storeMuted, getApexArchetype, getApexStats, APEX_ROSTER, APEX_TUNING, RAILGUN_TUNING, QUALITY_PROFILES } from '../src/config.js';
+import { getStoredMix, storeMix, getStoredQualityMode, storeQualityMode, getStoredMuted, storeMuted, getApexArchetype, getApexStats, getApexStatsFor, getMegaBossStats, getBossEncounter, APEX_ROSTER, APEX_TUNING, ENDGAME_TUNING, RAILGUN_TUNING, QUALITY_PROFILES } from '../src/config.js';
 
 function withStorage(initial = {}) {
   const store = new Map(Object.entries(initial));
@@ -161,4 +161,21 @@ test('getApexStats scales health, speed and damage with the tier', () => {
   assert.ok(t2.damage > t1.damage);
   assert.equal(t2.tier, 2);
   assert.equal(t2.nameKey, t1.nameKey);
+});
+
+test('endgame encounter plan ends with the four-Apex gauntlet and mega-boss', () => {
+  assert.deepEqual(getBossEncounter(8), { kind: 'standard', bossCount: 1, final: false });
+  assert.deepEqual(getBossEncounter(9), { kind: 'gauntlet', bossCount: 4, final: false });
+  assert.deepEqual(getBossEncounter(10), { kind: 'final', bossCount: 1, final: true });
+  assert.deepEqual(getBossEncounter(99), { kind: 'final', bossCount: 1, final: true });
+});
+
+test('wave 9 can build every Apex at tier 3 and the mega-boss is triple scale', () => {
+  const gauntlet = APEX_ROSTER.map(archetype => getApexStatsFor(archetype, ENDGAME_TUNING.gauntletTier));
+  assert.deepEqual(gauntlet.map(stats => stats.archetype.id), ['vanguard', 'wraith', 'vex', 'sentinel']);
+  assert.ok(gauntlet.every(stats => stats.tier === 3 && stats.maxHealth > 0));
+  const mega = getMegaBossStats();
+  assert.equal(mega.archetype.id, 'overlord');
+  assert.equal(mega.visualScale, 3);
+  assert.ok(mega.maxHealth > Math.max(...gauntlet.map(stats => stats.maxHealth)) * 2);
 });

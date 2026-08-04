@@ -1,15 +1,17 @@
 # VIBE FPS — Bug Remediation & Improvement Plan
 
-> **Data analisi:** 3 agosto 2026
-> **Commit analizzato:** `88bc585` ("Require WebGPU and harden arena gameplay", branch `main`)
-> **Scope:** revisione statica completa di `index.html` (2924 righe), `src/*.js` (10 moduli), `styles/hud.css`, `tests/`. Verifiche puntuali eseguite con Node.js.
-> **Stato documento:** ✅ **TUTTE LE AZIONI ESEGUITE** (Fase 1, 2, 3). Vedi sezione 13 "Stato di completamento".
+> **Data analisi:** 3 agosto 2026 (prima e seconda tornata) · **4 agosto 2026 (terza tornata — stato attuale)**
+> **Commit analizzato:** `88bc585` (prima tornata) → `9ed349a` + **working tree 4 agosto 2026** (terza tornata)
+> **Scope:** revisione statica completa di `index.html` (~4200 righe), `src/*.js` (14 moduli), `styles/hud.css`, `tests/`, `tools/`. Verifiche: suite `node --test` **51/51 verdi**, `npm run lint:tsl` OK, `npm run smoke` OK (boot headless WebGPU).
+> **Stato documento:** ✅ **TUTTE LE AZIONI DELLE TORNATE 1-2 VERIFICATE PRESENTI**. La terza tornata (4 agosto) aggiunge nuove funzionalità (vite/cuori, 5 armi, drop boss) e rinviene 9 nuovi rilievi (§16). Vedi §13 e §16.
 >
-> **Stato implementazione:** completato in 4 commit:
+> **Stato implementazione (tornate 1-2):** completato in 4 commit:
 > - `4d1d0b9` · Fase 1 — bug fix chirurgici (B1, B2, B3, B4, B5, B7, B8, C1, C2, C3)
 > - `63a718b` · Fase 2 — performance e UX (B6, B9, C4, C5, M2, M3)
 > - `fed7449` · Fase 3 — test, SRI, CI (M1, M4, M6)
 > - `96a08b6` · Fase 3 — M5: estrazione texture procedurali in `src/textures.js`
+>
+> **Funzionalità aggiunte nella terza tornata (working tree 4/8):** sistema vite/cuori con GAME OVER; **5 armi** (pulse, railgun, **VULCAN** minigun, **HELLSTORM** RPG, **PYRE** lanciafiamme) droppate dai boss (onda 1 → railgun; onde 2/3/4 → VULCAN/HELLSTORM/PYRE); HP boss ×4 + barra boss con numerico; drop munizioni ogni 10 s; selezione arma con tasti 1-5 / rotella / Q; ammo per-arma; `src/normal-map.js` (kernel condiviso); refactor vari (§16, "Terza tornata").
 
 ---
 
@@ -556,3 +558,63 @@ Eseguire in browser con WebGPU (Chrome/Edge recenti), servendo la cartella via H
 8. **Atterraggio da salto/jump pad**: dip camera proporzionale (G4) + suono land; flicker neon visibile sulle insegne (G3); arma si abbassa in ricarica (G5); telai delle insegne coreane aderenti ai muri est/ovest (G8); dettaglio texture di asfalto, muri e casse visibilmente più fine da vicino (G9).
 9. **Pareti rasenti**: percorrere il perimetro incollati al muro — nessun cambio di colore delle pareti (N10); volumi base e SFX chiaramente udibili al primo avvio (A6: sparo, hit marker, passi, esplosioni sopra il letto musicale); slider volumi lunghi e trascinabili (U7); premendo M il badge AUDIO MUTED compare sull'overlay e sparisce alla riattivazione (U8).
 10. **Offline**: ripetere i punti 1–3 con la rete disattivata (vendoring D1).
+
+---
+
+## 16. Terza tornata — stato attuale (4 agosto 2026)
+
+> **Contesto:** revisione completa del working tree (cosa è cambiato rispetto alla tornata 2) + verifica che tutti i fix storici siano ancora presenti. La terza tornata ha aggiunto funzionalità significative e rinviene **9 nuovi rilievi** (1 pre-esistente ad alta severità, 2 a media, 6 a bassa).
+
+### 16.1 Verifica dei fix storici (tornate 1-2) — ✅ tutti presenti
+
+Tutti i 38 item tracciati (B1-B9, C1-C5, M3, N1-N10, G1-G9, A1-A6/A9, U7-U8, D1-D4) sono stati riverificati contro il codice attuale e risultano **FIXED/PRESENT**, con evidenza file:riga:
+
+| Gruppo | Esito |
+|--------|-------|
+| B1-B9 (bug core) | ✅ presenti — `getStoredMix` (config.js:265-282), gate `gameplayActive` (index.html:4391-4396), scheduler audio (audio-engine.js:426), sweep colpi nemici (index.html:3041-3044), reset stato (index.html:4333-4334), marker dirty-check (drone-system.js:379-397), sync qualità (index.html:2281-2286), pickup pieno (index.html:2912-2929), `heightToNormalAsync` chunked (facade-system.js:29-39) |
+| C1-C5 (cleanup) | ✅ presenti — dead code rimosso (grep: 0 match), telegraph da `DRONE_TUNING` (drone-system.js:442-445), `exitPointerLock` (index.html:538,697), temp vectors (index.html:3820), clamp origine (index.html:3823-3824) |
+| M3 / M1 / M6 | ✅ presenti — accuracy+toast+sensibilità (hud-controller.js:128-133, index.html:2278), test suite e CI, `heightToNormal` condiviso |
+| N1-N10 | ✅ presenti — tutti verificati (es. N2 gate input, N3 accuracy melee, N7 dirty-check DOM, N9 `panForWorld`, N10 edge-safe material) |
+| G1-G9, A1-A6/A9, U7-U8, D1-D4 | ✅ presenti — warmup, powerPreference, flicker neon, landing dip, reload dip, insegne G8, texture G9, ducking A1, stinger A3, heartbeat A4, mute A5/N8, slider U7, badge U8, vendoring D1, smoke D2 |
+
+**Nota M1/M5:** la copertura test è cresciuta a **51 test** (nuovi: `normal-map.test.js` 4, estensioni `rng`/`hud-controller`/`smoke-volume`). Il refactor completo di `bootGame()` in moduli (M5) resta **parziale**: è stato estratto solo `src/textures.js` (più il nuovo `src/normal-map.js`); `index.html` è ancora ~4200 righe.
+
+### 16.2 Nuove funzionalità (working tree 4/8)
+
+- **Vite e cuori:** `maxLives` (3), i boss droppano un cuore, GAME OVER a vite esaurite con RESTART RUN (`damagePlayer`, `endGameOver`, `updateHeartPickups`).
+- **5 armi:** `WEAPON_TUNING` in `config.js`; helper per-arma (`weaponUnlocked`/`weaponAmmo`/`weaponReserve`/`setWeaponAmmo`/`unlockWeapon`/`weaponTuning`/`availableWeapons`); selezione con tasti 1-5, rotella e Q; HUD per-arma (nome, munizioni, celle ∝ caricatore).
+- **Drop boss:** onda 1 → railgun; onde 2/3/4 → `VULCAN` (minigun), `HELLSTORM` (RPG con missile esplosivo ad area), `PYRE` (lanciafiamme a cono). Ogni arma si sblocca una volta per run.
+- **HP boss ×4** (`APEX_TUNING.hpMultiplier`) + barra boss con numerico (`#boss-hp`, es. "840 / 1680").
+- **Drop munizioni ogni 10 s** in posizione casuale, che riempie la riserva dell'arma equipaggiata.
+- **Kernel normal-map condiviso** (`src/normal-map.js`): unica copia della conversione luminanza→normal (era triplicata).
+
+### 16.3 Nuovi rilievi (dal 4/8) — ✅ tutti corretti nella stessa tornata
+
+> **Stato:** tutti i 9 rilievi (T1-T9) sono stati corretti lo stesso giorno (4/8). La tabella sotto tiene l'evidenza file:riga del fix accanto a ciascun rilievo.
+
+| ID | Severità | Titolo | File:riga (fix) | Note |
+|----|----------|--------|-----------------|------|
+| **T1** | 🔴 Alta · **pre-esistente** | I visuali specifici degli archetipi Apex non vengono renderizzati | `src/drone-system.js:263-266` | Aggiunte le parti archetipo al `visual` (`for (const p of parts) if (p.isMesh) visual.add(p)`), prima restavano solo in `parts`. |
+| **T2** | 🟠 Media | Il drop di un'arma può sparire per sempre (soft-lock) | `index.html` (`spawnWeaponDrop` gate ciclico + reset `weaponDropSpawned`) | Gate `(wave - unlockWave) % 4 === 0`; il flag si resetta alla scadenza; il boss ri-droppa ogni 4 ondate se non raccolta. |
+| **T3** | 🟠 Media | Tuning railgun duplicato (due fonti di verità) | `src/config.js` | `RAILGUN_TUNING` ora deriva da `WEAPON_TUNING.railgun` (`{ ...WEAPON_TUNING.railgun, pickupLifetime: 90 }`). |
+| **T4** | 🟡 Bassa | Leak/duplicazione canne del minigun allo switch ULTRA | `index.html` (`applyWeaponDetail`) | Il vecchio `minigunBarrel` viene rimosso e disposto (non più escluso dal cleanup). |
+| **T5** | 🟡 Bassa | Cell di munizioni "pieno" quando l'arma a colpo singolo è vuota | `src/hud-controller.js:103-105` | Cella 0 piena solo se `ammo > 0`. |
+| **T6** | 🟡 Bassa | Cono del lanciafiamme: distanza su XZ + direzione 3D | `index.html` (`fireFlame`, `flameAim`) | Direzione e offset proiettati su XZ + guardia `dist < .001`: niente NaN-bypass per nemici sopra/sotto. |
+| **T7** | 🟡 Bassa | Bonus munizioni di fine ondata va solo alla riserva del pulse | `index.html` (fine ondata) | `setWeaponAmmo` sulla riserva dell'arma attiva (clamp al max). |
+| **T8** | 🟡 Bassa | `audio.flame()` alloca 2 burst di rumore per tick (20/s) | `index.html` (`flameSoundTimer`) | Suono throttled a max ~1 ogni 0.12 s. |
+| **T9** | 🟡 Bassa | `flameBurst` può saturare il pool additivo (720 particelle) | `src/explosion-system.js` (`flameBurst`) | Count ridotto a ~5 (era 10) per burst: ~100 particelle/s. |
+| **T10** | 🟡 Bassa · **post-T9** | Salto in alto vicino ai muri → l'arena si scurisce ("il sistema luci si rompe") | `src/render-pipeline.js` (`render()`), `index.html` (`updateEdgeSafeMode`) | **Root cause:** la "modalità edge-safe" (camera vicina ai muri, attivata dalla distanza X/Z) **bypassava l'intero post-processing** (`renderBaseScene()`: niente bloom, grading, tone mapping) → l'arena appariva drasticamente più scura vicino al bordo, a qualsiasi altezza. **Fix definitivo:** rimosso il bypass del post-processing in edge-safe (resta solo lo swap materiale delle pareti); il post-processing è ora sempre attivo → l'arena non si scurisce più vicino ai muri. Nota: un primo fix (gate sull'altezza in `updateEdgeSafeMode`) non bastava perché un salto normale non supera la soglia usata. |
+
+**Non-bug verificati (terza tornata):** kernel `normal-map.js` numericamente equivalente; single-flight di `facade-system.js` (nessuna richiesta persa); `initialize()` audio con try/catch (nessun ctx orfano); `smoke-volume.js` drop-on-full + active-after-mesh corretti; `spawnLight` oldest-reuse sicuro; `i18n` en/it parità (108/108); `rng.js` seed normalization corretta.
+
+### 16.4 Validazione terza tornata
+- `node --test`: **51/51 verdi**.
+- `node --check` pulito su tutti i moduli `src/*.js`, `tests/*.js`, `tools/*.mjs` e sullo script inline di `index.html`.
+- `npm run lint:tsl`: OK (import TSL coerenti).
+- `npm run smoke`: OK — boot headless WebGPU, zero errori, zero risorse mancanti.
+- Ambiente di sviluppo **senza adapter WebGPU**: il rendering reale resta alla checklist manuale §15 + nuovi punti per le armi.
+
+### 16.5 Backlog proposto
+> ✅ **Eseguito nella stessa tornata (4/8):** tutti gli item T1-T9 sono stati corretti. Di seguito il backlog residuo (non urgenti, rifiniture opzionali).
+1. **Verifica visuale in browser GPU** — T1 (visuali Apex per-archetipo) e T2 (re-drop) richiedono conferma manuale su macchina con WebGPU (checklist §15 + punti armi).
+2. **Rifiniture opzionali** — cono del lanciafiamme (T6) e budget particelle (T9) sono già mitigati; valutare se il burst visivo del fuoco resta abbastanza denso dopo la riduzione T9.

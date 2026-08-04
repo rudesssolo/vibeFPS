@@ -94,3 +94,45 @@ test('renderBoss toggles the bar only while an apex is alive', () => {
     assert.equal(hud.renderBoss(null), undefined);
   });
 });
+
+test('render draws one heart per remaining life and dims consumed ones', () => {
+  withFakeDom(() => {
+    const hud = new HudController();
+    const base = {
+      health: 100, shield: 75, stamina: 100,
+      weapon: 'pulse', ammo: 30, reserve: 180,
+      railgunAmmo: 0, railgunReserve: 0,
+      score: 0, combo: 1, shots: 0, hits: 0,
+      waveKills: 0, waveTargets: 5, wave: 1
+    };
+    hud.render({ ...base, lives: 3, maxLives: 3 });
+    assert.equal(hud.ui.livesValue.textContent, '3');
+    assert.equal(hud.ui.livesHearts.children.length, 3);
+    assert.equal(hud.ui.livesHearts.children[0].classList.contains('full'), true);
+    assert.equal(hud.ui.livesHearts.children[2].classList.contains('full'), true);
+    // Una vita persa → contatore e cuori si allineano.
+    hud.render({ ...base, lives: 1, maxLives: 3 });
+    assert.equal(hud.ui.livesValue.textContent, '1');
+    assert.equal(hud.ui.livesHearts.children[0].classList.contains('full'), true);
+    assert.equal(hud.ui.livesHearts.children[1].classList.contains('full'), false);
+    assert.equal(hud.ui.livesHearts.children[2].classList.contains('full'), false);
+  });
+});
+
+test('mission bar clamps at 100% when waveKills exceeds waveTargets (S5)', () => {
+  withFakeDom(() => {
+    const hud = new HudController();
+    const base = {
+      health: 100, shield: 75, stamina: 100,
+      weapon: 'pulse', ammo: 30, reserve: 180,
+      railgunAmmo: 0, railgunReserve: 0,
+      score: 0, combo: 1, shots: 0, hits: 0,
+      waveKills: 0, waveTargets: 5, wave: 1
+    };
+    // L'eliminazione dell'Apex conta in waveKills e può superare il target
+    // (es. 6/5): la barra non deve superare il 100%.
+    hud.render({ ...base, waveKills: 6, waveTargets: 5 });
+    assert.equal(hud.ui.missionFill.style.width, '100%');
+    assert.equal(hud.ui.objective.textContent.includes('6/5'), true);
+  });
+});

@@ -5,7 +5,9 @@ VIBE FPS is a browser-based cyberpunk first-person shooter tech demo. Enter a ne
 ## Features
 
 - Real-time 3D rendering with Three.js and WebGPU
-- A cyberpunk night arena with procedural buildings, neon lighting (with animated sign flicker), rain, fog, reflections, bloom, ambient occlusion, film grain, and cinematic color grading
+- A procedural cyberpunk night arena with animated facades and rooftop beacons, aerial traffic, wet materials, reflective asphalt, rain streaks, splashes, ripples, and drifting fog banks
+- A dynamic sky with cloud strata, aurora, meteors, and deterministic lightning synchronized with procedural thunder and cinematic exposure
+- Bounded analytic lens flare, localized heat haze, bloom, GTAO, SMAA, film grain, color grading, pooled combat decals, and volumetric explosion smoke
 - Shader warm-up during loading (`compileAsync` + one offscreen post-chain render) so the first frame, shot, and explosion never stutter
 - Physics-based movement, jumping, a launch pad, collisions, and projectile simulation powered by Cannon.js
 - Wave-based combat against drones that patrol, engage, telegraph attacks, and evade incoming projectiles
@@ -61,6 +63,8 @@ src/config.js           Quality, movement, drone, and audio persistence settings
 src/graphics-manager.js Adaptive graphics quality management
 src/rng.js              Deterministic seeded PRNG for procedural generation
 src/render-pipeline.js  GTAO, bloom, SMAA, grain, grading, shockwave and vignette post chain
+src/atmosphere-system.js Dynamic clouds, aurora, meteors, lightning, and aerial traffic
+src/weather-system.js   Pooled rain streaks, impacts, fog banks, and wet-surface budgets
 src/drone-system.js     Drone spawning, movement, attacks, and evasive behavior
 src/explosion-system.js Explosion pooling, particles, and shockwave effects
 src/facade-system.js    Procedural building facade generation
@@ -69,6 +73,7 @@ src/audio-engine.js     Singleton procedural AudioEngine, SFX, drone, arpeggiato
 src/hud-controller.js    HUD onboarding and simulation settings
 vendor/                 Vendored runtime dependencies (three.js WebGPU build + addons, cannon.js)
 tools/smoke-boot.mjs    Headless boot smoke test (module graph, vendoring, WebGPU fallback path)
+tools/visual-check.mjs  Deterministic renderer-canvas capture and pixel diagnostics
 ```
 
 ## Settings
@@ -91,6 +96,12 @@ npm test        # unit tests (node --test, no browser needed)
 npm run smoke   # headless boot smoke test — requires playwright + chromium
                 # (`npx playwright install chromium`); verifies zero JS errors,
                 # zero missing resources, and the no-WebGPU recovery panel
+npm run visual:check -- storm ultra
+                # deterministic renderer-canvas capture; prefix with
+                # VISUAL_GPU=hardware for authoritative pixel validation
+VISUAL_GPU=hardware VISUAL_PERF=1 VISUAL_SECONDS=60 npm run visual:check -- combat autoHigh
+                # 60-second performance gate: median 60 FPS, 1% low 50 FPS,
+                # and no long task above 100 ms
 ```
 
 The manual pre-presentation GPU checklist lives in `bugs-remediation-plan.md` (§15).

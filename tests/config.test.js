@@ -114,6 +114,30 @@ test('ogni profilo qualità espone tutti i parametri consumati dai sistemi', () 
   assert.ok(QUALITY_PROFILES.autoHigh.smokePuffs < QUALITY_PROFILES.ultra.smokePuffs);
 });
 
+test('i budget cinematici sono completi e crescono da Balanced a Ultra', () => {
+  const ordered = [QUALITY_PROFILES.autoLow, QUALITY_PROFILES.autoHigh, QUALITY_PROFILES.ultra];
+  for (const profile of ordered) {
+    for (const group of ['atmosphere', 'city', 'post', 'combat']) {
+      assert.ok(profile[group] && Object.isFrozen(profile[group]), `${profile.name}.${group} non è un contratto frozen`);
+    }
+    for (const value of [
+      ...Object.values(profile.atmosphere),
+      ...Object.values(profile.city),
+      ...Object.values(profile.post),
+      ...Object.values(profile.combat)
+    ]) assert.ok(Number.isFinite(value));
+  }
+  const cost = profile => profile.atmosphere.rainStreaks
+    + profile.atmosphere.fogBanks * 100
+    + profile.city.aerialTraffic * 10
+    + profile.combat.impactDecals * 5
+    + profile.post.distortionSlots * 100;
+  assert.ok(cost(ordered[0]) < cost(ordered[1]));
+  assert.ok(cost(ordered[1]) < cost(ordered[2]));
+  assert.equal(QUALITY_PROFILES.autoLow.post.flare, 0);
+  assert.equal(QUALITY_PROFILES.autoLow.post.heatHaze, 0);
+});
+
 // --- Apex Sentinel: roster a ciclo + tier scaling ---
 
 test('apex roster exposes the 4 archetypes with unique ids', () => {

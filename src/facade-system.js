@@ -228,6 +228,15 @@ export class FacadeSystem {
     this.maps = null;
     this.mapsResolution = 0;
     this.cachedBaseMaps = null;
+    this.pulseAmplitude = .08;
+    this.wetDetail = .72;
+    this.beaconGeometry = new THREE.SphereGeometry(.075, 6, 4);
+    this.beaconMaterials = [0xff4f68, 0x72edff].map(color => new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: .8,
+      toneMapped: false
+    }));
     // N1: token di generazione — un rebuild asincrono ancora in volo viene
     // scartato se nel frattempo è partita un'altra ricostruzione o un ritorno
     // alle mappe base. Evita swap fuori ordine e doppi materiali.
@@ -322,6 +331,12 @@ export class FacadeSystem {
 
   setQuality(profile) {
     if (!profile) return;
+    this.pulseAmplitude = Math.max(0, profile.city?.facadePulse ?? .08);
+    this.wetDetail = Math.max(0, Math.min(1, profile.city?.wetDetail ?? .72));
+    for (const material of this.materials) {
+      material.roughness = THREE.MathUtils.lerp(.38, .24, this.wetDetail);
+      material.clearcoat = THREE.MathUtils.lerp(.55, .9, this.wetDetail);
+    }
     const target = profile.facadeResolution;
     if (target === this.resolution) {
       // Annulla un rebuild asincrono in volo verso un'altra risoluzione.
@@ -335,6 +350,18 @@ export class FacadeSystem {
       return;
     }
     this.rebuildMaterialsAsync(target);
+  }
+
+  update(elapsed, lightningFlash = 0) {
+    const safeElapsed = Number.isFinite(elapsed) ? elapsed : 0;
+    const flash = Math.max(0, Math.min(1, Number.isFinite(lightningFlash) ? lightningFlash : 0));
+    for (let i = 0; i < this.materials.length; i++) {
+      const breath = Math.sin(safeElapsed * (.42 + i * .07) + i * 1.83) * this.pulseAmplitude;
+      this.materials[i].emissiveIntensity = Math.max(.48, .82 + breath + flash * .32);
+    }
+    for (let i = 0; i < this.beaconMaterials.length; i++) {
+      this.beaconMaterials[i].opacity = .45 + Math.max(0, Math.sin(safeElapsed * 2.4 + i * Math.PI)) * .5 + flash * .05;
+    }
   }
 
   buildCity() {
@@ -387,6 +414,11 @@ export class FacadeSystem {
         const antenna = new THREE.Mesh(new THREE.CylinderGeometry(.025, .04, antennaHeight, 6), trimMat);
         antenna.position.set((random() - .5) * width * .25, totalHeight + 1 + antennaHeight / 2, (random() - .5) * depth * .2);
         building.add(antenna);
+      }
+      if (random() < .42) {
+        const beacon = new THREE.Mesh(this.beaconGeometry, this.beaconMaterials[i % this.beaconMaterials.length]);
+        beacon.position.set((random() - .5) * width * .28, totalHeight + .9, (random() - .5) * depth * .24);
+        building.add(beacon);
       }
       this.group.add(building);
 

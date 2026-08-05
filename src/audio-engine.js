@@ -814,6 +814,13 @@ export class AudioEngine {
     this.tone(1400, 120, .5, .1, 'square', null, null, pan);
     this.duckMusic(.6, .7);
   }
+  thunder() {
+    if (!this.started || !this.ctx) return;
+    const time = this.ctx.currentTime;
+    this.noise(1.7, .16, 105, 'lowpass', 0, time, this.ambience, .55);
+    this.noise(.72, .08, 680, 'bandpass', -.18, time + .08, this.ambience, .8);
+    this.tone(48, 22, 1.25, .12, 'sine', time, this.ambience);
+  }
   apexTelegraph(pan = 0) { this.tone(220, 880, .3, .05, 'square', null, null, pan); this.noise(.2, .04, 3000, 'bandpass', pan); }
   apexCharge() { this.tone(90, 320, .34, .07, 'sawtooth', null, null, 0); this.noise(.3, .05, 700, 'lowpass', 0); }
   apexBarrage() { this.tone(300, 900, .2, .05, 'square', null, null, 0); this.noise(.16, .04, 4200, 'bandpass', 0); }

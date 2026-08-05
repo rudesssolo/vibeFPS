@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { RenderPipelineController } from '../src/render-pipeline.js';
+import { QUALITY_PROFILES } from '../src/config.js';
 
 function makeController(renderPipeline, onPersistentFailure = () => {}) {
   const controller = Object.create(RenderPipelineController.prototype);
@@ -84,4 +85,64 @@ test('persistent pipeline failures are reported once without a dark fallback', (
   } finally {
     console.error = originalConsoleError;
   }
+});
+
+function makeQualityController() {
+  const value = initial => ({ value: initial });
+  return Object.assign(Object.create(RenderPipelineController.prototype), {
+    aoPass: { samples: value(0) },
+    graphics: { grain: { amount: .01 }, vignette: { darkness: .92 } },
+    flareStrength: value(0),
+    heatScale: value(0),
+    grainAmount: value(0),
+    vignetteDarkness: value(0),
+    gradeSaturation: value(1),
+    gradeVibrance: value(0),
+    gradeAmount: value(1),
+    heatSlots: Array.from({ length: 4 }, () => ({ strength: value(0), peak: 0 })),
+    fxOverrides: {},
+    currentProfile: null
+  });
+}
+
+test('quality profiles update cinematic uniforms without recompiling the graph', () => {
+  const controller = makeQualityController();
+  controller.setQuality(QUALITY_PROFILES.ultra);
+  assert.equal(controller.flareStrength.value, QUALITY_PROFILES.ultra.post.flare);
+  assert.equal(controller.heatScale.value, QUALITY_PROFILES.ultra.post.heatHaze);
+  assert.equal(controller.heatSlotLimit, 4);
+  assert.equal(controller.gradeVibrance.value, QUALITY_PROFILES.ultra.post.vibrance);
+});
+
+test('FX overrides disable and restore the active profile values', () => {
+  const controller = makeQualityController();
+  controller.setQuality(QUALITY_PROFILES.autoHigh);
+  controller.setFxOverrides({ flare: false, heatHaze: false, grain: false });
+  assert.equal(controller.flareStrength.value, 0);
+  assert.equal(controller.heatScale.value, 0);
+  assert.equal(controller.grainAmount.value, 0);
+  controller.setFxOverrides({ flare: true, heatHaze: true, grain: true });
+  assert.equal(controller.flareStrength.value, QUALITY_PROFILES.autoHigh.post.flare);
+  assert.equal(controller.heatScale.value, QUALITY_PROFILES.autoHigh.post.heatHaze);
+  assert.equal(controller.grainAmount.value, QUALITY_PROFILES.autoHigh.post.grain);
+});
+
+test('world-space optical events reject invalid and off-screen projections', () => {
+  const controller = Object.assign(Object.create(RenderPipelineController.prototype), { camera: {} });
+  const point = projected => ({
+    x: 0, y: 0, z: 0,
+    clone: () => ({ project: () => projected })
+  });
+  assert.equal(controller._projectWorldPosition(point({ x: 0, y: 0, z: 0 })).z, 0);
+  assert.equal(controller._projectWorldPosition(point({ x: 2, y: 0, z: 0 })), null);
+  assert.equal(controller._projectWorldPosition(point({ x: 0, y: 0, z: Number.NaN })), null);
+  assert.equal(controller._projectWorldPosition({ x: Number.NaN, y: 0, z: 0 }), null);
+});
+
+test('lightning exposure is finite and clamped', () => {
+  const controller = Object.assign(Object.create(RenderPipelineController.prototype), { lightningFlash: { value: 0 } });
+  controller.setLightningFlash(7);
+  assert.equal(controller.lightningFlash.value, 1);
+  controller.setLightningFlash(Number.NaN);
+  assert.equal(controller.lightningFlash.value, 0);
 });

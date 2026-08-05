@@ -5,6 +5,7 @@ import { VolumetricSmokeSystem } from './smoke-volume.js';
 const MAX_ADDITIVE = 720;
 const MAX_DEBRIS = 144;
 const MAX_SHOCKWAVES = 12;
+const MAX_DECALS = 36;
 
 class ParticlePool {
   constructor(scene, maximum, blending) {
@@ -206,6 +207,25 @@ export class ExplosionSystem {
       this.shockwaves.push({ mesh, material, active: false, age: 0, life: .55 });
     }
 
+    this.decalLimit = 20;
+    this.decalCursor = 0;
+    this.decalGeometry = new THREE.CircleGeometry(1, 24);
+    this.decals = Array.from({ length: MAX_DECALS }, () => {
+      const material = new THREE.MeshBasicMaterial({
+        color: 0x07080b,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2
+      });
+      const mesh = new THREE.Mesh(this.decalGeometry, material);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.visible = false;
+      scene.add(mesh);
+      return { mesh, material, active: false, age: 0, life: 18 };
+    });
+
     this.lights = [];
     for (let i = 0; i < 8; i++) {
       const light = new THREE.PointLight(0xffa05c, 0, 18, 2);
@@ -224,6 +244,12 @@ export class ExplosionSystem {
   setQuality(profile) {
     this.particleScale = profile.particleScale;
     this.lightLimit = profile.dynamicLights;
+    this.decalLimit = Math.max(0, Math.min(MAX_DECALS, profile.combat?.impactDecals ?? 20));
+    for (let i = this.decalLimit; i < this.decals.length; i++) {
+      this.decals[i].active = false;
+      this.decals[i].mesh.visible = false;
+      this.decals[i].material.opacity = 0;
+    }
     // Il fumo volumetrico costa per pixel, non per particella: ha un budget
     // proprio nel profilo invece di seguire particleScale.
     this.volumetric.setQuality(profile);
@@ -241,6 +267,12 @@ export class ExplosionSystem {
     this.warmupPending = false;
     for (const wave of this.shockwaves) {
       if (!wave.active) wave.mesh.visible = false;
+    }
+    for (const decal of this.decals) {
+      decal.active = false;
+      decal.age = 0;
+      decal.material.opacity = 0;
+      decal.mesh.visible = false;
     }
   }
 
@@ -265,6 +297,12 @@ export class ExplosionSystem {
       wave.age = 0;
       wave.material.opacity = 0;
       wave.mesh.visible = false;
+    }
+    for (const decal of this.decals) {
+      decal.active = false;
+      decal.age = 0;
+      decal.material.opacity = 0;
+      decal.mesh.visible = false;
     }
     for (const light of this.lights) {
       light.userData.active = false;
@@ -361,9 +399,24 @@ export class ExplosionSystem {
     }
     for (let i = 0; i < debrisCount; i++) this.spawnDebris(position);
     this.spawnShockwave(position, accent);
+    this.spawnScorch(position);
     this.spawnLight(position);
     this.onShockwave(position);
     this.onCameraImpulse(.12);
+  }
+
+  spawnScorch(position) {
+    if (this.decalLimit <= 0 || position.y > 2.2) return;
+    const index = this.decalCursor++ % this.decalLimit;
+    const decal = this.decals[index];
+    decal.active = true;
+    decal.age = 0;
+    decal.life = 14 + Math.random() * 10;
+    decal.mesh.visible = true;
+    decal.mesh.position.set(position.x, .068, position.z);
+    decal.mesh.rotation.z = Math.random() * Math.PI;
+    decal.mesh.scale.setScalar(1.1 + Math.random() * 1.3);
+    decal.material.opacity = .58;
   }
 
   spawnDebris(position) {
@@ -468,6 +521,18 @@ export class ExplosionSystem {
       const t = light.userData.age / light.userData.life;
       light.intensity *= Math.max(0, 1 - delta * 8.5);
       if (t >= 1) { light.userData.active = false; light.intensity = 0; }
+    }
+    for (let i = 0; i < this.decalLimit; i++) {
+      const decal = this.decals[i];
+      if (!decal.active) continue;
+      decal.age += delta;
+      const remaining = Math.max(0, 1 - decal.age / decal.life);
+      decal.material.opacity = Math.min(.58, remaining * 1.6) * .58;
+      if (remaining <= 0) {
+        decal.active = false;
+        decal.mesh.visible = false;
+        decal.material.opacity = 0;
+      }
     }
   }
 }

@@ -409,7 +409,7 @@
   <script type="module">
   import * as THREE from 'three/webgpu';
   import {
-    color, dot, instancedBufferAttribute, max, mix,
+    color, dot, instancedBufferAttribute, max, mix, sin,
     positionGeometry, reflector, smoothstep, uniform, vec3
   } from 'three/tsl';
   import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
@@ -421,9 +421,11 @@
   import { HudController } from './src/hud-controller.js';
   import { GraphicsManager } from './src/graphics-manager.js';
   import { RenderPipelineController } from './src/render-pipeline.js';
+  import { AtmosphereSystem } from './src/atmosphere-system.js';
+  import { WeatherSystem } from './src/weather-system.js';
   import { makeRng } from './src/rng.js';
   import { constrainBodyToSquare } from './src/player-collision.js';
-  import { getStoredSensitivity, storeSensitivity, getStoredQualityMode, APEX_TUNING, ENDGAME_TUNING, RAILGUN_TUNING, WEAPON_TUNING, getBossEncounter } from './src/config.js';
+  import { getStoredSensitivity, storeSensitivity, getStoredQualityMode, APEX_TUNING, ENDGAME_TUNING, RAILGUN_TUNING, WEAPON_TUNING, QUALITY_PROFILES, getBossEncounter } from './src/config.js';
   import { t, getLanguage, setLanguage } from './src/i18n.js';
 
   // L1: applica subito la lingua persistita (default inglese) ai testi statici
@@ -439,6 +441,19 @@
     makeBrushedCanvas, makeAsphaltCanvas, makeHazardCanvas, makeKoreanSignCanvas,
     makeSmokeCanvas, makeGlowCanvas
   } from './src/textures.js';
+
+  const visualParams = new URLSearchParams(window.location.search);
+  const visualTestMode = ['idle', 'storm', 'combat'].includes(visualParams.get('visualTest'))
+    ? visualParams.get('visualTest')
+    : null;
+  const visualQualityKey = ['autoLow', 'autoHigh', 'ultra'].includes(visualParams.get('quality'))
+    ? visualParams.get('quality')
+    : null;
+  const visualDebug = visualTestMode !== null;
+  const requestedVisualSeed = Number(visualParams.get('seed'));
+  const visualSeed = Number.isFinite(requestedVisualSeed) && requestedVisualSeed > 0
+    ? Math.floor(requestedVisualSeed)
+    : 7301;
 
   const loadingUI = (() => {
     const overlay = document.getElementById('overlay');
@@ -638,7 +653,7 @@
       blendIntensity: 1.0
     },
     grain: { enabled: true, amount: 0.01 },
-    rain: { enabled: true, count: 1400, height: 18 },
+    rain: { enabled: true, count: 450, height: 18 },
     fogColor: 0x111116,
     fogDensity: 0.015,
     lights: {
@@ -653,10 +668,9 @@
       ]
     },
     reflectiveFloor: true,
-    // `strength` moltiplica il riflesso sommato in HDR lineare. Non c'è più un
-    // colore di base: il vecchio blendOverlay su base scura schiacciava il
-    // riflesso quasi a zero.
-    reflector: { strength: 0.8 }
+    // Il reflector viene sfocato tramite mipmap prima di essere miscelato con
+    // l'asfalto: riflessi bagnati leggibili, ma mai da superficie a specchio.
+    reflector: { strength: 0.34, blur: 0.32 }
   };
 
   // Gruppi di collisione (bitmask)
@@ -725,6 +739,7 @@
     showWebGPUUnavailable(t('gpu.notWebgpu'));
     return;
   }
+  renderer.domElement.id = 'game-canvas';
   document.body.appendChild(renderer.domElement);
   const rendererBackend = 'WEBGPU';
   document.querySelector('#overlay .build').textContent = `BUILD 2.6.08 // ${rendererBackend}`;
@@ -733,6 +748,7 @@
   const aniso = renderer.getMaxAnisotropy();
 
   const scene = new THREE.Scene();
+  const skyTime = uniform(0);
   scene.background = new THREE.Color(0x05060d);
   scene.fog = new THREE.FogExp2(GRAPHICS.fogColor, GRAPHICS.fogDensity);
 
@@ -799,7 +815,8 @@
     const starMaterial = new THREE.PointsNodeMaterial({
       positionNode: instancedBufferAttribute(positionAttribute),
       size: 1.4, sizeAttenuation: false,
-      color: 0xbfd4ff, transparent: true, opacity: 0.9,
+      color: 0xbfd4ff, transparent: true,
+      opacityNode: sin(skyTime.mul(1.37)).mul(.08).add(.88),
       depthWrite: false, fog: false, alphaToCoverage: true
     });
     // Punti instanziati: Sprite + PointsNodeMaterial + object.count è il pattern
@@ -944,34 +961,15 @@
   createMoon();
   createLights();
   createEnvironment();
+  const atmosphereSystem = new AtmosphereSystem({
+    scene,
+    timeNode: skyTime,
+    seed: visualSeed,
+    onThunder: () => audio.thunder()
+  });
+  const weatherSystem = new WeatherSystem({ scene, floorSize, height: GRAPHICS.rain.height, seed: visualSeed + 2616 });
   const facadeSystem = new FacadeSystem({ scene, anisotropy: aniso, resolution: 1024, buildingCount: 56 });
   loadingUI.update(.62, 'CITY GRID', 'Generating facades and the city grid...');
-
-  // Pioggia leggera per l'atmosfera bagnata
-  let rain = null;
-  if (GRAPHICS.rain.enabled) {
-    const count = GRAPHICS.rain.count;
-    const spread = floorSize / 2 + 2;
-    const top = GRAPHICS.rain.height;
-    const pos = new Float32Array(count * 3);
-    const vel = new Float32Array(count);
-    for (let i = 0; i < count; i++) {
-      pos[i * 3]     = (Math.random() * 2 - 1) * spread;
-      pos[i * 3 + 1] = Math.random() * top;
-      pos[i * 3 + 2] = (Math.random() * 2 - 1) * spread;
-      vel[i] = 15 + Math.random() * 9;
-    }
-    const positionAttribute = new THREE.InstancedBufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage);
-    const rainMat = new THREE.PointsNodeMaterial({
-      positionNode: instancedBufferAttribute(positionAttribute),
-      color: 0x9fb8d8, size: 0.06, transparent: true, opacity: 0.35,
-      sizeAttenuation: true, depthWrite: false, alphaToCoverage: true
-    });
-    rain = { mesh: new THREE.Sprite(rainMat), positionAttribute, pos, vel, spread, top };
-    rain.mesh.count = count;
-    rain.mesh.frustumCulled = false;
-    scene.add(rain.mesh);
-  }
 
   /* ============================================================
      4. MONDO DI FISICA (Cannon.js)
@@ -1023,7 +1021,7 @@
   // al perimetro.
   let floorReflection = null;
   if (GRAPHICS.reflectiveFloor) {
-    floorReflection = reflector({ resolutionScale: .3, bounces: false, samples: 0 });
+    floorReflection = reflector({ resolutionScale: .3, generateMipmaps: true, bounces: false, samples: 0 });
   } else {
     const floorMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(floorSize, floorSize),
@@ -1047,22 +1045,24 @@
     map: asphaltMap, normalMap: asphaltNormal,
     roughnessMap: asphaltPbr.roughnessMap, metalnessMap: asphaltPbr.metalnessMap,
     color: 0x8290a1,
-    roughness: .42, metalness: .08, clearcoat: .65, clearcoatRoughness: .22,
+    roughness: .54, metalness: .06, clearcoat: .42, clearcoatRoughness: .38,
     transparent: !floorReflection, opacity: floorReflection ? 1 : .72,
-    depthWrite: Boolean(floorReflection), envMapIntensity: 1.2
+    depthWrite: Boolean(floorReflection), envMapIntensity: .8
   };
   const asphaltMaterial = floorReflection
     ? new THREE.MeshPhysicalNodeMaterial(asphaltMaterialOptions)
     : new THREE.MeshPhysicalMaterial(asphaltMaterialOptions);
+  weatherSystem.registerWetMaterial(asphaltMaterial, { dryRoughness: .54, wetRoughness: .38 });
   // Il pavimento NON ha più un materiale "edge safe" senza riflesso: il piano
   // dello specchio è orizzontale, quindi la distanza dai muri non influenza la
   // stabilità del reflector. Lo swap serviva solo a fermarne l'aggiornamento e
   // il risultato era un riflesso che sparisce camminando lungo il perimetro.
   if (floorReflection) {
-    // Riflesso pieno: somma diretta (HDR lineare) moltiplicata per la forza
-    // configurata. Il vecchio blendOverlay con base scura schiacciava il riflesso
-    // quasi a zero; ora neon, proiettili ed esplosioni si vedono sul pavimento.
-    asphaltMaterial.emissiveNode = floorReflection.rgb.mul(GRAPHICS.reflector.strength);
+    // Il livello mip sfuma dettagli e contorni prima della somma HDR: neon,
+    // proiettili ed esplosioni restano presenti come bagliori diffusi.
+    asphaltMaterial.emissiveNode = floorReflection
+      .blur(GRAPHICS.reflector.blur)
+      .rgb.mul(GRAPHICS.reflector.strength);
   }
   const asphaltSkin = new THREE.Mesh(
     // Il pavimento invade leggermente lo spessore dei muri: in questo modo un
@@ -1353,6 +1353,7 @@
 
   // G3: insegne neon con flicker discreto (fase e velocità per insegna).
   const flickerSigns = [];
+  const reactiveNeonLights = [];
 
   // Insegna neon "VIBE" sul muro ovest
   (function createSign() {
@@ -1408,18 +1409,21 @@
     signLight.position.set(-18.7, 3.5, -4);
     signLight.lookAt(0, 3.5, -4);
     scene.add(signLight);
+    reactiveNeonLights.push({ light: signLight, base: 2, phase: 0 });
 
     // Jump pad -> soft box magenta dall'alto
     const padLight = new THREE.RectAreaLight(0xff2d95, 1.6, 6, 6);
     padLight.position.set(CONFIG.padPos.x, 3.2, CONFIG.padPos.z);
     padLight.lookAt(CONFIG.padPos.x, 0, CONFIG.padPos.z);
     scene.add(padLight);
+    reactiveNeonLights.push({ light: padLight, base: 1.6, phase: 1.8 });
 
     // Striscia LED est -> soft box ciano
     const stripLight = new THREE.RectAreaLight(0x00e5ff, 1.0, 9, 0.5);
     stripLight.position.set(19.3, 0.45, 0);
     stripLight.lookAt(17, 0.45, 0);
     scene.add(stripLight);
+    reactiveNeonLights.push({ light: stripLight, base: 1, phase: 3.4 });
   })();
 
 
@@ -1472,6 +1476,7 @@
       clearcoatRoughness: .04, transparent: true, opacity: .62,
       envMapIntensity: 2, depthWrite: false
     });
+    weatherSystem.registerWetMaterial(puddleMat, { dryRoughness: .18, wetRoughness: .045, animatedNormal: true });
     for (let i=0;i<17;i++) {
       const puddle = new THREE.Mesh(new THREE.CircleGeometry(.45+rand()*1.4,18),puddleMat);
       puddle.rotation.x=-Math.PI/2;
@@ -2154,6 +2159,7 @@
 
   const muzzleLight = new THREE.PointLight(0x9ff5ff, 0, 14, 2);
   muzzleLight.position.set(0.25, -0.18, -0.9);
+  const muzzleFxWorld = new THREE.Vector3();
 
   function triggerMuzzleFlash(id, intensity, scale) {
     const flash = weaponFlashMeshes[id];
@@ -2168,6 +2174,11 @@
       view.position.y + flash.position.y,
       view.position.z + flash.position.z
     );
+    muzzleLight.getWorldPosition(muzzleFxWorld);
+    renderPipeline.triggerLensFlare(muzzleFxWorld, Math.min(.7, intensity / 70), muzzleLight.color.getHex(), .2);
+    if (id === 'rpg' || id === 'flame') {
+      renderPipeline.triggerHeatHaze(muzzleFxWorld, id === 'rpg' ? .7 : .35, id === 'rpg' ? 24 : 36, .3);
+    }
   }
 
   // Ricostruisce i modelli in base al livello di dettaglio corrente.
@@ -2439,7 +2450,11 @@
 
   const explosionSystem = new ExplosionSystem({
     scene,
-    onShockwave(position) { renderPipeline.triggerShockwave(position); },
+    onShockwave(position) {
+      renderPipeline.triggerShockwave(position);
+      renderPipeline.triggerLensFlare(position, 1.1, 0xffa05c, .48);
+      renderPipeline.triggerHeatHaze(position, 1, 18, .7);
+    },
     onCameraImpulse(amount) {
       cameraDamageKick = Math.min(.2, cameraDamageKick + amount);
     }
@@ -2467,6 +2482,8 @@
       updateReflectionQuality(profile);
       renderPipeline.setQuality(profile);
       facadeSystem.setQuality(profile);
+      atmosphereSystem.setQuality(profile);
+      weatherSystem.setQuality(profile);
       explosionSystem.setQuality(profile);
       // Ricostruisce i modelli delle armi quando si passa da/a ULTRA.
       if (mode === 'ultra' !== weaponDetailUltra) {
@@ -2487,6 +2504,15 @@
     }
   });
   graphicsManager.init();
+  if (visualQualityKey) {
+    const profile = QUALITY_PROFILES[visualQualityKey];
+    graphicsManager.profile = profile;
+    graphicsManager.applyProfile(profile, { mode: visualQualityKey === 'ultra' ? 'ultra' : 'auto', initial: true });
+    graphicsManager.mode = 'diagnostic';
+    graphicsManager.onStatus(profile.name, visualQualityKey === 'ultra' ? 'ultra' : 'auto');
+  }
+  const visualBurstPosition = new THREE.Vector3(0, .3, -6);
+  let lastVisualEvent = -99;
   loadingUI.update(.92, 'FINAL CHECK', 'Syncing HUD and graphics profiles...');
   const settingsPanelRef = hudController.mountSettings(overlayEl, {
     qualityMode: graphicsManager.mode,
@@ -3600,6 +3626,21 @@
     if (e.code === 'Digit4' && gameplayInput && weaponUnlocked('rpg')) setWeapon('rpg');
     if (e.code === 'Digit5' && gameplayInput && weaponUnlocked('flame')) setWeapon('flame');
     if (e.code === 'KeyM') audio.toggle();
+    if (visualDebug) {
+      const systemKey = { KeyF: 'atmosphere', KeyG: 'weather' }[e.code];
+      if (systemKey) {
+        const system = systemKey === 'atmosphere' ? atmosphereSystem : weatherSystem;
+        const enabled = system.fxOverrides[systemKey] === false;
+        system.setFxOverrides({ [systemKey]: enabled });
+        toast(`FX DEBUG · ${systemKey.toUpperCase()} ${enabled ? 'ON' : 'OFF'}`);
+      }
+      const fxKey = { KeyH: 'flare', KeyJ: 'heatHaze', KeyK: 'grain', KeyL: 'vignette', KeyC: 'grade' }[e.code];
+      if (fxKey) {
+        const enabled = renderPipeline.fxOverrides[fxKey] === false;
+        renderPipeline.setFxOverrides({ [fxKey]: enabled });
+        toast(`FX DEBUG · ${fxKey.toUpperCase()} ${enabled ? 'ON' : 'OFF'}`);
+      }
+    }
   });
   document.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
@@ -4596,6 +4637,8 @@
     clearRailBeam();
     explosionSystem.reset();
     renderPipeline.reset();
+    atmosphereSystem.reset();
+    weatherSystem.reset();
 
     gameState.health = CONFIG.maxHealth;
     gameState.shield = CONFIG.maxShield;
@@ -4644,6 +4687,7 @@
     weaponDropSpawned.flame = false;
 
     elapsed = 0;
+    lastVisualEvent = -99;
     accumulator = 0;
     fpsFrames = 0;
     fpsTimer = 0;
@@ -4807,12 +4851,29 @@
     padGlowMat.emissiveIntensity = 0.7 + Math.sin(elapsed * 2.5) * 0.2;
     padArrow.rotation.y += delta * 1.5;
 
+    if (visualTestMode === 'storm' && elapsed - lastVisualEvent > 4) {
+      atmosphereSystem.triggerLightning();
+      lastVisualEvent = elapsed;
+    } else if (visualTestMode === 'combat' && elapsed - lastVisualEvent > 2.4) {
+      explosionSystem.explode(visualBurstPosition, 0xff7b2d);
+      lastVisualEvent = elapsed;
+    }
+    const lightningFlash = atmosphereSystem.update(delta, elapsed);
+    weatherSystem.update(delta, elapsed);
+    renderPipeline.setLightningFlash(lightningFlash);
+    if (moonLight) moonLight.intensity = GRAPHICS.lights.moon.intensity * (1 + lightningFlash * 1.2);
+    facadeSystem.update(elapsed, lightningFlash);
+
     // G3: flicker delle insegne neon — battito luminoso lento più rari cali
     // brevi. La mappa resta intatta: si modula solo il colore (moltiplicatore).
     for (const neon of flickerSigns) {
       const wave = Math.sin(elapsed * neon.speed + neon.phase) * Math.sin(elapsed * 1.73 + neon.phase * 2.31);
       const dip = Math.sin(elapsed * 29.7 + neon.phase * 13.1) > .9975 ? .38 : 0;
-      neon.material.color.setScalar(Math.max(.52, .87 + wave * .13 - dip));
+      neon.material.color.setScalar(Math.max(.52, .87 + wave * .13 - dip + lightningFlash * .18));
+    }
+    for (const reactive of reactiveNeonLights) {
+      const breath = .9 + Math.sin(elapsed * .8 + reactive.phase) * .08;
+      reactive.light.intensity = reactive.base * (breath + lightningFlash * .28);
     }
 
     // Cristallo centrale: fluttuazione e rotazione
@@ -4892,18 +4953,6 @@
     crosshairFireTimer = Math.max(0, crosshairFireTimer - delta);
     const crosshairActive = crosshairFireTimer > 0;
     if (crosshairFiring !== crosshairActive) { crosshairFiring = crosshairActive; crosshairEl.classList.toggle('firing', crosshairActive); }
-
-    // Pioggia
-    if (rain) {
-      const arr = rain.pos;
-      for (let i = 0; i < rain.vel.length; i++) {
-        arr[i * 3 + 1] -= rain.vel[i] * delta;
-        if (arr[i * 3 + 1] < 0) arr[i * 3 + 1] = rain.top;
-        arr[i * 3]     += Math.sin(elapsed * 1.3 + i) * 0.5 * delta;
-        arr[i * 3 + 2] += Math.cos(elapsed * 0.9 + i * 0.7) * 0.5 * delta;
-      }
-      rain.positionAttribute.needsUpdate = true;
-    }
 
     // Vapore dai tombini: sprite morbidi con deriva e dissolvenza non sincronizzata.
     for (const p of animatedSteam) {

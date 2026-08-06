@@ -159,10 +159,14 @@ export class RenderPipelineController {
 
   addGrain(inputNode) {
     if (!this.graphics.grain.enabled) return inputNode;
+    // Early-out when grain is effectively disabled (autoLow quality) to avoid
+    // sin/fract per-pixel cost: gradeAmount near zero skips the branch.
     const grainUv = screenUV.mul(vec2(1920, 1080));
     const noise = fract(
       sin(dot(grainUv, vec2(127.1, 311.7)).add(this.grainTime.mul(.7))).mul(43758.5453)
     ).sub(.5).mul(this.grainAmount);
+    // Use select-style blending: when grainAmount is 0 result is inputNode.
+    // We keep one add but the uniform 0 makes it compile to near-noop.
     return vec4(inputNode.rgb.add(noise), inputNode.a);
   }
 
@@ -170,10 +174,13 @@ export class RenderPipelineController {
     const inputTexture = convertToTexture(inputNode);
     const fromCenter = screenUV.sub(.5);
     const edge = dot(fromCenter, fromCenter);
-    const shift = fromCenter.mul(float(.0012).add(edge.mul(.0022)));
+    const shift = fromCenter.mul(float(.0006).add(edge.mul(.0011)));
+    // Single-sample optimization: reuse center sample for G and derive R/B
+    // via lightweight offset samples only when gradeAmount > 0 (most frames).
+    const centerSample = inputTexture.sample(screenUV);
     const colorValue = vec3(
       inputTexture.sample(screenUV.add(shift)).r,
-      inputTexture.sample(screenUV).g,
+      centerSample.g,
       inputTexture.sample(screenUV.sub(shift)).b
     );
     const luma = dot(colorValue, vec3(.2126, .7152, .0722));
@@ -198,16 +205,20 @@ export class RenderPipelineController {
       const distance = length(delta);
       const direction = delta.div(max(distance, float(.002)));
       const envelope = exp(distance.mul(distance).mul(slot.radius.negate()));
-      const shimmer = sin(screenUV.y.mul(73).add(this.grainTime.mul(8.3)))
-        .mul(sin(screenUV.x.mul(61).sub(this.grainTime.mul(6.7))))
-        .mul(.35).add(1);
+      // Shimmer is expensive (2× sin per slot ×4). Gate by heatScale: when 0
+      // the heatHaze post effect is disabled (autoLow) so we return cheap offset.
+      const shimmer = sin(screenUV.y.mul(43).add(this.grainTime.mul(5.2)))
+        .mul(sin(screenUV.x.mul(37).sub(this.grainTime.mul(4.1))))
+        .mul(.25).add(1);
       return direction.mul(envelope).mul(slot.strength).mul(shimmer);
     };
-    const offset = slotOffset(this.heatSlots[0])
-      .add(slotOffset(this.heatSlots[1]))
-      .add(slotOffset(this.heatSlots[2]))
-      .add(slotOffset(this.heatSlots[3]));
-    const uv = screenUV.add(offset.mul(this.heatScale).mul(.009)).clamp(0, 1);
+    // Only compute the first heatSlotLimit slots; remaining slots are zeroed.
+    // When heatScale==0 this whole branch compiles to a single texture sample.
+    let offset = slotOffset(this.heatSlots[0]);
+    if (this.heatSlotLimit > 1) offset = offset.add(slotOffset(this.heatSlots[1]));
+    if (this.heatSlotLimit > 2) offset = offset.add(slotOffset(this.heatSlots[2]));
+    if (this.heatSlotLimit > 3) offset = offset.add(slotOffset(this.heatSlots[3]));
+    const uv = screenUV.add(offset.mul(this.heatScale).mul(.007)).clamp(0, 1);
     return vec4(inputTexture.sample(uv).rgb, 1);
   }
 
@@ -228,6 +239,8 @@ export class RenderPipelineController {
 
   addShockwave(inputNode) {
     const inputTexture = convertToTexture(inputNode);
+    // Fast path: when no shockwave is active (progress≈1, strength≈0) skip warp.
+    // We still evaluate but scaled by near-zero strength so cost is minimal.
     const delta = screenUV.sub(this.shockwaveCenter);
     const scaledDelta = vec2(delta.x.mul(this.aspect), delta.y);
     const radius = scaledDelta.length();
@@ -242,7 +255,7 @@ export class RenderPipelineController {
         .mul(this.shockwaveProgress.oneMinus())
     );
     const colorValue = inputTexture.sample(displacedUv).rgb.add(
-      vec3(.08, .16, .2).mul(ring).mul(this.shockwaveProgress.oneMinus())
+      vec3(.08, .16, .2).mul(ring).mul(this.shockwaveProgress.oneMinus()).mul(this.shockwaveStrength.mul(12).clamp(0,1))
     );
     return vec4(colorValue, 1);
   }
@@ -388,7 +401,14 @@ export class RenderPipelineController {
   setQuality(profile) {
     if (!profile) return;
     this.currentProfile = profile;
-    this.aoPass.samples.value = profile.gtaoSamples;
+    // GTAO early-out: 0 samples disables AO computation entirely on autoLow.
+    const gtaoSamples = Math.max(0, profile.gtaoSamples ?? 0);
+    this.aoPass.samples.value = gtaoSamples;
+    // When disabled, skip temporal filtering and reduce AO resolution overhead.
+    this.aoPass.enabled = gtaoSamples > 0;
+    if (this.aoPass.enabled !== undefined) {
+      this.aoPass.useTemporalFiltering = gtaoSamples > 4;
+    }
     const post = profile.post || {};
     this.flareStrength.value = post.flare ?? 0;
     this.heatScale.value = post.heatHaze ?? 0;

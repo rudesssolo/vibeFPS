@@ -95,14 +95,15 @@ class ParticlePool {
 
   update(delta) {
     if (this.activeCount === 0) return;
+    let needsUpload = false;
+    // Sparse active tracking: only iterate activeIndices when small.
+    // For now keep full loop but early-skip inactive without writing positions
+    // (already hidden at -999) and batch attribute upload.
     for (let i = 0; i < this.maximum; i++) {
       const particle = this.particles[i];
+      if (!particle.active) continue;
+      needsUpload = true;
       const offset = i * 3;
-      if (!particle.active) {
-        this.positions[offset + 1] = -999;
-        this.opacities[i] = 0;
-        continue;
-      }
       particle.age += delta;
       if (particle.age < 0) {
         this.opacities[i] = 0;
@@ -123,9 +124,14 @@ class ParticlePool {
       if (t >= 1) {
         particle.active = false;
         this.activeCount--;
+        // Hide immediately to avoid stale position rendering one frame.
+        this.positions[offset + 1] = -999;
+        this.opacities[i] = 0;
       }
     }
-    for (const attribute of this.attributes) attribute.needsUpdate = true;
+    if (needsUpload || this.activeCount === 0) {
+      for (const attribute of this.attributes) attribute.needsUpdate = true;
+    }
   }
 
   reset() {

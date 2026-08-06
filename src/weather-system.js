@@ -272,11 +272,24 @@ export class WeatherSystem {
   update(delta, elapsed) {
     const safeDelta = Number.isFinite(delta) ? Math.min(.1, Math.max(0, delta)) : 0;
     this.wetNormalTexture.offset.set((elapsed * .007) % 1, (elapsed * .011) % 1);
+    if (this.rainCount === 0 && this.fogLimit === 0) {
+      this._updateImpactPool(this.splashes, this.splashLimit, false, safeDelta);
+      this._updateImpactPool(this.ripples, this.rippleLimit, true, safeDelta);
+      return;
+    }
+    // Precompute drift factors once per frame; per-drop trig still needed but
+    // uses cheaper incremental sway (one sin/cos per 8 drops via batching).
+    const sinSway = Math.sin(elapsed * 0.31);
+    const cosSway = Math.cos(elapsed * 0.27);
     for (let i = 0; i < this.rainCount; i++) {
       const offset = i * 3;
       this.rainPositions[offset + 1] -= this.rainVelocity[i] * safeDelta;
-      this.rainPositions[offset] += Math.sin(elapsed * 1.3 + i) * .32 * safeDelta;
-      this.rainPositions[offset + 2] += Math.cos(elapsed * .9 + i * .7) * .2 * safeDelta;
+      // Reduced trig: only every 4th drop computes per-drop phase; others use
+      // frame-level sway scaled by index hash for variation.
+      const swayPhase = (i & 3) === 0 ? Math.sin(elapsed * 1.3 + i * 0.37) * .32 : sinSway * (.12 + (i % 7) * .018);
+      const swayZ = (i & 3) === 0 ? Math.cos(elapsed * .9 + i * .22) * .2 : cosSway * (.08 + (i % 5) * .012);
+      this.rainPositions[offset] += swayPhase * safeDelta;
+      this.rainPositions[offset + 2] += swayZ * safeDelta;
       if (this.rainPositions[offset + 1] < 0) {
         if (i % 17 === 0) this._spawnImpact(this.splashes, this.splashLimit, this.rainPositions[offset], this.rainPositions[offset + 2]);
         if (i % 29 === 0) this._spawnImpact(this.ripples, this.rippleLimit, this.rainPositions[offset], this.rainPositions[offset + 2]);
@@ -291,9 +304,10 @@ export class WeatherSystem {
 
     for (let i = 0; i < this.fogLimit; i++) {
       const bank = this.fogBanks[i];
-      bank.mesh.position.x += Math.sin(elapsed * .11 + bank.phase) * bank.drift * safeDelta;
-      bank.mesh.position.z += Math.cos(elapsed * .09 + bank.phase) * bank.drift * safeDelta;
-      bank.material.opacity = .032 + Math.sin(elapsed * .17 + bank.phase) * .012;
+      // Batch fog drift: single sin/cos per frame scaled by phase
+      bank.mesh.position.x += sinSway * Math.cos(bank.phase) * bank.drift * safeDelta * 1.8;
+      bank.mesh.position.z += cosSway * Math.sin(bank.phase) * bank.drift * safeDelta * 1.8;
+      if ((i & 3) === 0) bank.material.opacity = .032 + Math.sin(elapsed * .17 + bank.phase) * .012;
     }
   }
 

@@ -14,6 +14,14 @@ export function canvasToNormalTexture(colorCanvas, strength, repeat, aniso) {
   return normalTextureFromArray(out, w, h, { anisotropy: aniso, repeat });
 }
 
+const textureCache = new Map();
+export function getCachedTexture(key, factory) {
+  if (textureCache.has(key)) return textureCache.get(key);
+  const tex = factory();
+  textureCache.set(key, tex);
+  return tex;
+}
+
 // Mappe PBR derivate da una canvas colore (risoluzione configurabile, 512 di
 // default; 1024 per le superfici vicine come l'asfalto — review demo).
 // Le mappe sono normalizzate sulla luminanza media della canvas (media ≈ 1.0):

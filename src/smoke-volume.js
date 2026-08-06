@@ -25,10 +25,12 @@ import {
 // Qualità del raymarch. Valori più alti = più passi, più costo GPU.
 // Sono parametri di COSTRUZIONE, non di runtime: finiscono nel corpo dello
 // shader (Loop non è dinamico), quindi cambiarli richiede una ricompilazione.
-// I profili qualità agiscono invece sul numero di puff (vedi setQuality).
-const DEFAULT_STEPS = 16;        // passi di integrazione della densità
-const DEFAULT_SHADOW_STEPS = 2;  // passi del self-shadow (marcia verso la luce)
-const MAX_PUFFS = 24;            // pool massimo di volumi contemporanei
+// I profili qualità variano sia i passi sia il numero di puff (vedi setQuality).
+const DEFAULT_STEPS = 12;        // passi di integrazione della densità (ultra)
+const DEFAULT_SHADOW_STEPS = 1;  // passi del self-shadow (marcia verso la luce)
+const MAX_PUFFS = 18;            // pool massimo di volumi contemporanei
+const LOW_STEPS = 8;
+const LOW_SHADOW_STEPS = 1;
 
 // La icosfera è INSCRITTA nella sfera analitica raymarchata: senza margine il
 // guscio esterno del volume verrebbe tagliato dalla silhouette del poliedro.
@@ -228,11 +230,33 @@ export class VolumetricSmokeSystem {
    * Numero di puff per esplosione e tetto ai volumi simultanei. Il costo del
    * raymarch è per-pixel e i puff si sovrappongono: il tetto sull'overdraw
    * conta più del numero di spawn.
+   * Adatta anche i passi del raymarch alla qualità per ridurre il costo GPU
+   * su tier bassi (autoLow = 8 passi, autoHigh/ultra = 12).
    */
   setQuality(profile) {
     const budget = Number.isFinite(profile?.smokePuffs) ? profile.smokePuffs : 8;
     this.puffBudget = Math.max(0, Math.min(MAX_PUFFS, Math.round(budget)));
-    this.maxActive = Math.max(this.puffBudget, Math.min(MAX_PUFFS, this.puffBudget * 3));
+    this.maxActive = Math.max(this.puffBudget, Math.min(MAX_PUFFS, this.puffBudget * 2));
+    const targetSteps = this.puffBudget <= 3 ? LOW_STEPS : DEFAULT_STEPS;
+    const targetShadow = this.puffBudget <= 3 ? LOW_SHADOW_STEPS : DEFAULT_SHADOW_STEPS;
+    if (targetSteps !== this.steps || targetShadow !== this.shadowSteps) {
+      this.steps = targetSteps;
+      this.shadowSteps = targetShadow;
+      // Materiali devono essere ricompilati con il nuovo conteggio passi.
+      // Mantieni warmup meshes aggiornati.
+      const oldMat = this.material;
+      const oldInside = this.materialInside;
+      this.material = this._buildMaterial(THREE.FrontSide);
+      this.materialInside = this._buildMaterial(THREE.BackSide);
+      for (const puff of this.puffs) {
+        if (puff.mesh) puff.mesh.material = puff.inside ? this.materialInside : this.material;
+      }
+      for (const mesh of this.warmupMeshes) {
+        mesh.material = mesh.material === oldMat ? this.material : this.materialInside;
+      }
+      oldMat.dispose();
+      oldInside.dispose();
+    }
   }
 
   /**
@@ -276,6 +300,8 @@ export class VolumetricSmokeSystem {
     puff.mesh = mesh;
     return mesh;
   }
+
+
 
   spawn(options) {
     if (this.puffBudget === 0) return;
@@ -371,7 +397,16 @@ export class VolumetricSmokeSystem {
       if (!puff.active) continue;
       puff.age += delta;
       if (puff.age < 0) continue; // delay: la mesh resta invisibile
-      if (!puff.mesh.visible) puff.mesh.visible = true;
+      // Screen-coverage cull: nasconde puff troppo piccolo a schermo (< 6px).
+      if (camera?.isCamera) {
+        const dist = camera.position.distanceTo(puff.position);
+        const projected = (puff.radius * 900) / Math.max(1, dist);
+        if (projected < 6 && puff.radius < 1.2) {
+          if (puff.mesh.visible) puff.mesh.visible = false;
+          continue;
+        }
+        if (!puff.mesh.visible) puff.mesh.visible = true;
+      } else if (!puff.mesh.visible) puff.mesh.visible = true;
       const t = Math.min(1, puff.age / puff.life);
 
       // Integrazione del moto (velocità, gravità, turbolenza).

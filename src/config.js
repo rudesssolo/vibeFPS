@@ -1,51 +1,51 @@
 export const QUALITY_PROFILES = Object.freeze({
   autoHigh: Object.freeze({
     name: 'AUTO // HIGH',
-    pixelRatio: 1.35,
+    pixelRatio: 1.25,
     shadowSize: 1024,
-    reflectorSize: 640,
-    gtaoSamples: 10,
+    reflectorSize: 512,
+    gtaoSamples: 8,
     facadeResolution: 1024,
     particleScale: 0.72,
     // Puff di fumo volumetrico per esplosione. Il raymarch costa per pixel e i
     // puff si sovrappongono, quindi questo è il parametro che governa davvero
     // il costo del fumo (non particleScale).
-    smokePuffs: 7,
+    smokePuffs: 5,
     dynamicLights: 4,
     atmosphere: Object.freeze({ rainStreaks: 450, fogBanks: 6, cloudOctaves: 2, aurora: .25, meteorRate: .08, splashes: 16, ripples: 12, lightning: 1 }),
     city: Object.freeze({ facadePulse: .08, aerialTraffic: 10, wetDetail: .72 }),
-    post: Object.freeze({ flare: .22, heatHaze: .5, distortionSlots: 2, grain: .01, vignette: .92, saturation: 1.04, vibrance: .1 }),
-    combat: Object.freeze({ impactDecals: 20, trailDensity: .72 })
+    post: Object.freeze({ flare: .22, heatHaze: .35, distortionSlots: 2, grain: .01, vignette: .92, saturation: 1.04, vibrance: .1 }),
+    combat: Object.freeze({ impactDecals: 16, trailDensity: .72 })
   }),
   autoLow: Object.freeze({
     name: 'AUTO // BALANCED',
     pixelRatio: 1,
     shadowSize: 512,
-    reflectorSize: 320,
-    gtaoSamples: 8,
+    reflectorSize: 256,
+    gtaoSamples: 0,
     facadeResolution: 1024,
     particleScale: 0.48,
-    smokePuffs: 3,
-    dynamicLights: 3,
+    smokePuffs: 2,
+    dynamicLights: 2,
     atmosphere: Object.freeze({ rainStreaks: 260, fogBanks: 0, cloudOctaves: 1, aurora: 0, meteorRate: 0, splashes: 0, ripples: 0, lightning: 1 }),
     city: Object.freeze({ facadePulse: .04, aerialTraffic: 4, wetDetail: .4 }),
-    post: Object.freeze({ flare: 0, heatHaze: 0, distortionSlots: 0, grain: .008, vignette: .88, saturation: 1, vibrance: .04 }),
+    post: Object.freeze({ flare: 0, heatHaze: 0, distortionSlots: 0, grain: .006, vignette: .88, saturation: 1, vibrance: .04 }),
     combat: Object.freeze({ impactDecals: 8, trailDensity: .48 })
   }),
   ultra: Object.freeze({
     name: 'ULTRA',
-    pixelRatio: 2,
+    pixelRatio: 1.75,
     shadowSize: 1024,
-    reflectorSize: 1280,
-    gtaoSamples: 16,
+    reflectorSize: 1024,
+    gtaoSamples: 12,
     facadeResolution: 2048,
     particleScale: 1,
-    smokePuffs: 12,
-    dynamicLights: 8,
+    smokePuffs: 8,
+    dynamicLights: 6,
     atmosphere: Object.freeze({ rainStreaks: 700, fogBanks: 12, cloudOctaves: 3, aurora: .6, meteorRate: .15, splashes: 32, ripples: 24, lightning: 1 }),
     city: Object.freeze({ facadePulse: .12, aerialTraffic: 18, wetDetail: 1 }),
-    post: Object.freeze({ flare: .4, heatHaze: 1, distortionSlots: 4, grain: .012, vignette: .94, saturation: 1.06, vibrance: .16 }),
-    combat: Object.freeze({ impactDecals: 36, trailDensity: 1 })
+    post: Object.freeze({ flare: .35, heatHaze: .7, distortionSlots: 4, grain: .012, vignette: .94, saturation: 1.06, vibrance: .16 }),
+    combat: Object.freeze({ impactDecals: 24, trailDensity: 1 })
   })
 });
 

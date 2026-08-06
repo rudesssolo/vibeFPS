@@ -195,23 +195,46 @@ export class DroneSystem {
   }
 
   getBossHudState() {
-    const alive = this.getAliveApexes();
-    if (!alive.length) return null;
-    if (this.apexes.length === 1) {
-      const apex = alive[0];
-      return {
-        ...apex,
-        stateLabel: apex.mega ? `Ω-${apex.megaPhase}` : `T-${apex.tier}`
-      };
-    }
-    return {
+    // P1: chiamata ogni frame da updateHUD() durante i boss fight. Prima ogni
+    // chiamata allocava un array (filter) + uno spread dell'intero oggetto
+    // Apex; ora compila un unico oggetto riusato con i soli campi consumati da
+    // HudController.renderBoss (alive, nameKey, tier, stateLabel, health,
+    // maxHealth).
+    const result = this._bossHudState || (this._bossHudState = {
       alive: true,
-      nameKey: 'apex.council',
-      tier: ENDGAME_TUNING.gauntletTier,
-      stateLabel: `${alive.length} ACTIVE`,
-      health: alive.reduce((sum, apex) => sum + Math.max(0, apex.health), 0),
-      maxHealth: this.apexes.reduce((sum, apex) => sum + apex.maxHealth, 0)
-    };
+      nameKey: '',
+      tier: 0,
+      stateLabel: '',
+      health: 0,
+      maxHealth: 0
+    });
+    let aliveCount = 0;
+    let healthSum = 0;
+    let maxHealthSum = 0;
+    let single = null;
+    for (const apex of this.apexes) {
+      maxHealthSum += apex.maxHealth;
+      if (!apex.alive) continue;
+      aliveCount++;
+      healthSum += Math.max(0, apex.health);
+      single = apex;
+    }
+    if (aliveCount === 0) return null;
+    result.alive = true;
+    if (this.apexes.length === 1) {
+      result.nameKey = single.nameKey;
+      result.tier = single.tier;
+      result.stateLabel = single.mega ? `Ω-${single.megaPhase}` : `T-${single.tier}`;
+      result.health = single.health;
+      result.maxHealth = single.maxHealth;
+    } else {
+      result.nameKey = 'apex.council';
+      result.tier = ENDGAME_TUNING.gauntletTier;
+      result.stateLabel = `${aliveCount} ACTIVE`;
+      result.health = healthSum;
+      result.maxHealth = maxHealthSum;
+    }
+    return result;
   }
 
   /** Costruisce la silhouette visiva dell'Apex per archetipo e restituisce i riferimenti. */
@@ -1046,13 +1069,13 @@ export class DroneSystem {
         drone.marker.classList.toggle('offscreen', !visible);
         drone.marker.style.display = 'block';
       }
-      if (drone.lastLeft !== left) {
+      // P5: posizionamento via transform invece di left/top: il movimento dei
+      // marker avviene sul compositor senza invalidare il layout a ogni frame.
+      // translate(-50%,-50%) replica la centratura dichiarata nel CSS base.
+      if (drone.lastLeft !== left || drone.lastTop !== top) {
         drone.lastLeft = left;
-        drone.marker.style.left = `${left}px`;
-      }
-      if (drone.lastTop !== top) {
         drone.lastTop = top;
-        drone.marker.style.top = `${top}px`;
+        drone.marker.style.transform = `translate3d(${left}px, ${top}px, 0) translate(-50%, -50%)`;
       }
       if (drone.lastRange !== range) {
         drone.lastRange = range;
@@ -1093,8 +1116,12 @@ export class DroneSystem {
         apex.marker.classList.toggle('offscreen', !visible);
         apex.marker.style.display = 'block';
       }
-      if (apex.lastLeft !== left) { apex.lastLeft = left; apex.marker.style.left = `${left}px`; }
-      if (apex.lastTop !== top) { apex.lastTop = top; apex.marker.style.top = `${top}px`; }
+      // P5: come per i droni — transform compositor-only al posto di left/top.
+      if (apex.lastLeft !== left || apex.lastTop !== top) {
+        apex.lastLeft = left;
+        apex.lastTop = top;
+        apex.marker.style.transform = `translate3d(${left}px, ${top}px, 0) translate(-50%, -50%)`;
+      }
       if (apex.lastRange !== range) { apex.lastRange = range; apex.marker.dataset.range = range; }
       if (apex.lastState !== state) { apex.lastState = state; apex.markerState.textContent = state; }
       const healthPct = Math.max(0, apex.health / apex.maxHealth * 100);

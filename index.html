@@ -2331,18 +2331,21 @@
   }
   function showHitmarker(kill=false){hitmarkerEl.classList.toggle('kill',kill);restartClass(hitmarkerEl,'active');audio.hit(kill);}
   function showScore(amount,label){scorePopEl.textContent=`+${amount} ${label}`;restartClass(scorePopEl,'show');}
+  // P1: updateHUD() viene chiamata ogni frame da updateGameplay (rigenerazione
+  // shield/stamina/combo). Lo spread {...gameState} allocava un oggetto nuovo a
+  // frame; ora lo snapshot è un oggetto riusato compilato sul posto.
+  const hudSnapshot = {};
   function updateHUD(){
     // Espone all'HUD lo stato dell'arma corrente (munizioni, riserva, nome,
     // capienza caricatore) così il render è uniforme per tutte le 5 armi.
     const w = gameState.weapon;
     const tuning = weaponTuning(w);
-    hudController.render({
-      ...gameState,
-      _ammo: weaponAmmo(w),
-      _reserve: weaponReserve(w),
-      _weaponName: t(tuning.nameKey),
-      _magazineSize: tuning.magazineSize
-    });
+    Object.assign(hudSnapshot, gameState);
+    hudSnapshot._ammo = weaponAmmo(w);
+    hudSnapshot._reserve = weaponReserve(w);
+    hudSnapshot._weaponName = t(tuning.nameKey);
+    hudSnapshot._magazineSize = tuning.magazineSize;
+    hudController.render(hudSnapshot);
     hudController.renderBoss(droneSystem.getBossHudState());
   }
 
@@ -2540,11 +2543,13 @@
      ============================================================ */
   const hostileShots=[];
   // Geometria del nucleo e materiali sono CONDIVISI (vedi shotCoreMaterial /
-  // shotTrailMaterial): l'unica risorsa privata di un colpo è la geometria del
-  // tracer, che contiene il segmento in movimento.
+  // shotTrailMaterial); mesh, sprite e geometria del tracer vengono riciclati
+  // dal pool P3 (acquireShotEntry/releaseShotEntry, sezione 10).
   function disposeHostileShot(shot) {
     scene.remove(shot.mesh, shot.trail);
-    shot.trail.geometry.dispose();
+    // P3: l'entry torna nel pool (mesh/sprite/trail riciclati); solo gli
+    // eccedenti il tetto vengono distrutti.
+    releaseShotEntry(shot);
   }
   const ammoPickups=[];
   const ammoPickupGeometry = new THREE.OctahedronGeometry(.22, 0);
@@ -2709,15 +2714,19 @@
   }
 
   function spawnHostileShot(drone,dmg){
-    const origin=drone.group.position.clone();
-    const target=new THREE.Vector3(playerBody.position.x,playerBody.position.y+.55,playerBody.position.z);
-    const dir=target.sub(origin).normalize();
-    const mesh=new THREE.Mesh(hostileShotGeometry,shotCoreMaterial(0xff3155));mesh.position.copy(origin);
-    mesh.add(makeGlowSprite(0xff3155,.5));scene.add(mesh);
-    const lineGeo=new THREE.BufferGeometry();lineGeo.setAttribute('position',new THREE.Float32BufferAttribute(new Float32Array(6),3));
-    const trail=new THREE.Line(lineGeo,shotTrailMaterial(0xff3155,.7));scene.add(trail);
-    hostileShots.push({mesh,trail,pos:origin.clone(),prev:origin.clone(),vel:dir.multiplyScalar(18+gameState.wave*.65),age:0,dmg});
-    const toCam=origin.clone().project(camera);audio.enemyShot(Math.max(-.85,Math.min(.85,toCam.x)));
+    // P3: entry riciclato dal pool — niente mesh/geometrie/cloni allocati.
+    const entry=acquireShotEntry(hostileShotGeometry,0xff3155,.5,.7);
+    const origin=drone.group.position;
+    shotAimTmp.set(playerBody.position.x,playerBody.position.y+.55,playerBody.position.z).sub(origin);
+    if(shotAimTmp.lengthSq()>.0001)shotAimTmp.normalize();
+    entry.vel.copy(shotAimTmp).multiplyScalar(18+gameState.wave*.65);
+    entry.pos.copy(origin);entry.prev.copy(origin);entry.rayFrom.copy(origin);
+    entry.age=0;entry.dmg=dmg;entry.rayToggle=false;
+    entry.mesh.position.copy(origin);
+    scene.add(entry.mesh);scene.add(entry.trail);
+    hostileShots.push(entry);
+    shotCamTmp.copy(origin).project(camera);
+    audio.enemyShot(Math.max(-.85,Math.min(.85,shotCamTmp.x)));
   }
 
   // --- Apex Sentinel: stato (mine VEX + onde d'urto) e helper ---
@@ -2805,16 +2814,15 @@
   }
 
   function spawnApexProjectile(apex,vel,color){
-    const origin=apex.group.position.clone();
-    const mesh=new THREE.Mesh(apexShotGeometry,shotCoreMaterial(color));
-    mesh.position.copy(origin);
-    mesh.add(makeGlowSprite(color,.55));
-    scene.add(mesh);
-    const lineGeo=new THREE.BufferGeometry();
-    lineGeo.setAttribute('position',new THREE.Float32BufferAttribute(new Float32Array(6),3));
-    const trail=new THREE.Line(lineGeo,shotTrailMaterial(color,.75));
-    scene.add(trail);
-    hostileShots.push({mesh,trail,pos:origin.clone(),prev:origin.clone(),vel:vel.clone(),age:0,dmg:apex.damage});
+    // P3: entry riciclato dal pool (chiave geometria Apex/colore/.55/.75).
+    const entry=acquireShotEntry(apexShotGeometry,color,.55,.75);
+    const origin=apex.group.position;
+    entry.vel.copy(vel);
+    entry.pos.copy(origin);entry.prev.copy(origin);entry.rayFrom.copy(origin);
+    entry.age=0;entry.dmg=apex.damage;entry.rayToggle=false;
+    entry.mesh.position.copy(origin);
+    scene.add(entry.mesh);scene.add(entry.trail);
+    hostileShots.push(entry);
   }
 
   const axisY=new THREE.Vector3(0,1,0);
@@ -3375,7 +3383,7 @@
       // prev e pos in un segmento, così a FPS bassi il proiettile non salta sopra
       // il giocatore. .52 = raggio di collisione effettivo ^2 (≈0.72m).
       if(!remove){hostileSegment.start.copy(s.prev);hostileSegment.end.copy(s.pos);hostileSegment.closestPointToPoint(hostilePlayerPoint,true,hostileClosest);if(hostileClosest.distanceToSquared(hostilePlayerPoint)<CONFIG.hostileHitRadiusSq){damagePlayer(s.dmg||(CONFIG.hostileDmgBase+gameState.wave*CONFIG.hostileDmgWave));remove=true;}}
-      if(!remove){hostileFrom.set(s.prev.x,s.prev.y,s.prev.z);hostileTo.set(s.pos.x,s.pos.y,s.pos.z);if(hostileRay.intersectWorld(world,{mode:CANNON.Ray.CLOSEST,result:hostileHit,from:hostileFrom,to:hostileTo,collisionFilterGroup:COLLISION.BULLET,collisionFilterMask:COLLISION.STATIC|COLLISION.CRATE}))remove=true;}
+      if(!remove){s.rayToggle=!s.rayToggle;if(s.rayToggle){hostileFrom.set(s.rayFrom.x,s.rayFrom.y,s.rayFrom.z);hostileTo.set(s.pos.x,s.pos.y,s.pos.z);if(hostileRay.intersectWorld(world,{mode:CANNON.Ray.CLOSEST,result:hostileHit,from:hostileFrom,to:hostileTo,collisionFilterGroup:COLLISION.BULLET,collisionFilterMask:COLLISION.STATIC|COLLISION.CRATE}))remove=true;else s.rayFrom.copy(s.pos);}}
       if(remove){disposeHostileShot(s);hostileShots.splice(i,1);}
     }
   }
@@ -4064,6 +4072,55 @@
     }
     return material;
   }
+  // P3: pool dei colpi ostili (droni e Apex). Le barrages Apex schierano 12-40
+  // colpi in un istante e prima ognuno allocava mesh, sprite, BufferGeometry e
+  // Float32Array del trail. Gli entry vengono riciclati per chiave
+  // (geometria/colore/scala glow/opacity trail); i materiali sono quelli
+  // cachati sopra. Il primo utilizzo avviene sempre a runtime (gameplay), dopo
+  // l'inizializzazione di queste costanti.
+  const shotPools = new Map();
+  const MAX_POOLED_SHOTS = 64;
+  const shotAimTmp = new THREE.Vector3();
+  const shotCamTmp = new THREE.Vector3();
+  function shotPoolKey(geometry, colorHex, glowScale, trailOpacity) {
+    return `${geometry === apexShotGeometry ? 'A' : 'H'}:${colorHex}:${glowScale}:${trailOpacity}`;
+  }
+  function acquireShotEntry(geometry, colorHex, glowScale, trailOpacity) {
+    const key = shotPoolKey(geometry, colorHex, glowScale, trailOpacity);
+    let pool = shotPools.get(key);
+    if (!pool) { pool = []; shotPools.set(key, pool); }
+    const entry = pool.pop();
+    if (entry) return entry;
+    const mesh = new THREE.Mesh(geometry, shotCoreMaterial(colorHex));
+    mesh.add(makeGlowSprite(colorHex, glowScale));
+    const lineGeo = new THREE.BufferGeometry();
+    const attr = new THREE.Float32BufferAttribute(new Float32Array(6), 3);
+    attr.setUsage(THREE.DynamicDrawUsage);
+    lineGeo.setAttribute('position', attr);
+    const trail = new THREE.Line(lineGeo, shotTrailMaterial(colorHex, trailOpacity));
+    // Il segmento si muove ogni frame senza ricalcolo del bounding sphere:
+    // il frustum culling va disattivato per non farlo sparire erroneamente.
+    trail.frustumCulled = false;
+    return {
+      poolKey: key,
+      mesh, trail,
+      pos: new THREE.Vector3(),
+      prev: new THREE.Vector3(),
+      vel: new THREE.Vector3(),
+      // P3: origine dell'ultimo raycast muro eseguito: i raycast viaggiano a
+      // frame alterni (metà del costo) ma il segmento testato è accumulato,
+      // quindi niente tunnelling oltre pareti/casse.
+      rayFrom: new THREE.Vector3(),
+      rayToggle: false,
+      age: 0,
+      dmg: 0
+    };
+  }
+  function releaseShotEntry(entry) {
+    const pool = shotPools.get(entry.poolKey);
+    if (pool && pool.length < MAX_POOLED_SHOTS) pool.push(entry);
+    else entry.trail.geometry.dispose();
+  }
   // Traccia della railgun: un raggio arancione luminoso e persistente per 1
   // secondo. Core (linea brillante) + alone volumetrico (cilindro additivo) +
   // sprite di impatto condividono il ciclo di vita e decadono insieme.
@@ -4142,6 +4199,53 @@
     railImpactSprite.material.opacity = 1;
   }
   const bullets = [];
+  // P2: pool dei proiettili del giocatore. La VULCAN spara 25 colpi/s e con
+  // lifetime 1.6s si arrivano a ~40 colpi vivi: prima ogni colpo allocava
+  // CANNON.Body + Sphere shape, Mesh, sprite glow, BufferGeometry del tracer e
+  // Float32Array, per poi distruggere tutto all'impatto (churn GC + draw call).
+  // Ora body/mesh/tracer vengono riciclati per tipo ('bullet'/'missile', che
+  // differiscono per raggio shape, colore glow e materiale del tracer).
+  const bulletPools = { bullet: [], missile: [] };
+  const MAX_POOLED_BULLETS = 48;
+  function makeBulletEntry(type) {
+    const body = new CANNON.Body({ mass: CONFIG.bulletMass, material: matBullet, allowSleep: false });
+    body.addShape(new CANNON.Sphere(type === 'missile' ? .16 : CONFIG.bulletRadius));
+    body.collisionFilterGroup = COLLISION.BULLET;
+    body.collisionFilterMask = COLLISION.STATIC | COLLISION.CRATE;
+    const mesh = new THREE.Mesh(bulletGeo, bulletMat);
+    // Halo luminoso additivo attaccato al proiettile: il bloom lo raccoglie e
+    // forma l'alone attorno al colpo (e compare nel riflesso del pavimento).
+    mesh.add(makeGlowSprite(type === 'missile' ? 0xffc24a : 0x8fe8ff, type === 'missile' ? 0.9 : 0.55));
+    const tracerGeo = new THREE.BufferGeometry();
+    const tracerAttr = new THREE.Float32BufferAttribute(new Float32Array(6), 3);
+    tracerAttr.setUsage(THREE.DynamicDrawUsage);
+    tracerGeo.setAttribute('position', tracerAttr);
+    const tracer = new THREE.Line(tracerGeo, shotTrailMaterial(type === 'missile' ? 0xffc24a : 0xffffff, 1));
+    // Il segmento si muove ogni frame senza ricalcolo del bounding sphere:
+    // il frustum culling va disattivato per non farlo sparire erroneamente.
+    tracer.frustumCulled = false;
+    const entry = {
+      body, mesh, tracer,
+      age: 0,
+      hit: false,
+      impactSet: false,
+      impact: new CANNON.Vec3(),
+      prev: new CANNON.Vec3(),
+      targetHit: false,
+      targetRef: null,
+      damage: 0,
+      type
+    };
+    // Il listener resta legato all'entry per tutta la sua vita nel pool: il
+    // record è sempre lo stesso oggetto, quindi `entry.hit` resta corretto
+    // anche dopo il riuso (il body sparisce dal mondo mentre è nel pool,
+    // quindi non riceve eventi di collisione da inattivo).
+    body.addEventListener('collide', () => { entry.hit = true; });
+    return entry;
+  }
+  function acquireBulletEntry(type) {
+    return bulletPools[type].pop() || makeBulletEntry(type);
+  }
   const meleeOrigin = new THREE.Vector3();
   const meleeDirection = new THREE.Vector3();
   const meleeTarget = new THREE.Vector3();
@@ -4177,9 +4281,10 @@
     gunRecoil = 0.06;
   }
 
-  // Crea un proiettile (body fisico + mesh + tracer) e lo aggiunge alla lista.
-  // `damage` è il danno applicato in updateBullets al contatto; `type` abilita
-  // comportamenti speciali (es. 'missile' per l'RPG con esplosione ad area).
+  // Crea (o ricicla dal pool, vedi P2) un proiettile — body fisico + mesh +
+  // tracer — e lo aggiunge alla lista. `damage` è il danno applicato in
+  // updateBullets al contatto; `type` abilita comportamenti speciali (es.
+  // 'missile' per l'RPG con esplosione ad area).
   function spawnProjectile(dir, speed, damage, type = 'bullet') {
     bulletOrigin.copy(camera.position).addScaledVector(dir, 0.6);
     // C5: clamp dell'origine entro i limiti dell'arena (come camera e corpi), così
@@ -4187,41 +4292,34 @@
     bulletOrigin.x = THREE.MathUtils.clamp(bulletOrigin.x, -arenaInnerFace + .2, arenaInnerFace - .2);
     bulletOrigin.z = THREE.MathUtils.clamp(bulletOrigin.z, -arenaInnerFace + .2, arenaInnerFace - .2);
 
-    const body = new CANNON.Body({ mass: CONFIG.bulletMass, material: matBullet, allowSleep: false });
-    body.addShape(new CANNON.Sphere(type === 'missile' ? .16 : CONFIG.bulletRadius));
+    // P2: riuso dell'entry — il body e le risorse grafiche non vengono
+    // riallocati, vanno solo resettati posizione/velocità/flag.
+    const bullet = acquireBulletEntry(type);
+    const body = bullet.body;
     body.position.set(bulletOrigin.x, bulletOrigin.y, bulletOrigin.z);
     body.velocity.set(dir.x * speed, dir.y * speed, dir.z * speed);
-    body.collisionFilterGroup = COLLISION.BULLET;
-    body.collisionFilterMask = COLLISION.STATIC | COLLISION.CRATE;
+    body.angularVelocity.set(0, 0, 0);
+    body.quaternion.set(0, 0, 0, 1);
+    body.force.set(0, 0, 0);
+    body.torque.set(0, 0, 0);
+    // AABB subito aggiornato alla nuova posizione: il broadphase (SAP) la usa
+    // già al primo step dopo il reinserimento nel mondo.
+    body.aabbNeedsUpdate = true;
+    body.computeAABB();
+    body.wakeUp();
     world.addBody(body);
 
-    const mesh = new THREE.Mesh(bulletGeo, bulletMat);
-    mesh.position.copy(bulletOrigin);
-    // Halo luminoso additivo attaccato al proiettile: il bloom lo raccoglie e
-    // forma l'alone attorno al colpo (e compare nel riflesso del pavimento).
-    mesh.add(makeGlowSprite(type === 'missile' ? 0xffc24a : 0x8fe8ff, type === 'missile' ? 0.9 : 0.55));
-    scene.add(mesh);
+    bullet.mesh.position.copy(bulletOrigin);
+    scene.add(bullet.mesh);
+    scene.add(bullet.tracer);
 
-    // Tracer luminoso (segmento additivo dietro il proiettile). La geometria è
-    // per-colpo (contiene il segmento), il materiale è condiviso.
-    const tracerGeo = new THREE.BufferGeometry();
-    tracerGeo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(6), 3));
-    const tracer = new THREE.Line(tracerGeo, shotTrailMaterial(type === 'missile' ? 0xffc24a : 0xffffff, 1));
-    scene.add(tracer);
-
-    const bullet = {
-      body, mesh, tracer,
-      age: 0,
-      hit: false,
-      impactSet: false,
-      impact: new CANNON.Vec3(),
-      prev: new CANNON.Vec3(bulletOrigin.x, bulletOrigin.y, bulletOrigin.z),
-      targetHit: false,
-      targetRef: null,
-      damage,
-      type
-    };
-    body.addEventListener('collide', () => { bullet.hit = true; });
+    bullet.age = 0;
+    bullet.hit = false;
+    bullet.impactSet = false;
+    bullet.prev.set(bulletOrigin.x, bulletOrigin.y, bulletOrigin.z);
+    bullet.targetHit = false;
+    bullet.targetRef = null;
+    bullet.damage = damage;
     bullets.push(bullet);
     return bullet;
   }
@@ -4496,10 +4594,14 @@
 
   function disposeBullet(bullet) {
     scene.remove(bullet.mesh, bullet.tracer);
-    // bulletGeo/bulletMat, il materiale dell'halo e quello del tracer sono
-    // condivisi: l'unica risorsa privata è la geometria del tracer.
-    bullet.tracer.geometry.dispose();
     world.removeBody(bullet.body);
+    bullet.targetRef = null;
+    // P2: l'entry torna nel pool per il riuso (body, shape, mesh, sprite e
+    // geometria del tracer restano intatti; i materiali sono condivisi). Solo
+    // gli eccedenti il tetto del pool vengono distrutti.
+    const pool = bulletPools[bullet.type];
+    if (pool.length < MAX_POOLED_BULLETS) pool.push(bullet);
+    else bullet.tracer.geometry.dispose();
   }
 
   function updateBullets(delta) {
@@ -4964,7 +5066,7 @@
     }
 
     if (isGameplayActive()) updateTargetMarkers();
-    if (gameState.started) audio.updateDroneHums(drones,camera);
+    if (gameState.started) audio.updateDroneHums(drones, camera, delta);
     radarTimer -= delta;
     if (isGameplayActive() && radarTimer <= 0) { updateRadar(elapsed); radarTimer = .075; }
     fpsFrames++; fpsTimer += delta;

@@ -463,18 +463,26 @@ export class AudioEngine {
       gain.connect(this.music);
       oscillator.start();
       this.apexHum = { oscillator, gain, filter };
+      this._apexHumLast = 0;
       this.duckMusic(.55, .12);
     } else if (!apexAlive && this.apexHum) {
       const hum = this.apexHum;
       hum.gain.gain.setTargetAtTime(0, time, .15);
       hum.oscillator.stop(time + 1);
       this.apexHum = null;
+      this._apexHumLast = 0;
     }
     if (this.apexHum && this.ctx) {
-      const intensity = 1 + Math.random() * .4;
-      this.apexHum.gain.gain.setTargetAtTime(.035 + intensity * .015, time, .2);
-      this.apexHum.oscillator.frequency.setTargetAtTime(36 + Math.random() * 6, time, .35);
-      this.apexHum.filter.frequency.setTargetAtTime(130 + intensity * 50, time, .3);
+      // P4: l'automazione WebAudio (setTargetAtTime) aggiunge eventi alla coda
+      // del parametro a ogni chiamata: prima erano ~180 eventi/s (per frame),
+      // ora ~10/s. Le costanti di tempo lunghe (.2/.35/.3s) mantengono il moto.
+      if (!this._apexHumLast || time - this._apexHumLast >= .1) {
+        this._apexHumLast = time;
+        const intensity = 1 + Math.random() * .4;
+        this.apexHum.gain.gain.setTargetAtTime(.035 + intensity * .015, time, .2);
+        this.apexHum.oscillator.frequency.setTargetAtTime(36 + Math.random() * 6, time, .35);
+        this.apexHum.filter.frequency.setTargetAtTime(130 + intensity * 50, time, .3);
+      }
     }
   }
 
@@ -560,14 +568,25 @@ export class AudioEngine {
     }
   }
 
-  updateDroneHums(drones, camera) {
+  updateDroneHums(drones, camera, delta = 1 / 60) {
     if (!this.started) return;
     const now = this.ctx.currentTime;
     // A1: con il menu aperto i rombi dei droni tacciono del tutto.
     if (this.menuDucked) {
-      for (const voice of this.droneVoices) voice.gain.gain.setTargetAtTime(0, now, .12);
+      // P4: un solo azzeramento all'ingresso del duck, non uno per frame.
+      if (!this._droneHumsDucked) {
+        this._droneHumsDucked = true;
+        for (const voice of this.droneVoices) voice.gain.gain.setTargetAtTime(0, now, .12);
+      }
       return;
     }
+    this._droneHumsDucked = false;
+    // P4: gain/frequenza/pan di ogni voce generavano 3 eventi di automazione
+    // per frame (~540/s con 3 voci): aggiorna a ~10 Hz, le costanti di tempo
+    // .12s mantengono la transizione morbida tra un update e l'altro.
+    this._droneHumTimer = Math.max(0, this._droneHumTimer || 0) + (Number.isFinite(delta) ? Math.max(0, delta) : 0);
+    if (this._droneHumTimer < .1) return;
+    this._droneHumTimer = 0;
     // Riutilizza array e vettori temporanei: niente allocazioni nel frame loop.
     const alive = this._aliveDrones || (this._aliveDrones = []);
     alive.length = 0;
@@ -581,15 +600,15 @@ export class AudioEngine {
       const voice = this.droneVoices[i];
       const drone = alive[i];
       if (!drone) {
-        voice.gain.gain.setTargetAtTime(0, now, .08);
+        voice.gain.gain.setTargetAtTime(0, now, .12);
         continue;
       }
       const distance = drone.position.distanceTo(camPos);
       const gain = Math.max(0, 1 - distance / 30) * .027;
       projected.copy(drone.position).project(camera);
-      voice.gain.gain.setTargetAtTime(gain, now, .08);
-      voice.oscillator.frequency.setTargetAtTime(72 + drone.velocity.length() * 7 + i * 11, now, .08);
-      if (voice.panner) voice.panner.pan.setTargetAtTime(Math.max(-.9, Math.min(.9, projected.x)), now, .06);
+      voice.gain.gain.setTargetAtTime(gain, now, .12);
+      voice.oscillator.frequency.setTargetAtTime(72 + drone.velocity.length() * 7 + i * 11, now, .12);
+      if (voice.panner) voice.panner.pan.setTargetAtTime(Math.max(-.9, Math.min(.9, projected.x)), now, .1);
     }
   }
 

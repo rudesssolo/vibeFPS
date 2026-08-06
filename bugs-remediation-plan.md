@@ -638,6 +638,8 @@ Tutti i 38 item tracciati (B1-B9, C1-C5, M3, N1-N10, G1-G9, A1-A6/A9, U7-U8, D1-
 | **Q3** | 🟡 Media | `updateReflectionQuality` era **inefficace**: `resolutionScale` esiste solo su `ReflectorBaseNode`, non sul `ReflectorNode` restituito da `reflector()`. La riga creava una proprietà mai letta, quindi **`reflectorSize` non ha mai avuto effetto** e la render target restava al `.3` del costruttore su tutti i profili | `src/main.js` | Scritto su `floorReflection.reflector.resolutionScale`. Nota: a 1080p DPR 1 questo *aumenta* la reflection di autoHigh (576×324 → 1024×576), ed è ciò che ha reso raggiungibile Q1 |
 | **Q4** | 🟡 Media | `VolumetricSmokeSystem.setQuality` ricostruiva i materiali al variare dei passi del raymarch, compilando shader in gioco (~35 pipeline nello stesso frame di Q1). Era già previsto nel piano performance §6.3 | `src/smoke-volume.js` | Entrambe le varianti precompilate al boot; `setQuality` scambia riferimenti. Le quattro combinazioni (due lati × due qualità) restano nel render graph a scala 0 per il warmup |
 | **Q5** | 🟡 Bassa | `Math.min(getMaxAnisotropy(), profile.anisotropy)` produce **`NaN`** se il profilo non espone il campo (es. `config.js` servito dalla cache del browser insieme a un `main.js` nuovo). `NaN` finirebbe nel sampler descriptor di **ogni** texture procedurale: in WebGPU è un errore di validazione, e muri/asfalto/casse smetterebbero di disegnarsi | `src/main.js` | Valore validato con `Number.isFinite` e fallback a 8, più `Math.max(1, …)`: degrada al default invece di corrompere la scena |
+| **Q6** | 🟡 Media | `tools/smoke-boot.mjs` sostituiva stringhe in `index.html` che dopo la modularizzazione vivono in `src/main.js`: `SMOKE_WAVE=9` e `SMOKE_WEAPON=railgun` **non avevano più effetto, silenziosamente**. Due modalità di smoke test erano di fatto morte | `tools/smoke-boot.mjs` | Le patch agganciano `src/main.js`; un'ancora mancante ora è un **errore esplicito** (`exit 3`) invece di un no-op. Verificato: `SMOKE_WEAPON=railgun` → «weapon railgun Ultra», `SMOKE_WAVE=9` → «boot wave 9» |
+| **Q7** | 🟡 Bassa | Dead code in `applyWeaponDetail`: la closure `attachIfNeeded` definita e mai chiamata (duplicava il loop successivo), più quattro `const` mai usate (`pulseCached`, `railCached`, `rpgCached`, `flameCached`) e un commento duplicato | `src/main.js` | Rimossi; `minigunBarrel` legge direttamente da `getWeaponMeshes`, che è già memoizzato |
 
 ### 17.2 Misure
 
@@ -658,15 +660,15 @@ Nota metodologica: su adapter software `maxFrameMs` è dominato dal fill rate �
 
 ### 17.4 Difetti latenti rilevati e NON corretti
 
+> Q6 e Q7, inizialmente elencati qui, sono stati corretti nella stessa tornata: vedi §17.1.
+
 | ID | Titolo | File | Nota |
 |----|--------|------|------|
-| **Q6** | `tools/smoke-boot.mjs` sostituisce stringhe in `index.html` (`let weaponDetailUltra`, stato dell'ondata) che dopo la modularizzazione vivono in `src/main.js`: `SMOKE_WAVE=9` e `SMOKE_WEAPON=railgun` **non hanno più effetto**, silenziosamente | `tools/smoke-boot.mjs` | `npm run smoke` di default resta valido. Fix: applicare le sostituzioni a `src/main.js` |
-| **Q7** | Dead code in `applyWeaponDetail`: la closure `attachIfNeeded` è definita e mai chiamata, duplicando il loop che segue | `src/main.js` | Rimozione sicura, nessun effetto funzionale |
-| **Q8** | `aoPass.enabled = false` è inerte (il `GTAONode` vendorizzato non consulta la proprietà) e la guardia `if (this.aoPass.enabled !== undefined)` è sempre vera | `src/render-pipeline.js` | Dettaglio in `performance-optimization-plan.md` §3.1 |
+| **Q8** | `aoPass.enabled = false` è inerte (il `GTAONode` vendorizzato non consulta la proprietà) e la guardia `if (this.aoPass.enabled !== undefined)` è sempre vera | `src/render-pipeline.js` | Dettaglio in `performance-optimization-plan.md` §3.1. Va affrontato con la variante di pipeline per autoLow (§3.2), non isolatamente |
 
 ### 17.5 Validazione quarta tornata
 - `npm test`: **96/96 verdi** (+29 rispetto alla terza tornata) su Node 22 e Node 24.
 - `npm run lint:tsl`: OK.
-- `npm run smoke`: OK — boot headless WebGPU, zero errori, zero risorse mancanti.
+- `npm run smoke`: OK — boot headless WebGPU, zero errori, zero risorse mancanti; verificate anche le modalità `SMOKE_WAVE=9` e `SMOKE_WEAPON=railgun`, tornate funzionanti con Q6.
 - `git diff --check`: nessun errore di whitespace.
 - Conferma in gioco su GPU reale da parte dell'utente: freeze e artefatto **non più riproducibili**.

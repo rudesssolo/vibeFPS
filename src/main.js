@@ -1855,31 +1855,9 @@
         child.visible = false;
       }
     }
-    // Retrieve from cache or build once
-    const pulseCached = getWeaponMeshes('pulse', ultra);
-    const railCached = getWeaponMeshes('railgun', ultra);
-    const miniCached = getWeaponMeshes('minigun', ultra);
-    const rpgCached = getWeaponMeshes('rpg', ultra);
-    const flameCached = getWeaponMeshes('flame', ultra);
-    // Ensure cached meshes are attached and visible
-    const attachIfNeeded = (view, cached) => {
-      for (const m of cached.meshes) {
-        if (m.parent !== view) view.add(m);
-        m.visible = true;
-      }
-      // Hide other LOD
-      const otherKey = ultra ? 'lite' : 'ultra';
-      const viewCache = weaponCache[Object.keys(weaponViews).find(k => weaponViews[k]===view)];
-      // Instead hide the alternate meshes if they exist and are not current
-      // (they remain in scene but invisible — zero draw cost via frustum cull).
-      if (viewCache && viewCache[otherKey]) {
-        for (const m of viewCache[otherKey].meshes) {
-          if (m !== cached.meshes.find(x => x===m)) m.visible = false;
-        }
-      }
-    };
-    // For minigun barrel reference
-    // First ensure pulse meshes are correctly attached
+    // Attacca le mesh della variante corrente e nasconde quelle dell'altra: gli
+    // oggetti restano in cache (getWeaponMeshes costruisce una volta sola),
+    // cambia solo la visibilità.
     for (const [id, view] of Object.entries(weaponViews)) {
       const cached = getWeaponMeshes(id, ultra);
       for (const m of cached.meshes) {
@@ -1894,7 +1872,7 @@
         }
       }
     }
-    minigunBarrel = miniCached.barrel;
+    minigunBarrel = getWeaponMeshes('minigun', ultra).barrel;
   }
 
   gun.position.set(0.25, -0.21, -0.45);

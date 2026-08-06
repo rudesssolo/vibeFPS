@@ -65,21 +65,40 @@ function serveStatic() {
     if (!filePath.startsWith(ROOT)) { res.writeHead(403); res.end(); return; }
     fs.readFile(filePath, (error, data) => {
       if (error) { res.writeHead(404); res.end('not found'); return; }
-      // Smoke modes alter only the in-memory response: production HTML never
-      // receives debug state, cheats, or forced weapon visibility.
-      if (filePath === path.join(ROOT, 'index.html')) {
+      // Smoke modes alter only the in-memory response: the files on disk never
+      // receive debug state, cheats, or forced weapon visibility.
+      //
+      // Le sostituzioni agganciano src/main.js, non index.html: il modulo di
+      // gioco è stato estratto dallo script inline e per un po' queste patch
+      // hanno colpito un file che non le conteneva più, quindi SMOKE_WAVE e
+      // SMOKE_WEAPON non facevano nulla senza segnalarlo. Ora un'ancora mancante
+      // è un errore esplicito.
+      if (filePath === path.join(ROOT, 'src', 'main.js')) {
         let source = data.toString('utf8');
+        const patch = (find, replaceWith, label) => {
+          if (!source.includes(find)) {
+            console.error(`[smoke] ancora non trovata per ${label} in src/main.js: « ${find.slice(0, 60)}… »`);
+            process.exit(3);
+          }
+          source = source.replace(find, replaceWith);
+        };
         if (SMOKE_WAVE === 9 || SMOKE_WAVE === 10) {
-          source = source.replace('wave: 1, waveKills: 0, waveTargets: 5', `wave: ${SMOKE_WAVE}, waveKills: 0, waveTargets: 5`);
+          patch(
+            'wave: 1, waveKills: 0, waveTargets: 5',
+            `wave: ${SMOKE_WAVE}, waveKills: 0, waveTargets: 5`,
+            `SMOKE_WAVE=${SMOKE_WAVE}`
+          );
         }
         if (VALID_SMOKE_WEAPONS.has(SMOKE_WEAPON)) {
-          source = source.replace(
+          patch(
             "let weaponDetailUltra = (getStoredQualityMode() === 'ultra') && !(touchMode && !highEndDevice);",
-            'let weaponDetailUltra = true;'
+            'let weaponDetailUltra = true;',
+            'SMOKE_WEAPON (dettaglio ultra)'
           );
-          source = source.replace(
+          patch(
             'applyWeaponDetail();',
-            `applyWeaponDetail();\n  for (const [id, view] of Object.entries(weaponViews)) view.visible = id === ${JSON.stringify(SMOKE_WEAPON)};`
+            `applyWeaponDetail();\n  for (const [id, view] of Object.entries(weaponViews)) view.visible = id === ${JSON.stringify(SMOKE_WEAPON)};`,
+            'SMOKE_WEAPON (visibilità arma)'
           );
         }
         data = Buffer.from(source);

@@ -618,3 +618,55 @@ Tutti i 38 item tracciati (B1-B9, C1-C5, M3, N1-N10, G1-G9, A1-A6/A9, U7-U8, D1-
 > ✅ **Eseguito nella stessa tornata (4/8):** tutti gli item T1-T9 sono stati corretti. Di seguito il backlog residuo (non urgenti, rifiniture opzionali).
 1. **Verifica visuale in browser GPU** — T1 (visuali Apex per-archetipo) e T2 (re-drop) richiedono conferma manuale su macchina con WebGPU (checklist §15 + punti armi).
 2. **Rifiniture opzionali** — cono del lanciafiamme (T6) e budget particelle (T9) sono già mitigati; valutare se il burst visivo del fuoco resta abbastanza denso dopo la riduzione T9.
+
+---
+
+## 17. Quarta tornata — regressioni e cause del freeze sul cambio di tier (6 agosto 2026)
+
+> **Contesto:** sessione di ottimizzazione performance (vedi `performance-optimization-plan.md`, §4, §6.3, §10.4, §15.1). Il throttle della reflection ha reso raggiungibile un difetto preesistente e ne ha introdotto uno nuovo. Entrambi segnalati dall'utente in gioco: *«saltando molto in alto verso la parete VIBE il rendering si blocca per circa 1 secondo e quando riprende la grafica ha in sovraimpressione parte di un fotogramma precedente»*.
+>
+> Curiosità: lo stesso gesto (salto in alto vicino ai muri) aveva già fatto emergere **T10** nella terza tornata, per una causa completamente diversa.
+>
+> **Stato: ✅ risolti e confermati in gioco dall'utente.**
+
+### 17.1 Bug corretti
+
+| ID | Sev. | Titolo | File | Fix |
+|----|------|--------|------|-----|
+| **Q1** | 🔴 Critica | Cambio di tier automatico → **~2 s di freeze**. `ExplosionSystem.setQuality` cambiava `light.visible` al variare di `dynamicLights` (4→2). In WebGPU il `lightsNode` aggrega le luci **visibili** dentro lo shader: variare quel set **ricompila ogni materiale della scena**. Misurate **39 pipeline create e distrutte a ogni switch**. È lo stesso pericolo già descritto nel commento di `precompileAllMaterials`, che però riguardava solo il boot | `src/explosion-system.js` | Set di luci **fissato al boot** al massimo `dynamicLights` fra i profili (`lightSlots`); il budget per profilo resta effettivo perché `lightLimit` governa quante luci vengono accese nel pool di allocazione. `visible` non viene più toccato: spegnere si fa con l'intensità, che è una uniform |
+| **Q2** | 🟠 Alta | Frammenti di un fotogramma precedente sul pavimento dopo un hitch (linee della griglia, grattacieli). **Regressione introdotta in questa sessione:** il throttle limitava la staleness in *frame*. Due frame sono 33 ms a 60 FPS, ma durante un hitch un solo frame resta a schermo per un secondo, e l'asfalto somma via `emissiveNode` una reflection catturata prima | `src/reflection-throttle.js`, `src/main.js` | Soglia di deriva della posa stretta a **.35 m / .05 rad** (era 2 m / .35 rad ≈ 20°): una reflection riusata deve venire da una posa percettivamente identica. In più, un frame oltre 40 ms disattiva il throttle, e lo scheduler viene resettato al cambio profilo e su frame fallito |
+| **Q3** | 🟡 Media | `updateReflectionQuality` era **inefficace**: `resolutionScale` esiste solo su `ReflectorBaseNode`, non sul `ReflectorNode` restituito da `reflector()`. La riga creava una proprietà mai letta, quindi **`reflectorSize` non ha mai avuto effetto** e la render target restava al `.3` del costruttore su tutti i profili | `src/main.js` | Scritto su `floorReflection.reflector.resolutionScale`. Nota: a 1080p DPR 1 questo *aumenta* la reflection di autoHigh (576×324 → 1024×576), ed è ciò che ha reso raggiungibile Q1 |
+| **Q4** | 🟡 Media | `VolumetricSmokeSystem.setQuality` ricostruiva i materiali al variare dei passi del raymarch, compilando shader in gioco (~35 pipeline nello stesso frame di Q1). Era già previsto nel piano performance §6.3 | `src/smoke-volume.js` | Entrambe le varianti precompilate al boot; `setQuality` scambia riferimenti. Le quattro combinazioni (due lati × due qualità) restano nel render graph a scala 0 per il warmup |
+| **Q5** | 🟡 Bassa | `Math.min(getMaxAnisotropy(), profile.anisotropy)` produce **`NaN`** se il profilo non espone il campo (es. `config.js` servito dalla cache del browser insieme a un `main.js` nuovo). `NaN` finirebbe nel sampler descriptor di **ogni** texture procedurale: in WebGPU è un errore di validazione, e muri/asfalto/casse smetterebbero di disegnarsi | `src/main.js` | Valore validato con `Number.isFinite` e fallback a 8, più `Math.max(1, …)`: degrada al default invece di corrompere la scena |
+
+### 17.2 Misure
+
+Cambio di tier autoHigh↔autoLow, adapter software 420×320. I conteggi di pipeline sono **indipendenti dall'adapter**, i tempi sono indicativi:
+
+| | pipeline | switch ↓ | switch ↑ |
+|---|---|---|---|
+| prima | 213 → **252** → 213 | **2200 ms** | 486 ms |
+| dopo | **214 costante** | 32–40 ms | 33–38 ms |
+
+Invariante di Q2 verificata in automatico: una traiettoria di salto verso la parete VIBE (camera che sale, avanza e ruota) con hitch da 1 s **iniettati dopo la decisione sulla reflection**, cioè nel caso peggiore. Risultato: `frame lenti=6, frame lenti con reflection non allineata=0`. L'hitch è iniettato, quindi l'esito non dipende dalla velocità della GPU.
+
+### 17.3 Ipotesi verificate e scartate
+
+Documentate per non ripercorrerle: **compilazione delle pipeline del pass reflection** (senza warmup se ne crea **1 sola** salendo in quota, non un burst); **resize della render target della reflection o della shadow map** (rendendo `reflectorSize` e `shadowSize` uguali fra i profili lo stallo non cambiava); **`needsUpdate` in `_applyWetness`** (rimuoverlo non spostava il tempo).
+
+Nota metodologica: su adapter software `maxFrameMs` è dominato dal fill rate — a bassa quota un frame supera i 6 s — e maschera qualunque stallo di compilazione. Le conclusioni attendibili sono venute dai **contatori di pipeline e texture** (`renderer.info.memory`, cache di `_pipelines`), non dai tempi.
+
+### 17.4 Difetti latenti rilevati e NON corretti
+
+| ID | Titolo | File | Nota |
+|----|--------|------|------|
+| **Q6** | `tools/smoke-boot.mjs` sostituisce stringhe in `index.html` (`let weaponDetailUltra`, stato dell'ondata) che dopo la modularizzazione vivono in `src/main.js`: `SMOKE_WAVE=9` e `SMOKE_WEAPON=railgun` **non hanno più effetto**, silenziosamente | `tools/smoke-boot.mjs` | `npm run smoke` di default resta valido. Fix: applicare le sostituzioni a `src/main.js` |
+| **Q7** | Dead code in `applyWeaponDetail`: la closure `attachIfNeeded` è definita e mai chiamata, duplicando il loop che segue | `src/main.js` | Rimozione sicura, nessun effetto funzionale |
+| **Q8** | `aoPass.enabled = false` è inerte (il `GTAONode` vendorizzato non consulta la proprietà) e la guardia `if (this.aoPass.enabled !== undefined)` è sempre vera | `src/render-pipeline.js` | Dettaglio in `performance-optimization-plan.md` §3.1 |
+
+### 17.5 Validazione quarta tornata
+- `npm test`: **96/96 verdi** (+29 rispetto alla terza tornata) su Node 22 e Node 24.
+- `npm run lint:tsl`: OK.
+- `npm run smoke`: OK — boot headless WebGPU, zero errori, zero risorse mancanti.
+- `git diff --check`: nessun errore di whitespace.
+- Conferma in gioco su GPU reale da parte dell'utente: freeze e artefatto **non più riproducibili**.

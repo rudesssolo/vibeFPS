@@ -102,6 +102,10 @@ async function main() {
     await page.evaluate(() => { window.__vibeLongTasks = []; });
     await page.addStyleTag({ content: 'html.visual-canvas-only body > :not(#game-canvas) { visibility: hidden !important; }' });
     await page.evaluate(() => document.querySelector('.cta')?.click());
+    // Le metriche di rendering partono dal primo frame di gioco: il boot e il
+    // primo cambio profilo hanno un profilo di draw call diverso e falserebbero
+    // media e minimo.
+    await page.evaluate(() => window.__vibeResetDiagnostics?.());
     const fpsSamples = [];
     const sampleCount = Math.ceil(SAMPLE_SECONDS * 2);
     for (let i = 0; i < sampleCount; i++) {
@@ -109,6 +113,22 @@ async function main() {
       const fps = await page.evaluate(() => Number.parseInt(document.getElementById('fps')?.textContent || '', 10));
       if (Number.isFinite(fps)) fpsSamples.push(fps);
     }
+    // Contatori di rendering (src/main.js, attivi solo con ?visualTest=...).
+    // Sono indipendenti dal backend: restano confrontabili anche quando i pixel
+    // non sono autorevoli, quindi valgono come baseline delle ottimizzazioni.
+    const perf = await page.evaluate(() => {
+      const value = window.__vibeDiagnostics;
+      if (!value || !value.frames) return null;
+      return {
+        frames: value.frames,
+        drawCallsAvg: Math.round(value.drawCallsTotal / value.frames),
+        drawCallsMin: Number.isFinite(value.drawCallsMin) ? value.drawCallsMin : null,
+        drawCallsPeak: value.drawCallsPeak,
+        reflectionRenders: value.reflectionRenders,
+        reflectionWidth: value.reflectionWidth,
+        reflectionHeight: value.reflectionHeight
+      };
+    });
     const canvas = page.locator('#game-canvas');
     await canvas.waitFor({ state: 'visible' });
     const adapter = await page.evaluate(async () => {
@@ -133,7 +153,12 @@ async function main() {
       failures.push(`budget FPS non rispettato: median=${medianFps}, 1%low=${lowFps}`);
     }
     if (authoritative && PERF_ASSERT && maxLongTask > 100) failures.push(`long task massimo ${maxLongTask.toFixed(1)}ms`);
-    console.log(`[visual] ${MODE}/${QUALITY} · ${adapter.label} · ${authoritative ? 'hardware autorevole' : 'pixel non autorevoli'} · ${JSON.stringify(stats)} · median=${medianFps} FPS · 1%low=${lowFps} FPS · maxLongTask=${maxLongTask.toFixed(1)}ms · ${outputPath}`);
+    const perfLabel = perf
+      ? ` · frames=${perf.frames}`
+        + ` · drawCalls avg=${perf.drawCallsAvg} min=${perf.drawCallsMin ?? '?'} peak=${perf.drawCallsPeak}`
+        + ` · reflection=${perf.reflectionRenders}/${perf.frames}@${perf.reflectionWidth}x${perf.reflectionHeight}`
+      : ' · render counters n/d';
+    console.log(`[visual] ${MODE}/${QUALITY} · ${adapter.label} · ${authoritative ? 'hardware autorevole' : 'pixel non autorevoli'} · ${JSON.stringify(stats)} · median=${medianFps} FPS · 1%low=${lowFps} FPS · maxLongTask=${maxLongTask.toFixed(1)}ms${perfLabel} · ${outputPath}`);
     if (failures.length) {
       for (const failure of failures) console.error(`  - ${failure}`);
       process.exitCode = 1;

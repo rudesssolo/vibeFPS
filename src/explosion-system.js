@@ -151,7 +151,14 @@ class ParticlePool {
 }
 
 export class ExplosionSystem {
-  constructor({ scene, onShockwave, onCameraImpulse }) {
+  /**
+   * @param {Object} options
+   * @param {number} [options.lightSlots=6] - Luci puntiformi visibili, fissate
+   *   per tutta la sessione. Va passato il massimo `dynamicLights` fra i profili:
+   *   il set di luci visibili non può cambiare a runtime senza ricompilare ogni
+   *   materiale della scena.
+   */
+  constructor({ scene, onShockwave, onCameraImpulse, lightSlots = 6 }) {
     this.scene = scene;
     this.onShockwave = onShockwave || (() => {});
     this.onCameraImpulse = onCameraImpulse || (() => {});
@@ -233,9 +240,19 @@ export class ExplosionSystem {
     });
 
     this.lights = [];
+    // Il NUMERO di luci visibili è fissato qui e non cambia mai più. In WebGPU
+    // il lightsNode aggrega le luci VISIBILI nello shader: variare quel set
+    // ricompila ogni materiale della scena. Misurato su un cambio di tier
+    // automatico (autoHigh->autoLow, 4 luci -> 2): 39 pipeline create dentro un
+    // frame e ~2 s di stallo, proprio quando il frame rate è già in difficoltà.
+    // È lo stesso pericolo descritto nel commento di precompileAllMaterials.
+    // Il budget per profilo resta effettivo: `lightLimit` governa quante luci
+    // vengono davvero accese (vedi il pool in triggerLight), quindi autoLow
+    // continua ad accenderne meno — semplicemente senza toccare `visible`.
+    this.lightSlots = Math.max(1, Math.min(8, Math.round(lightSlots)));
     for (let i = 0; i < 8; i++) {
       const light = new THREE.PointLight(0xffa05c, 0, 18, 2);
-      light.visible = i < this.lightLimit;
+      light.visible = i < this.lightSlots;
       light.userData.active = false;
       light.userData.age = 0;
       light.userData.life = .45;
@@ -259,9 +276,10 @@ export class ExplosionSystem {
     // Il fumo volumetrico costa per pixel, non per particella: ha un budget
     // proprio nel profilo invece di seguire particleScale.
     this.volumetric.setQuality(profile);
+    // `visible` NON viene toccato: spegnere le luci oltre il budget si fa con
+    // l'intensità, che è una uniform e non ricompila nulla.
     this.lights.forEach((light, index) => {
-      light.visible = index < this.lightLimit;
-      if (!light.visible) {
+      if (index >= this.lightLimit) {
         light.userData.active = false;
         light.intensity = 0;
       }

@@ -93,7 +93,7 @@ test('ogni profilo qualità espone tutti i parametri consumati dai sistemi', () 
   // ExplosionSystem.explode() ricava il numero di puff di fumo da smokePuffs:
   // se un profilo lo omettesse, il fumo delle esplosioni spariva in silenzio.
   const required = [
-    'name', 'pixelRatio', 'shadowSize', 'reflectorSize',
+    'name', 'pixelRatio', 'shadowSize', 'reflectorSize', 'reflectorInterval', 'anisotropy',
     'gtaoSamples', 'facadeResolution', 'particleScale', 'smokePuffs', 'dynamicLights'
   ];
   const keys = Object.keys(QUALITY_PROFILES);
@@ -112,6 +112,16 @@ test('ogni profilo qualità espone tutti i parametri consumati dai sistemi', () 
   // Il costo del fumo deve crescere con il livello di qualità.
   assert.ok(QUALITY_PROFILES.autoLow.smokePuffs < QUALITY_PROFILES.autoHigh.smokePuffs);
   assert.ok(QUALITY_PROFILES.autoHigh.smokePuffs < QUALITY_PROFILES.ultra.smokePuffs);
+  // reflectorInterval < 1 congelerebbe la reflection del pavimento; il profilo
+  // più economico non può aggiornarla più spesso di quello alto.
+  for (const key of keys) assert.ok(QUALITY_PROFILES[key].reflectorInterval >= 1, `${key}.reflectorInterval < 1`);
+  assert.ok(QUALITY_PROFILES.autoLow.reflectorInterval >= QUALITY_PROFILES.autoHigh.reflectorInterval);
+  // L'anisotropia è un tetto passato a Math.min con getMaxAnisotropy(): deve
+  // restare >= 1 e crescere con la qualità, altrimenti ultra campionerebbe
+  // peggio di autoHigh.
+  for (const key of keys) assert.ok(QUALITY_PROFILES[key].anisotropy >= 1, `${key}.anisotropy < 1`);
+  assert.ok(QUALITY_PROFILES.autoLow.anisotropy <= QUALITY_PROFILES.autoHigh.anisotropy);
+  assert.ok(QUALITY_PROFILES.autoHigh.anisotropy <= QUALITY_PROFILES.ultra.anisotropy);
 });
 
 test('i budget cinematici sono completi e crescono da Balanced a Ultra', () => {

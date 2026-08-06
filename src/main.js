@@ -16,6 +16,7 @@
   import { WeatherSystem } from './weather-system.js';
   import { makeRng } from './rng.js';
   import { constrainBodyToSquare } from './player-collision.js';
+  import { ReflectionScheduler } from './reflection-throttle.js';
   import { getStoredSensitivity, storeSensitivity, getStoredQualityMode, APEX_TUNING, ENDGAME_TUNING, RAILGUN_TUNING, WEAPON_TUNING, QUALITY_PROFILES, getBossEncounter } from './config.js';
   import { t, getLanguage, setLanguage } from './i18n.js';
 
@@ -337,8 +338,39 @@
   const rendererBackend = 'WEBGPU';
   document.querySelector('#overlay .build').textContent = `BUILD 2.6.08 // ${rendererBackend}`;
 
-  // Anisotropia massima per texture nitide in prospettiva
-  const aniso = renderer.getMaxAnisotropy();
+  // --- MOBILE / TOUCH ---------------------------------------------------------
+  // Rileva un dispositivo "touch-primary" (telefono/tablet), non un PC con
+  // touchscreen: basta (pointer: coarse) E (hover: none). Un portatile con
+  // touchscreen ha comunque un mouse/trackpad (hover) e non deve attivare la
+  // modalità touch né il guard di rotazione.
+  const touchMode = typeof matchMedia === 'function'
+    && matchMedia('(pointer: coarse)').matches
+    && matchMedia('(hover: none)').matches;
+  // Device "high-end": su touch consente il profilo ULTRA (heuristic CPU/RAM/DPR).
+  const highEndDevice = !!(navigator && navigator.deviceMemory && navigator.deviceMemory >= 8
+    && navigator.hardwareConcurrency && navigator.hardwareConcurrency >= 8
+    && (window.devicePixelRatio || 1) >= 2.5);
+
+  // Anisotropia delle texture in prospettiva. Il massimo dell'adapter (di norma
+  // 16×) è il campionamento più caro della scena: l'asfalto è visto radente con
+  // repeat ~27 e campiona quattro mappe, e i muri ne clonano altre tre. Il tetto
+  // arriva dal profilo di boot, che è l'unico momento utile: cambiarlo dopo
+  // richiederebbe needsUpdate su ogni texture (re-upload) e i passaggi
+  // autoHigh↔autoLow avvengono in gioco senza schermata di transizione.
+  const bootProfileKey = getStoredQualityMode() === 'ultra' && !(touchMode && !highEndDevice)
+    ? 'ultra'
+    : 'autoHigh';
+  // Il valore del profilo è validato: un `anisotropy` mancante renderebbe
+  // Math.min() NaN e NaN finirebbe nel sampler descriptor di OGNI texture
+  // procedurale, che in WebGPU è un errore di validazione — muri, asfalto e
+  // casse smetterebbero di disegnarsi. Meglio degradare al default che
+  // corrompere la scena.
+  const profileAnisotropy = QUALITY_PROFILES[bootProfileKey]?.anisotropy;
+  const maxAnisotropy = renderer.getMaxAnisotropy();
+  const aniso = Math.max(1, Math.min(
+    Number.isFinite(maxAnisotropy) ? maxAnisotropy : 1,
+    Number.isFinite(profileAnisotropy) ? profileAnisotropy : 8
+  ));
 
   const scene = new THREE.Scene();
   const skyTime = uniform(0);
@@ -613,8 +645,29 @@
   // texture/reflector non deve mai finire nel frustum mentre si corre rasenti
   // al perimetro.
   let floorReflection = null;
+  // Il reflector rende la scena una seconda volta ogni frame: lo scheduler
+  // decide su quali frame quel lavoro viene effettivamente svolto (vedi
+  // reflection-throttle.js). L'intervallo arriva dal profilo qualità.
+  const reflectionScheduler = new ReflectionScheduler();
+  // Deciso una volta per frame in animate(), letto dal wrapper di updateBefore.
+  let reflectionAllowed = true;
+  let reflectionRenderCount = 0;
   if (GRAPHICS.reflectiveFloor) {
     floorReflection = reflector({ resolutionScale: .3, generateMipmaps: true, bounces: false, samples: 0 });
+    // Il throttle intercetta updateBefore invece di commutare updateBeforeType.
+    // Commutare il tipo di update è una proprietà del nodo e lascia a three.js
+    // il compito di decidere quante volte invocarlo: la pipeline renderizza la
+    // scena due volte (normal pre-pass + scene pass) e il conteggio reale non
+    // coincideva con le decisioni dello scheduler. Qui il gate è esplicito e
+    // conta le invocazioni effettive; saltando, la render target conserva
+    // l'ultimo contenuto valido senza toccare né materiale né grafo.
+    const reflectorNode = floorReflection.reflector;
+    const runUpdateBefore = reflectorNode.updateBefore.bind(reflectorNode);
+    reflectorNode.updateBefore = frame => {
+      if (!reflectionAllowed) return;
+      reflectionRenderCount++;
+      return runUpdateBefore(frame);
+    };
   } else {
     const floorMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(floorSize, floorSize),
@@ -1278,18 +1331,10 @@
   let nextFootstep = 0;
   let bobPhase = 0;
 
-  // --- MOBILE / TOUCH (rilevato presto, serve anche per il dettaglio armi) ---
-  // Rileva un dispositivo "touch-primary" (telefono/tablet), non un PC con
-  // touchscreen: basta (pointer: coarse) E (hover: none). Un portatile con
-  // touchscreen ha comunque un mouse/trackpad (hover) e non deve attivare la
-  // modalità touch né il guard di rotazione.
-  const touchMode = typeof matchMedia === 'function'
-    && matchMedia('(pointer: coarse)').matches
-    && matchMedia('(hover: none)').matches;
-  // Device "high-end": su touch consente il profilo ULTRA (heuristic CPU/RAM/DPR).
-  const highEndDevice = !!(navigator && navigator.deviceMemory && navigator.deviceMemory >= 8
-    && navigator.hardwareConcurrency && navigator.hardwareConcurrency >= 8
-    && (window.devicePixelRatio || 1) >= 2.5);
+  // --- MOBILE / TOUCH ---
+  // touchMode/highEndDevice sono dichiarati insieme al renderer (sezione 2):
+  // servono già al boot per scegliere l'anisotropia delle texture procedurali.
+  // Da qui in poi servono per dettaglio armi, controlli touch e ULTRA.
 
   /* ============================================================
      7. ARMA CYBERPUNK, MUZZLE FLASH E INPUT
@@ -2088,6 +2133,11 @@
 
   const explosionSystem = new ExplosionSystem({
     scene,
+    // Massimo dynamicLights fra i profili: il set di luci visibili viene fissato
+    // al boot e non cambia più, così il cambio di tier automatico non ricompila
+    // ogni materiale della scena. Il budget per profilo resta effettivo tramite
+    // il pool interno di ExplosionSystem.
+    lightSlots: Math.max(...Object.values(QUALITY_PROFILES).map(entry => entry.dynamicLights)),
     onShockwave(position) {
       renderPipeline.triggerShockwave(position);
       renderPipeline.triggerLensFlare(position, 1.1, 0xffa05c, .48);
@@ -2101,28 +2151,53 @@
 
   const reflectionBufferSize = new THREE.Vector2();
   function updateReflectionQuality(profile) {
+    reflectionScheduler.setInterval(profile.reflectorInterval);
     if (!floorReflection) return;
+    // Cambiando profilo cambia anche reflectorSize, quindi RenderTarget.setSize()
+    // dispone e ricrea le texture GPU della reflection: il contenuto precedente
+    // non esiste più. Senza questo reset il throttle potrebbe comporre quella
+    // target appena buttata via per uno o due frame.
+    reflectionScheduler.reset();
     renderer.getDrawingBufferSize(reflectionBufferSize);
     const longestSide = Math.max(1, reflectionBufferSize.x, reflectionBufferSize.y);
-    floorReflection.resolutionScale = Math.min(1, profile.reflectorSize / longestSide);
+    // `resolutionScale` vive sul ReflectorBaseNode, non sul ReflectorNode
+    // restituito da reflector(): scriverlo sul nodo esterno creava una proprietà
+    // che nessuno legge, quindi reflectorSize non ha mai avuto effetto e la
+    // render target restava al .3 del costruttore su tutti i profili.
+    floorReflection.reflector.resolutionScale = Math.min(1, profile.reflectorSize / longestSide);
   }
 
   const graphicsManager = new GraphicsManager({
     allowUltra: !(touchMode && !highEndDevice),
     applyProfile(profile, { mode, initial }) {
-      renderScale = Math.min(window.devicePixelRatio, profile.pixelRatio);
-      renderer.setPixelRatio(renderScale);
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      if (moonLight) {
-        moonLight.shadow.mapSize.set(profile.shadowSize, profile.shadowSize);
-        if (moonLight.shadow.map) { moonLight.shadow.map.dispose(); moonLight.shadow.map = null; }
-      }
-      updateReflectionQuality(profile);
-      renderPipeline.setQuality(profile);
-      facadeSystem.setQuality(profile);
-      atmosphereSystem.setQuality(profile);
-      weatherSystem.setQuality(profile);
-      explosionSystem.setQuality(profile);
+      // Il cambio di tier automatico avviene in gioco, senza schermata di
+      // transizione: ogni passo è cronometrato sotto visualDebug così si vede
+      // quale costa, invece di indovinarlo.
+      const step = visualDebug
+        ? (name, fn) => {
+          const startedAt = performance.now();
+          fn();
+          window.__vibeProfileSteps[name] = Math.round((performance.now() - startedAt) * 100) / 100;
+        }
+        : (name, fn) => fn();
+      if (visualDebug) window.__vibeProfileSteps = {};
+      step('renderer.setSize', () => {
+        renderScale = Math.min(window.devicePixelRatio, profile.pixelRatio);
+        renderer.setPixelRatio(renderScale);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+      step('shadowMap', () => {
+        if (moonLight) {
+          moonLight.shadow.mapSize.set(profile.shadowSize, profile.shadowSize);
+          if (moonLight.shadow.map) { moonLight.shadow.map.dispose(); moonLight.shadow.map = null; }
+        }
+      });
+      step('reflection', () => updateReflectionQuality(profile));
+      step('renderPipeline', () => renderPipeline.setQuality(profile));
+      step('facade', () => facadeSystem.setQuality(profile));
+      step('atmosphere', () => atmosphereSystem.setQuality(profile));
+      step('weather', () => weatherSystem.setQuality(profile));
+      step('explosion', () => explosionSystem.setQuality(profile));
       // Ricostruisce i modelli delle armi quando si passa da/a ULTRA.
       if (mode === 'ultra' !== weaponDetailUltra) {
         weaponDetailUltra = mode === 'ultra';
@@ -3139,6 +3214,18 @@
     });
     try {
       await renderer.compileAsync(scene, camera);
+      // Passo 3 — warmup della pipeline completa MENTRE la copertura totale è
+      // ancora attiva. compileAsync() compila per il render target corrente (il
+      // canvas); il reflector però renderizza la scena in una render target
+      // HalfFloat, che in WebGPU ha pipeline proprie. Senza questo passaggio le
+      // pipeline della reflection si compilano alla prima inquadratura che porta
+      // nuova geometria nello specchio — saltando in alto verso il muro la
+      // camera specchiata scopre la città in un colpo solo e il main thread si
+      // blocca per ~1 s. Qui il frustum culling è disattivato su ogni
+      // renderable, quindi un singolo render copre l'intera scena.
+      reflectionAllowed = true;
+      if (floorReflection) floorReflection.reflector.forceUpdate = true;
+      renderPipeline.render(0, 0);
     } catch (error) {
       console.warn('VIBE shader warmup skipped', error);
     } finally {
@@ -4378,6 +4465,9 @@
     renderPipeline.reset();
     atmosphereSystem.reset();
     weatherSystem.reset();
+    // Il teletrasporto allo spawn non deve mostrare la reflection dell'ultima
+    // posizione: il prossimo frame ne renderizza una nuova.
+    reflectionScheduler.reset();
 
     gameState.health = CONFIG.maxHealth;
     gameState.shield = CONFIG.maxShield;
@@ -4483,8 +4573,120 @@
   let ammoDropTimer = 10;
   let frameErrorCount = 0;
   let degradedNoticeShown = false;
+  // Soglia oltre la quale un frame resta a schermo abbastanza da rendere
+  // visibile una reflection non allineata. Allineata a SLOW_FRAME_MS dello
+  // scheduler: serve solo alla diagnostica, non alla decisione.
+  const SLOW_FRAME_REPORT_MS = 40;
+  // Induce un hitch reale dentro un frame: è l'unico modo di verificare in
+  // automatico il sintomo segnalato senza dipendere da una GPU lenta.
+  let injectedStallMs = 0;
+
+  // Fase 0 del piano performance: contatori leggibili dal visual checker. Sono
+  // attivi solo con ?visualTest=... (visualDebug), così il percorso di gioco
+  // normale non paga nulla e nessun contatore resta appeso a window in
+  // produzione. drawCalls è azzerato dal renderer a ogni frame, quindi va letto
+  // subito dopo il render.
+  const makeDiagnostics = () => ({
+    frames: 0,
+    drawCalls: 0,
+    drawCallsTotal: 0,
+    drawCallsPeak: 0,
+    drawCallsMin: Number.POSITIVE_INFINITY,
+    // Baseline del contatore globale: così azzerare la finestra di misura dà un
+    // delta e non un cumulativo dall'avvio.
+    reflectionRendersBase: reflectionRenderCount,
+    reflectionRenders: 0,
+    reflectionWidth: 0,
+    reflectionHeight: 0,
+    lastFrameMs: 0,
+    maxFrameMs: 0,
+    // Pipeline e programmable stage vivi. La chiave della cache delle pipeline
+    // include il formato colore del render context, quindi la render target
+    // HalfFloat del reflector ne richiede di proprie: contarle è il modo
+    // indipendente dall'adapter per vedere se una compilazione avviene in gioco
+    // invece che durante il warmup.
+    pipelines: 0,
+    programs: 0,
+    pipelinesCreatedInWindow: 0,
+    textures: 0,
+    texturesCreatedInWindow: 0,
+    // Violazioni dell'invariante che rende impossibile l'artefatto segnalato
+    // (frammenti di un fotogramma precedente sul pavimento): un frame lento che
+    // riusa una reflection presa da una posa percettibilmente diversa. Deve
+    // restare 0 in qualunque scenario.
+    staleReflectionFrames: 0,
+    slowFrames: 0
+  });
+  const diagnostics = visualDebug ? makeDiagnostics() : null;
+  if (diagnostics) {
+    window.__vibeDiagnostics = diagnostics;
+    // Il visual checker azzera la finestra di misura dopo il boot e il primo
+    // cambio profilo, così i frame di warmup non falsano medie e minimi.
+    window.__vibeResetDiagnostics = () => Object.assign(diagnostics, makeDiagnostics());
+    // Repro di difetti legati al punto di vista: sposta il corpo e la mira
+    // senza passare dall'input, così un test headless può raggiungere quote e
+    // angolazioni che a mano richiedono un salto perfetto.
+    window.__vibeTeleport = (x, y, z, nextYaw, nextPitch) => {
+      playerBody.position.set(x, y, z);
+      playerBody.velocity.set(0, 0, 0);
+      markBodyAabbDirty(playerBody);
+      if (Number.isFinite(nextYaw)) yaw = nextYaw;
+      if (Number.isFinite(nextPitch)) pitch = nextPitch;
+    };
+    // Forza un cambio di tier lungo il percorso reale (applyProfile), che è
+    // quello che in gioco scatta da updateFPS quando gli FPS restano bassi.
+    window.__vibeStall = ms => { injectedStallMs = Math.max(0, Number(ms) || 0); };
+    window.__vibeForceTier = tier => {
+      graphicsManager.mode = 'auto';
+      graphicsManager.autoTier = tier === 'autoLow' ? 'autoLow' : 'autoHigh';
+      graphicsManager.applyCurrent(false);
+    };
+  }
+
+  function recordDiagnostics(frameStartedAt) {
+    const drawCalls = renderer.info.render.drawCalls;
+    diagnostics.frames++;
+    diagnostics.drawCalls = drawCalls;
+    diagnostics.drawCallsTotal += drawCalls;
+    diagnostics.drawCallsPeak = Math.max(diagnostics.drawCallsPeak, drawCalls);
+    diagnostics.drawCallsMin = Math.min(diagnostics.drawCallsMin, drawCalls);
+    // Invocazioni reali di ReflectorBaseNode.updateBefore, non decisioni dello
+    // scheduler: la pipeline attraversa la scena più volte per frame.
+    diagnostics.reflectionRenders = reflectionRenderCount - diagnostics.reflectionRendersBase;
+    // Il frame più lungo è la metrica del freeze: una compilazione di pipeline
+    // non compare nei draw call ma blocca il main thread.
+    const frameMs = performance.now() - frameStartedAt;
+    diagnostics.lastFrameMs = frameMs;
+    diagnostics.maxFrameMs = Math.max(diagnostics.maxFrameMs, frameMs);
+    // Un frame lento resta a schermo abbastanza da farsi notare: se in quel
+    // frame la reflection è stata riusata da una posa diversa, l'artefatto è
+    // visibile. Questo contatore è la verifica diretta del sintomo segnalato.
+    if (frameMs > SLOW_FRAME_REPORT_MS) {
+      diagnostics.slowFrames++;
+      if (!reflectionAllowed && reflectionScheduler.exceedsDrift(camera.position, yaw, pitch)) {
+        diagnostics.staleReflectionFrames++;
+      }
+    }
+    const pipelines = renderer._pipelines?.caches?.size ?? 0;
+    if (diagnostics.pipelines && pipelines > diagnostics.pipelines) {
+      diagnostics.pipelinesCreatedInWindow += pipelines - diagnostics.pipelines;
+    }
+    diagnostics.pipelines = pipelines;
+    diagnostics.programs = renderer.info.memory.programs;
+    const textures = renderer.info.memory.textures;
+    if (diagnostics.textures && textures > diagnostics.textures) {
+      diagnostics.texturesCreatedInWindow += textures - diagnostics.textures;
+    }
+    diagnostics.textures = textures;
+    const target = floorReflection?.reflector.renderTargets.values().next().value;
+    if (target) {
+      diagnostics.reflectionWidth = target.width;
+      diagnostics.reflectionHeight = target.height;
+    }
+  }
 
   function animate() {
+    const frameStartedAt = diagnostics ? performance.now() : 0;
     try {
     frameTimer.update();
     const rawDelta = frameTimer.getDelta();
@@ -4709,11 +4911,31 @@
       fpsFrames = 0; fpsTimer = 0;
     }
 
+    // Reflection del pavimento: `updateBeforeType = NONE` fa saltare il render
+    // della scena specchiata a NodeFrame.updateNode() senza toccare né il
+    // materiale né il grafo, quindi la render target conserva l'ultimo
+    // contenuto valido e non c'è alcun rischio di ricompilazione. Va deciso qui,
+    // a posa della camera già definitiva per il frame.
+    if (floorReflection) {
+      // `delta` è la durata del frame precedente: se siamo dentro un hitch, il
+      // frame corrente resterà a schermo a lungo e una reflection in ritardo si
+      // vedrebbe eccome. Lo scheduler in quel caso non salta.
+      reflectionAllowed = reflectionScheduler.shouldUpdate(camera.position, yaw, pitch, delta * 1000);
+    }
+    // Hitch iniettato DOPO la decisione sulla reflection: riproduce il caso
+    // peggiore, in cui il frame precedente era veloce e questo dura un secondo.
+    if (injectedStallMs > 0) {
+      const stallUntil = performance.now() + injectedStallMs;
+      injectedStallMs = 0;
+      while (performance.now() < stallUntil) { /* blocco volontario del main thread */ }
+    }
+
     // Render WebGPU/TSL con GTAO, bloom, SMAA, grana, grading, shockwave e vignetta.
     // La posizione del giocatore non modifica mai né questo percorso né i
     // materiali illuminati dell'arena.
     renderPipeline.render(delta, elapsed);
     explosionSystem.finishWarmup();
+    if (diagnostics) recordDiagnostics(frameStartedAt);
     frameErrorCount = 0;
     } catch (error) {
       // Resilienza del motore: un errore isolato in un frame non deve uccidere
@@ -4721,6 +4943,12 @@
       // modo controllato invece di lasciare la pagina bloccata.
       frameErrorCount++;
       if (frameErrorCount === 1) console.error('VIBE frame error', error);
+      // Un frame fallito non deve lasciare la reflection congelata: il gate
+      // vive fuori dal try, quindi senza questo reset il render di fallback e i
+      // frame successivi continuerebbero a comporre l'ultimo contenuto valido
+      // della render target sopra una scena ormai diversa.
+      reflectionAllowed = true;
+      reflectionScheduler.reset();
       // Questo fallback riguarda errori della simulazione esterni alla pipeline;
       // gli errori post-processing vengono isolati e ritentati dal controller.
       accumulator = Math.min(accumulator, FIXED_STEP);

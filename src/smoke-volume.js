@@ -101,12 +101,32 @@ export class VolumetricSmokeSystem {
     // a terra finisce sotto il pavimento e il depth test scarterebbe l'intero
     // volume. DoubleSide invece comporrebbe il volume due volte dove entrambe le
     // facce passano. Da qui la commutazione per-puff, decisa sulla CPU in update().
-    this.material = this._buildMaterial(THREE.FrontSide);
-    this.materialInside = this._buildMaterial(THREE.BackSide);
-    // Warmup delle pipeline: due mesh a scala 0 restano nel render graph così la
-    // compilazione degli shader non cade sulla prima esplosione (stesso motivo
-    // per cui ExplosionSystem tiene le shockwave in scena con opacity 0).
-    this.warmupMeshes = [this.material, this.materialInside].map(material => {
+    // Entrambe le varianti di qualità sono costruite ORA, non al cambio di
+    // profilo. Il numero di passi del raymarch finisce nel corpo dello shader
+    // (Loop non è dinamico), quindi cambiarlo richiede materiali diversi: farlo
+    // in setQuality compilava ~35 pipeline dentro un frame di gioco, cioè circa
+    // due secondi di stallo, proprio quando il tier automatico scende perché il
+    // frame rate è già in difficoltà. Quattro materiali (due lati × due
+    // qualità) costano memoria trascurabile e azzerano quello stallo.
+    this.variants = {
+      high: { steps: this.steps, shadowSteps: this.shadowSteps },
+      low: { steps: LOW_STEPS, shadowSteps: LOW_SHADOW_STEPS }
+    };
+    for (const variant of Object.values(this.variants)) {
+      variant.front = this._buildMaterial(THREE.FrontSide, variant.steps, variant.shadowSteps);
+      variant.back = this._buildMaterial(THREE.BackSide, variant.steps, variant.shadowSteps);
+    }
+    this.activeVariant = 'high';
+    this.material = this.variants.high.front;
+    this.materialInside = this.variants.high.back;
+    // Warmup delle pipeline: una mesh a scala 0 per materiale resta nel render
+    // graph così la compilazione degli shader non cade sulla prima esplosione né
+    // sul primo cambio di tier (stesso motivo per cui ExplosionSystem tiene le
+    // shockwave in scena con opacity 0).
+    this.warmupMeshes = [
+      this.variants.high.front, this.variants.high.back,
+      this.variants.low.front, this.variants.low.back
+    ].map(material => {
       const mesh = new THREE.Mesh(this._createPuffGeometry(), material);
       mesh.frustumCulled = false;
       mesh.scale.setScalar(0);
@@ -115,7 +135,7 @@ export class VolumetricSmokeSystem {
     });
   }
 
-  _buildMaterial(side) {
+  _buildMaterial(side, steps = this.steps, shadowSteps = this.shadowSteps) {
     // Centro e raggio arrivano dalla trasformazione dell'oggetto: mesh.position
     // e mesh.scale (uniform per-oggetto, zero attributi e zero upload).
     const center = modelPosition;
@@ -128,8 +148,8 @@ export class VolumetricSmokeSystem {
     const seed = attribute('aSeed', 'float');
     const noiseT = attribute('aNoise', 'float');
 
-    const STEPS = this.steps;
-    const SHADOW_STEPS = this.shadowSteps;
+    const STEPS = steps;
+    const SHADOW_STEPS = shadowSteps;
 
     const march = Fn(() => {
       const rayOrigin = cameraPosition;
@@ -237,25 +257,19 @@ export class VolumetricSmokeSystem {
     const budget = Number.isFinite(profile?.smokePuffs) ? profile.smokePuffs : 8;
     this.puffBudget = Math.max(0, Math.min(MAX_PUFFS, Math.round(budget)));
     this.maxActive = Math.max(this.puffBudget, Math.min(MAX_PUFFS, this.puffBudget * 2));
-    const targetSteps = this.puffBudget <= 3 ? LOW_STEPS : DEFAULT_STEPS;
-    const targetShadow = this.puffBudget <= 3 ? LOW_SHADOW_STEPS : DEFAULT_SHADOW_STEPS;
-    if (targetSteps !== this.steps || targetShadow !== this.shadowSteps) {
-      this.steps = targetSteps;
-      this.shadowSteps = targetShadow;
-      // Materiali devono essere ricompilati con il nuovo conteggio passi.
-      // Mantieni warmup meshes aggiornati.
-      const oldMat = this.material;
-      const oldInside = this.materialInside;
-      this.material = this._buildMaterial(THREE.FrontSide);
-      this.materialInside = this._buildMaterial(THREE.BackSide);
-      for (const puff of this.puffs) {
-        if (puff.mesh) puff.mesh.material = puff.inside ? this.materialInside : this.material;
-      }
-      for (const mesh of this.warmupMeshes) {
-        mesh.material = mesh.material === oldMat ? this.material : this.materialInside;
-      }
-      oldMat.dispose();
-      oldInside.dispose();
+    // Selezione fra varianti già compilate: nessuna costruzione di materiali e
+    // nessun dispose, quindi il cambio di tier non compila shader dentro un
+    // frame di gioco. I materiali di entrambe le qualità restano vivi.
+    const nextVariant = this.puffBudget <= 3 ? 'low' : 'high';
+    if (nextVariant === this.activeVariant) return;
+    this.activeVariant = nextVariant;
+    const variant = this.variants[nextVariant];
+    this.steps = variant.steps;
+    this.shadowSteps = variant.shadowSteps;
+    this.material = variant.front;
+    this.materialInside = variant.back;
+    for (const puff of this.puffs) {
+      if (puff.mesh) puff.mesh.material = puff.inside ? this.materialInside : this.material;
     }
   }
 
@@ -484,8 +498,10 @@ export class VolumetricSmokeSystem {
     for (const mesh of this.warmupMeshes) releaseGeometry(mesh);
     this.warmupMeshes.length = 0;
     this.baseGeometry.dispose();
-    this.material.dispose();
-    this.materialInside.dispose();
+    for (const variant of Object.values(this.variants)) {
+      variant.front.dispose();
+      variant.back.dispose();
+    }
     this.activeCount = 0;
   }
 }

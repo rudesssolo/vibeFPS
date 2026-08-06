@@ -97,6 +97,54 @@ test('il materiale commuta quando la camera entra e esce dal volume', () => {
   assert.equal(puff.mesh.material, system.material);
 });
 
+// Regressione: il cambio di tier automatico (autoHigh -> autoLow) avviene in
+// gioco, senza schermata di transizione, e proprio quando il frame rate è già
+// in difficoltà. Ricostruire i materiali lì compilava ~35 pipeline dentro un
+// frame: ~2 s di stallo misurati. Le due varianti devono essere già pronte.
+test('il cambio di qualità scambia materiali già compilati senza ricostruirli', () => {
+  const { system } = makeSystem({ smokePuffs: 8 });
+  const highFront = system.material;
+  const highBack = system.materialInside;
+  assert.equal(system.activeVariant, 'high');
+
+  system.setQuality({ smokePuffs: 2 });          // scende a autoLow
+  assert.equal(system.activeVariant, 'low');
+  assert.notEqual(system.material, highFront, 'la variante low deve essere un materiale distinto');
+  const lowFront = system.material;
+  const lowBack = system.materialInside;
+  assert.equal(lowFront.side, FrontSide);
+  assert.equal(lowBack.side, BackSide);
+
+  system.setQuality({ smokePuffs: 8 });          // risale a autoHigh
+  // Identità: gli stessi oggetti di prima, quindi nessuna ricompilazione.
+  assert.equal(system.material, highFront);
+  assert.equal(system.materialInside, highBack);
+  system.setQuality({ smokePuffs: 2 });
+  assert.equal(system.material, lowFront);
+  assert.equal(system.materialInside, lowBack);
+});
+
+test('entrambe le varianti restano nel render graph per il warmup al boot', () => {
+  const { system } = makeSystem();
+  // Una mesh a scala 0 per materiale: se una variante non è nel grafo, le sue
+  // pipeline si compilerebbero al primo cambio di tier.
+  assert.equal(system.warmupMeshes.length, 4);
+  const materials = new Set(system.warmupMeshes.map(mesh => mesh.material));
+  assert.equal(materials.size, 4);
+  assert.ok(materials.has(system.variants.high.front));
+  assert.ok(materials.has(system.variants.low.back));
+});
+
+test('i puff attivi seguono lo scambio di variante mantenendo il lato corretto', () => {
+  const { system } = makeSystem({ smokePuffs: 8 });
+  system.spawn({ ...basePuff, life: 10 });
+  const puff = system.puffs.find(entry => entry.active);
+  puff.inside = true;
+  puff.mesh.material = system.materialInside;
+  system.setQuality({ smokePuffs: 2 });
+  assert.equal(puff.mesh.material, system.variants.low.back);
+});
+
 test('setQuality a zero puff disattiva completamente il fumo', () => {
   const { system } = makeSystem({ smokePuffs: 0 });
   system.spawn({ ...basePuff });

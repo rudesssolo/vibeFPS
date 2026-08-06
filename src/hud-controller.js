@@ -1,5 +1,13 @@
 import { t } from './i18n.js';
 
+// Granularità della larghezza delle barre vitali, in punti percentuali.
+// Scudo e stamina si rigenerano di frazioni di punto per frame (~.2 e ~.32 a
+// 60 FPS), quindi un dirty-check sul valore grezzo non filtra nulla: la barra
+// veniva riscritta a ogni frame per una differenza sotto il pixel. A .5 il
+// passo vale ~1 px su una barra da 200 px, cioè sotto la soglia visibile,
+// e dimezza le scritture durante la rigenerazione.
+const BAR_STEP_PERCENT = .5;
+
 export class HudController {
   constructor() {
     this.ui = {
@@ -50,22 +58,10 @@ export class HudController {
     // evitando ~20 scritture ridondanti per frame nel loop di gioco.
     const last = this.last;
 
-    if (last.health !== health) {
-      this.ui.healthFill.style.width = `${health}%`;
-      this.ui.healthValue.textContent = String(Math.ceil(health)).padStart(3, '0');
-      last.health = health;
-    }
-    if (last.shield !== shield) {
-      const maxShield = this.maxShield > 0 ? this.maxShield : 75;
-      this.ui.shieldFill.style.width = `${shield / maxShield * 100}%`;
-      this.ui.shieldValue.textContent = String(Math.ceil(shield)).padStart(3, '0');
-      last.shield = shield;
-    }
-    if (last.stamina !== stamina) {
-      this.ui.staminaFill.style.width = `${stamina}%`;
-      this.ui.staminaValue.textContent = String(Math.ceil(stamina)).padStart(3, '0');
-      last.stamina = stamina;
-    }
+    const maxShield = this.maxShield > 0 ? this.maxShield : 75;
+    this._renderVitalBar(this.ui.healthFill, this.ui.healthValue, health, health, 'healthWidth', 'healthShown');
+    this._renderVitalBar(this.ui.shieldFill, this.ui.shieldValue, shield, shield / maxShield * 100, 'shieldWidth', 'shieldShown');
+    this._renderVitalBar(this.ui.staminaFill, this.ui.staminaValue, stamina, stamina, 'staminaWidth', 'staminaShown');
     // Vite: contatore + cuori. A vite piene si può perdere comunque la carry
     // (dirty-check) ma i cuori restano 3 accesi; il pickup è gestito in gioco.
     const lives = Math.max(0, Math.floor(state.lives ?? this.maxLives));
@@ -172,6 +168,29 @@ export class HudController {
 
   // Dopo un cambio lingua i testi dinamici vanno riscritti anche se i valori
   // numerici non sono cambiati: si azzera la cache del dirty-check.
+  /**
+   * Scrive una barra vitale confrontando ciò che finisce davvero nel DOM, non
+   * il valore in virgola mobile: il numero è l'intero mostrato (confronto
+   * esatto, nessuna differenza visiva) e la larghezza è quantizzata a
+   * BAR_STEP_PERCENT. Lo stato vive in `this.last`, quindi invalidateCache()
+   * lo azzera insieme al resto.
+   */
+  _renderVitalBar(fillElement, valueElement, value, percent, widthKey, shownKey) {
+    const last = this.last;
+    const clamped = Math.max(0, Math.min(100, percent));
+    const width = Math.round(clamped / BAR_STEP_PERCENT) * BAR_STEP_PERCENT;
+    if (last[widthKey] !== width) {
+      fillElement.style.width = `${width}%`;
+      last[widthKey] = width;
+    }
+    // Math.ceil senza allocare la stringa nel caso comune (valore invariato).
+    const shown = Math.ceil(value);
+    if (last[shownKey] !== shown) {
+      valueElement.textContent = String(shown).padStart(3, '0');
+      last[shownKey] = shown;
+    }
+  }
+
   invalidateCache() {
     this.last = {};
   }

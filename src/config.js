@@ -4,6 +4,17 @@ export const QUALITY_PROFILES = Object.freeze({
     pixelRatio: 1.25,
     shadowSize: 1024,
     reflectorSize: 512,
+    // Frame tra due render della reflection del pavimento. Il reflector
+    // renderizza l'intera scena da una camera specchiata: è una traversata
+    // completa per frame. L'asfalto miscela il risultato sfocato a strength .34,
+    // quindi una reflection a 30 Hz è indistinguibile mentre dimezza il costo.
+    reflectorInterval: 2,
+    // Anisotropia massima delle texture. È letta UNA volta al boot: cambiarla a
+    // runtime richiederebbe needsUpdate su ogni texture, cioè un re-upload, e i
+    // passaggi autoHigh↔autoLow avvengono in gioco senza schermata di
+    // transizione. Il valore di autoLow diventerà effettivo se il §16 del piano
+    // (seed del profilo iniziale) verrà implementato.
+    anisotropy: 8,
     gtaoSamples: 8,
     facadeResolution: 1024,
     particleScale: 0.72,
@@ -22,6 +33,8 @@ export const QUALITY_PROFILES = Object.freeze({
     pixelRatio: 1,
     shadowSize: 512,
     reflectorSize: 256,
+    reflectorInterval: 4,
+    anisotropy: 4,
     gtaoSamples: 0,
     facadeResolution: 1024,
     particleScale: 0.48,
@@ -37,6 +50,8 @@ export const QUALITY_PROFILES = Object.freeze({
     pixelRatio: 1.75,
     shadowSize: 1024,
     reflectorSize: 1024,
+    reflectorInterval: 2,
+    anisotropy: 16,
     gtaoSamples: 12,
     facadeResolution: 2048,
     particleScale: 1,

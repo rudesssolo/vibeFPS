@@ -3,7 +3,10 @@ export const QUALITY_PROFILES = Object.freeze({
     name: 'AUTO // HIGH',
     pixelRatio: 1.25,
     shadowSize: 1024,
-    reflectorSize: 512,
+    // Altezza in pixel della render target del riflesso (non il lato lungo:
+    // su uno schermo largo il lato lungo è la larghezza e farebbe collassare
+    // la risoluzione verticale, che è quella che si vede su un pavimento).
+    reflectorHeight: 480,
     // Frame tra due render della reflection del pavimento. Il reflector
     // renderizza l'intera scena da una camera specchiata: è una traversata
     // completa per frame. L'asfalto miscela il risultato sfocato a strength .34,
@@ -32,7 +35,7 @@ export const QUALITY_PROFILES = Object.freeze({
     name: 'AUTO // BALANCED',
     pixelRatio: 1,
     shadowSize: 512,
-    reflectorSize: 256,
+    reflectorHeight: 270,
     reflectorInterval: 4,
     anisotropy: 4,
     gtaoSamples: 0,
@@ -49,7 +52,7 @@ export const QUALITY_PROFILES = Object.freeze({
     name: 'ULTRA',
     pixelRatio: 1.75,
     shadowSize: 1024,
-    reflectorSize: 1024,
+    reflectorHeight: 1080,
     reflectorInterval: 2,
     anisotropy: 16,
     gtaoSamples: 12,

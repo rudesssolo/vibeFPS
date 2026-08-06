@@ -190,7 +190,7 @@ Cosa è stato applicato:
 - l'intervallo è un parametro di profilo: 2 / 4 / 2 per autoHigh / autoLow / ultra — [src/config.js:11](src/config.js#L11);
 - `reflectionScheduler.reset()` in resetLevel: dopo un teletrasporto il frame successivo rigenera la reflection — [src/main.js:4470](src/main.js#L4470).
 
-Bug latente trovato durante l'intervento: `resolutionScale` esiste solo su `ReflectorBaseNode`, non sul `ReflectorNode` restituito da `reflector()`. La riga che lo assegnava creava una proprietà mai letta, quindi **`reflectorSize` non ha mai avuto effetto** e la render target è sempre rimasta al `.3` del costruttore su tutti e tre i profili. Corretto in [src/main.js:2153](src/main.js#L2153); a 1080p la target passa da 576×324 a 256×144 su autoLow (5× meno pixel), da 720×405 a 512×288 su autoHigh, e resta invariata su ultra.
+Bug latente trovato durante l'intervento: `resolutionScale` esiste solo su `ReflectorBaseNode`, non sul `ReflectorNode` restituito da `reflector()`. La riga che lo assegnava creava una proprietà mai letta, quindi **`reflectorSize` non ha mai avuto effetto** e la render target è sempre rimasta al `.3` del costruttore su tutti e tre i profili. Corretto in [src/main.js:2150](src/main.js#L2150). La prima versione della correzione ancorava però il budget al lato lungo, con un effetto collaterale sugli schermi larghi: vedi §4.7.
 
 Misure (adapter software, quindi indicative sui rapporti e non sui tempi):
 
@@ -209,6 +209,26 @@ Deviazioni deliberate dal §4.2:
 - la deriva della camera è misurata rispetto alla posa dell'ultimo render, non al frame precedente: un flick rapido accumula e forza da solo un refresh anticipato, e un teletrasporto non può mostrare la reflection di un altro punto dell'arena.
 
 Restano aperti: mipmap solo in ultra ed esclusione degli oggetti lontani dalla camera riflessa.
+
+### 4.7 Budget ancorato all'altezza, non al lato lungo
+
+Segnalato dall'utente guardando il pavimento: riflessi visibilmente approssimati su autoHigh.
+
+La prima versione del §4.4 calcolava `resolutionScale = reflectorSize / lato_lungo`. Su uno schermo largo il lato lungo è la larghezza, quindi era la larghezza a fissare la scala e la **risoluzione verticale collassava** — ed è quella che determina la definizione percepita di un riflesso su un pavimento. Su un 3440×1440 il budget di 512 dava **512×214**, contro 512×288 a 1920×1080 con lo stesso profilo: la qualità dipendeva dall'aspect ratio.
+
+Il parametro è stato rinominato in **`reflectorHeight`** — altezza in pixel della render target — e ancorato a `bufferHeight`, così il risultato è indipendente dall'aspect ratio. Scala: 270 / 480 / 1080 per autoLow / autoHigh / ultra (ultra alzato a 1080 su richiesta, dopo aver verificato che 480 su autoHigh regge sul frame rate reale).
+
+Effetto su 3440×1440:
+
+| Profilo | `.3` accidentale | ancorato al lato lungo | ancorato all'altezza |
+|---|---|---|---|
+| autoLow | 1032×432 | 256×107 | **645×270** |
+| autoHigh | 1032×432 | 512×214 | **1147×480** |
+| ultra | 1032×432 | 1024×429 | **2580×1080** |
+
+Riferimenti: [src/main.js:2145](src/main.js#L2145), [src/config.js:9](src/config.js#L9).
+
+Costo: il pass reflection passa da ~110k a ~550k pixel su autoHigh a 3440×1440, e su ultra da ~440k a **2,79 Mpx** (il 56% dell'area del pass principale, ~28 MB di render target con mipmap). È fill-rate, quindi non compare nei contatori di draw call e va verificato sul frame rate reale. Mitigazioni già in essere: il throttle salta il render quando la camera è ferma (§4.5) e il cambio di tier non costa più due secondi (§4.6). Se il frame rate ne risente, `reflectorHeight` è la manopola diretta: 360 su autoHigh resta nettamente meglio di 214 al ~55% del costo.
 
 ### 4.5 Regressione corretta: staleness contata in frame
 

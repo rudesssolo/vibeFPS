@@ -93,7 +93,7 @@ test('ogni profilo qualità espone tutti i parametri consumati dai sistemi', () 
   // ExplosionSystem.explode() ricava il numero di puff di fumo da smokePuffs:
   // se un profilo lo omettesse, il fumo delle esplosioni spariva in silenzio.
   const required = [
-    'name', 'pixelRatio', 'shadowSize', 'reflectorSize', 'reflectorInterval', 'anisotropy',
+    'name', 'pixelRatio', 'shadowSize', 'reflectorHeight', 'reflectorInterval', 'anisotropy',
     'gtaoSamples', 'facadeResolution', 'particleScale', 'smokePuffs', 'dynamicLights'
   ];
   const keys = Object.keys(QUALITY_PROFILES);
@@ -120,6 +120,11 @@ test('ogni profilo qualità espone tutti i parametri consumati dai sistemi', () 
   // restare >= 1 e crescere con la qualità, altrimenti ultra campionerebbe
   // peggio di autoHigh.
   for (const key of keys) assert.ok(QUALITY_PROFILES[key].anisotropy >= 1, `${key}.anisotropy < 1`);
+  // reflectorHeight è l'altezza in pixel della render target del riflesso e
+  // deve crescere con la qualità: ancorarla al lato lungo faceva collassare
+  // la risoluzione verticale sugli schermi larghi (3440×1440 → 214px).
+  assert.ok(QUALITY_PROFILES.autoLow.reflectorHeight < QUALITY_PROFILES.autoHigh.reflectorHeight);
+  assert.ok(QUALITY_PROFILES.autoHigh.reflectorHeight < QUALITY_PROFILES.ultra.reflectorHeight);
   assert.ok(QUALITY_PROFILES.autoLow.anisotropy <= QUALITY_PROFILES.autoHigh.anisotropy);
   assert.ok(QUALITY_PROFILES.autoHigh.anisotropy <= QUALITY_PROFILES.ultra.anisotropy);
 });

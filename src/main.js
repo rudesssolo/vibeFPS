@@ -2131,18 +2131,23 @@
   function updateReflectionQuality(profile) {
     reflectionScheduler.setInterval(profile.reflectorInterval);
     if (!floorReflection) return;
-    // Cambiando profilo cambia anche reflectorSize, quindi RenderTarget.setSize()
+    // Cambiando profilo cambia anche reflectorHeight, quindi RenderTarget.setSize()
     // dispone e ricrea le texture GPU della reflection: il contenuto precedente
     // non esiste più. Senza questo reset il throttle potrebbe comporre quella
     // target appena buttata via per uno o due frame.
     reflectionScheduler.reset();
     renderer.getDrawingBufferSize(reflectionBufferSize);
-    const longestSide = Math.max(1, reflectionBufferSize.x, reflectionBufferSize.y);
+    // Il budget è ancorato all'ALTEZZA, non al lato lungo. Su un pavimento la
+    // definizione percepita del riflesso dipende dalla risoluzione verticale, e
+    // ancorarsi al lato lungo la faceva collassare sugli schermi larghi: su un
+    // 3440×1440 un budget di 512 dava 512×214, contro 512×288 a 1920×1080. Con
+    // l'altezza il risultato non dipende più dall'aspect ratio.
+    const referenceSide = Math.max(1, reflectionBufferSize.y);
     // `resolutionScale` vive sul ReflectorBaseNode, non sul ReflectorNode
     // restituito da reflector(): scriverlo sul nodo esterno creava una proprietà
-    // che nessuno legge, quindi reflectorSize non ha mai avuto effetto e la
-    // render target restava al .3 del costruttore su tutti i profili.
-    floorReflection.reflector.resolutionScale = Math.min(1, profile.reflectorSize / longestSide);
+    // che nessuno legge, quindi il budget non ha mai avuto effetto e la render
+    // target restava al .3 del costruttore su tutti i profili.
+    floorReflection.reflector.resolutionScale = Math.min(1, profile.reflectorHeight / referenceSide);
   }
 
   const graphicsManager = new GraphicsManager({

@@ -374,7 +374,21 @@ export class WaterSystem {
     // uv.x porta il valore della maschera al vertice.
     const wet = uv().x;
 
-    let surface = vec3(.07, .15, .2);
+    // Riflettanza secondo Fresnel (approssimazione di Schlick): l'acqua riflette
+    // il ~3% a incidenza normale e quasi tutto a incidenza radente. Prima il
+    // riflesso era mostrato al 210% a QUALUNQUE angolo — uno specchio che
+    // amplifica, più luminoso della sorgente. Da lì il difetto: l'immagine
+    // speculare di un oggetto alto, che uno specchio sposta di 2h/tan θ, non si
+    // leggeva come riflesso ma come una copia solida fuori prospettiva.
+    //
+    // L'esponente è 4 invece dei 5 di Schlick: ammorbidisce la curva quel tanto
+    // che basta perché una pozza si veda anche da mezz'angolo, senza tornare
+    // allo specchio piatto di prima. È una scelta dichiarata, non un errore.
+    const reflectance = float(.03).add(float(.97).mul(grazing.pow(4)));
+
+    // Corpo dell'acqua: quel che si vede guardando a piombo, dove il riflesso
+    // quasi non c'è.
+    let surface = vec3(.05, .11, .15);
     if (reflectorNode) {
       // Il riflesso si campiona PIEGATO dalla normale: quando un'onda passa, la
       // normale si inclina e l'immagine riflessa si spezza. È così che il moto
@@ -382,24 +396,20 @@ export class WaterSystem {
       // a schermo non si nota.
       const bend = normalView.xy.mul(.22);
       const reflected = reflectorNode.sample(screenUV.flipX().add(bend)).rgb;
-      // Nitido e più forte del pavimento: l'asfalto riflette sfocato a .34, la
-      // pozza deve staccare da quello o si mimetizza — che è esattamente il
-      // difetto della versione precedente.
-      surface = reflected.mul(vec3(.72, .88, 1)).mul(2.1).add(vec3(.02, .05, .07));
+      // Mai più luminoso della sorgente: il fattore resta sotto 1.
+      surface = surface.add(reflected.mul(vec3(.78, .92, 1)).mul(reflectance));
     }
-    // Nessun alone sul contorno. Il "menisco" luminoso che c'era prima si
-    // leggeva come un anello bianco disegnato attorno alla pozza: l'acqua vera
-    // non ha un bordo che emette luce, ha solo meno spessore — e lo spessore lo
-    // dice già l'opacità, che sfuma sulla fascia esterna.
     material.colorNode = surface;
-    // Una pozza COPRE l'asfalto: al centro è quasi opaca, si assottiglia solo
-    // sul bordo. Con .3 di base era un velo trasparente indistinguibile dal
-    // pavimento sotto, che mostra lo stesso riflesso.
     // Da zero sul bordo geometrico a piena opacità dentro l'acqua: la
     // dissolvenza occupa tutta la fascia, quindi il contorno è un gradiente e
     // non un gradino.
     const depth = smoothstep(float(PUDDLE_THRESHOLD - PUDDLE_FEATHER), float(PUDDLE_THRESHOLD + .08), wet);
-    material.opacityNode = depth.mul(clamp(grazing.mul(.24).add(.76), 0, 1));
+    // L'opacità segue l'angolo come la riflettanza. A piombo la lamina è in
+    // gran parte trasparente e sotto si vede l'asfalto col suo riflesso sfocato;
+    // radente diventa opaca e specchiante. Tenerla a .76 fissa significava
+    // coprire l'asfalto con un corpo d'acqua scuro proprio dove il riflesso non
+    // c'è: macchie spente ai piedi del giocatore.
+    material.opacityNode = depth.mul(clamp(grazing.mul(.55).add(.35), 0, 1));
     return material;
   }
 

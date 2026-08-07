@@ -123,6 +123,50 @@ export function computePuddleMask(size = 128, coverage = .52, seed = 4711) {
 }
 
 /**
+ * Toglie dalla maschera l'impronta degli ostacoli appoggiati a terra.
+ *
+ * Un oggetto solido sposta l'acqua: sotto un pilastro o una piattaforma non c'è
+ * pozzanghera. Senza questo la lamina passava sotto il jump pad, e la piastra
+ * luminosa 29 cm più in alto ci si specchiava dentro — un riflesso corretto per
+ * uno specchio (spostato di 2h/tan θ, cioè oltre due metri a 15°) ma assurdo
+ * per un oggetto poggiato a terra, che sembrava sdoppiato.
+ *
+ * La sottrazione avviene sulla MASCHERA, non sulla geometria: così geometria,
+ * `isPuddle` e le increspature restano d'accordo senza doverlo ricordare in tre
+ * posti diversi.
+ *
+ * @param {Float32Array} mask modificata in loco
+ * @param {Array<{x:number,z:number,radius?:number,halfX?:number,halfZ?:number,angle?:number}>} obstacles
+ */
+export function carveObstacles(mask, maskSize, worldSize, obstacles = [], margin = .18) {
+  if (!obstacles.length) return mask;
+  for (let py = 0; py < maskSize; py++) {
+    for (let px = 0; px < maskSize; px++) {
+      const x = ((px + .5) / maskSize - .5) * worldSize;
+      const z = ((py + .5) / maskSize - .5) * worldSize;
+      for (const o of obstacles) {
+        let dentro;
+        if (o.radius !== undefined) {
+          const r = o.radius + margin;
+          dentro = (x - o.x) ** 2 + (z - o.z) ** 2 <= r * r;
+        } else {
+          // Rettangolo eventualmente ruotato: si porta il punto nel sistema
+          // dell'ostacolo invece di approssimarlo con il suo AABB.
+          const angle = o.angle || 0;
+          const dx = x - o.x;
+          const dz = z - o.z;
+          const lx = dx * Math.cos(-angle) - dz * Math.sin(-angle);
+          const lz = dx * Math.sin(-angle) + dz * Math.cos(-angle);
+          dentro = Math.abs(lx) <= o.halfX + margin && Math.abs(lz) <= o.halfZ + margin;
+        }
+        if (dentro) { mask[py * maskSize + px] = 0; break; }
+      }
+    }
+  }
+  return mask;
+}
+
+/**
  * Altezza dell'onda di UNA sorgente, a `distance` metri dall'impatto e `age`
  * secondi dopo. Esportata perché è la formula che governa sia il movimento dei
  * vertici sia i test: c'è un solo posto in cui è scritta.
@@ -173,7 +217,7 @@ export function rippleSlope(distance, age, amplitude) {
  * avvenga davvero.
  */
 export class WaterSystem {
-  constructor({ scene, size, y = .05, reflectorNode = null, seed = 4711, maskSize = 160, cell = .28 }) {
+  constructor({ scene, size, y = .05, reflectorNode = null, seed = 4711, maskSize = 160, cell = .28, obstacles = [] }) {
     this.scene = scene;
     this.size = size;
     this.seed = seed;
@@ -184,7 +228,8 @@ export class WaterSystem {
     this.rippleGain = 1;
     this.dirty = false;
 
-    this.mask = computePuddleMask(maskSize, this.coverage, seed);
+    this.obstacles = obstacles;
+    this.mask = carveObstacles(computePuddleMask(maskSize, this.coverage, seed), maskSize, size, obstacles);
     this.slots = Array.from({ length: RIPPLE_SLOTS }, () => ({ x: 0, z: 0, start: -999, amplitude: 0 }));
 
     this.material = this._buildMaterial(reflectorNode);
@@ -470,7 +515,7 @@ export class WaterSystem {
     const coverage = Math.max(0, Math.min(1, profile?.city?.puddleCoverage ?? .52));
     if (Math.abs(coverage - this.coverage) < .001) return;
     this.coverage = coverage;
-    this.mask = computePuddleMask(this.maskSize, coverage, this.seed);
+    this.mask = carveObstacles(computePuddleMask(this.maskSize, coverage, this.seed), this.maskSize, this.size, this.obstacles);
     this._rebuildGeometry();
   }
 

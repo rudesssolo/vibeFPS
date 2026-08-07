@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  WaterSystem, computePuddleMask, rippleHeight,
+  WaterSystem, computePuddleMask, rippleHeight, carveObstacles,
   RIPPLE_SLOTS, RIPPLE_LIFE, RIPPLE_SPEED, PUDDLE_THRESHOLD, PUDDLE_FEATHER
 } from '../src/water-system.js';
 import { QUALITY_PROFILES } from '../src/config.js';
@@ -145,6 +145,48 @@ test('la pozza è geometria: triangoli solo dove c\'è acqua, e seguono la coper
   const asciutto = make();
   asciutto.setQuality({ city: { puddleCoverage: 0, puddleRipples: 1 } });
   assert.equal(asciutto.triangleCount, 0);
+
+  // Un oggetto solido appoggiato a terra sposta l'acqua. Senza questo la lamina
+  // passava sotto il jump pad, e la sua piastra luminosa 29 cm più in alto ci si
+  // specchiava dentro: un riflesso corretto per uno specchio — spostato di
+  // 2h/tan θ, oltre due metri a 15° — ma assurdo per un oggetto poggiato a terra.
+  const ostacoli = [
+    { x: -8, z: -6, halfX: 1.4, halfZ: 1.4 },   // jump pad
+    { x: 3, z: 9, radius: .6 },                 // pilastro
+    { x: 0, z: 4, halfX: 1.6, halfZ: .2 },      // copertura, sottile e allungata
+    { x: 6, z: -3, halfX: 1.5, halfZ: .35, angle: Math.PI / 4 }  // ruotata attorno a Y
+  ];
+  const scavata = new WaterSystem({ scene: scene(), size: 44, maskSize: 128, obstacles: ostacoli });
+  scavata.setQuality(QUALITY_PROFILES.ultra);
+  const dentro = (o, x, z) => {
+    if (o.radius !== undefined) return (x - o.x) ** 2 + (z - o.z) ** 2 <= o.radius ** 2;
+    const a = o.angle || 0;
+    const dx = x - o.x;
+    const dz = z - o.z;
+    const lx = dx * Math.cos(-a) - dz * Math.sin(-a);
+    const lz = dx * Math.sin(-a) + dz * Math.cos(-a);
+    return Math.abs(lx) <= o.halfX && Math.abs(lz) <= o.halfZ;
+  };
+  let campioni = 0;
+  for (const o of ostacoli) {
+    const r = o.radius !== undefined ? o.radius : Math.max(o.halfX, o.halfZ);
+    for (let dx = -r; dx <= r; dx += .1) for (let dz = -r; dz <= r; dz += .1) {
+      const x = o.x + dx;
+      const z = o.z + dz;
+      if (!dentro(o, x, z)) continue;
+      campioni++;
+      assert.equal(scavata.isPuddle(x, z), false, `acqua dentro un ostacolo a ${x.toFixed(2)},${z.toFixed(2)}`);
+    }
+  }
+  assert.ok(campioni > 500, 'lo scavo non è stato campionato abbastanza');
+  // ...e senza ostacoli quelle stesse aree tornano bagnabili, o il test
+  // passerebbe anche con una maschera vuota.
+  const senzaScavo = make();
+  senzaScavo.setQuality(QUALITY_PROFILES.ultra);
+  assert.ok(ostacoli.some(o => senzaScavo.isPuddle(o.x, o.z)),
+    'nessun ostacolo cadeva su una pozza: lo scavo non è dimostrato');
+  assert.ok(carveObstacles(new Float32Array(16).fill(1), 4, 8, []).every(v => v === 1),
+    'senza ostacoli la maschera non va toccata');
 
   const scala = make();
   scala.setQuality({ city: { puddleCoverage: .2, puddleRipples: .5 } });

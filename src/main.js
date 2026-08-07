@@ -652,6 +652,15 @@
   // Elenco di { body, mesh } da sincronizzare ad ogni frame
   const synced = [];
 
+  /**
+   * Impronte a terra dei corpi statici, raccolte mentre vengono creati.
+   *
+   * Servono a scavare le pozzanghere: un oggetto solido appoggiato a terra
+   * sposta l'acqua. Raccoglierle qui invece di ricopiarne le misure significa
+   * che un ostacolo aggiunto in seguito si toglie dall'acqua da solo.
+   */
+  const staticFootprints = [];
+
   function addBody(body, mesh, syncMesh = true) {
     world.addBody(body);
     if (mesh) {
@@ -662,6 +671,7 @@
   }
 
   function addStaticBox(x, y, z, sx, sy, sz, mesh) {
+    staticFootprints.push({ x, z, halfX: sx / 2, halfZ: sz / 2, top: y + sy / 2, bottom: y - sy / 2 });
     const body = new CANNON.Body({ mass: 0, material: matGround });
     body.addShape(new CANNON.Box(new CANNON.Vec3(sx / 2, sy / 2, sz / 2)));
     body.position.set(x, y, z);
@@ -776,17 +786,6 @@
   asphaltSkin.receiveShadow = true;
   if (floorReflection) asphaltSkin.add(floorReflection.target);
   scene.add(asphaltSkin);
-
-  // Lamina d'acqua sopra l'asfalto: dove la maschera è accesa ci sono pozze
-  // vere, con riflesso deformato dalle increspature. Riusa il reflector del
-  // pavimento invece di renderizzarne un secondo.
-  waterSystem = new WaterSystem({
-    scene,
-    size: floorSize,
-    y: .045,
-    reflectorNode: floorReflection,
-    seed: visualSeed
-  });
 
   // Corpo fisico del pavimento (senza mesh: il visual è il riflettore)
   addStaticBox(0, -0.5, 0, floorSize, 1, floorSize, null);
@@ -916,6 +915,7 @@
    * non trova una rotazione che nella scena non esiste.
    */
   function addStaticCylinder(x, y, z, radius, height, mesh, radiusTop = radius) {
+    staticFootprints.push({ x, z, radius: Math.max(radius, radiusTop), top: y + height / 2, bottom: y - height / 2 });
     const body = new CANNON.Body({ mass: 0, material: matGround });
     const upright = new CANNON.Quaternion();
     // -90° attorno a X manda +Z su +Y: il primo raggio resta quello superiore.
@@ -928,6 +928,12 @@
   }
 
   function addStaticBoxRotated(x, y, z, sx, sy, sz, axis, angle, mesh) {
+    // L'angolo conta solo se la rotazione è attorno a Y: attorno a X o Z il
+    // corpo si inclina ma la sua ombra a terra resta allineata agli assi.
+    staticFootprints.push({
+      x, z, halfX: sx / 2, halfZ: sz / 2,
+      angle: axis[1] ? angle : 0, top: y + sy / 2, bottom: y - sy / 2
+    });
     const body = new CANNON.Body({ mass: 0, material: matGround });
     body.addShape(new CANNON.Box(new CANNON.Vec3(sx / 2, sy / 2, sz / 2)));
     body.position.set(x, y, z);
@@ -1058,6 +1064,26 @@
 
   // Corpo fisico del jump pad (invariato)
   const padBody = addStaticBox(CONFIG.padPos.x, CONFIG.padHeight / 2, CONFIG.padPos.z, CONFIG.padSize, CONFIG.padHeight, CONFIG.padSize, null);
+
+  // Lamina d'acqua sopra l'asfalto: dove la maschera è accesa ci sono pozze
+  // vere, con riflesso deformato dalle increspature. Riusa il reflector del
+  // pavimento invece di renderizzarne un secondo.
+  //
+  // Costruita QUI e non subito dopo l'asfalto: le serve l'elenco degli ostacoli
+  // già a terra, per scavarci dentro le pozze. Un oggetto solido sposta l'acqua,
+  // e senza questo la lamina passava sotto il jump pad — con la piastra
+  // luminosa 29 cm più in alto che ci si specchiava dentro, spostata di oltre
+  // due metri come impone la geometria di uno specchio, e sembrava sdoppiata.
+  waterSystem = new WaterSystem({
+    scene,
+    size: floorSize,
+    y: .045,
+    reflectorNode: floorReflection,
+    seed: visualSeed,
+    // Solo ciò che sta davvero sul pavimento e sporge dall'acqua: la lastra del
+    // terreno ha la sommità a quota zero e va esclusa, o cancellerebbe tutto.
+    obstacles: staticFootprints.filter(f => f.top > .05 && f.bottom < 1.4)
+  });
 
   // Strisce LED neon lungo i muri
   (function createNeonStrips() {

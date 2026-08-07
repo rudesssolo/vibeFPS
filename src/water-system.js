@@ -40,6 +40,19 @@ export const PUDDLE_THRESHOLD = .3;
 export const PUDDLE_FEATHER = .12;
 
 /**
+ * Riflettanza dell'acqua a incidenza normale, e durezza della curva di Fresnel.
+ *
+ * Sopra i valori fisici dell'acqua (.02 con esponente 5 di Schlick): qui
+ * l'asfalto riflette a `GRAPHICS.reflector.strength` e la pozza deve staccare
+ * da quello **a ogni angolo**, non solo di scorcio. `WATER_R0` è quindi il
+ * pavimento della curva e va tenuto sopra la riflettanza dell'asfalto — con .12
+ * l'acqua guardata a piombo rifletteva meno del pavimento su cui poggia.
+ * È un'esagerazione dichiarata, non un errore di modello.
+ */
+export const WATER_R0 = .2;
+export const WATER_FRESNEL_EXPONENT = 2.5;
+
+/**
  * Maschera delle pozzanghere: chiazze morbide sovrapposte, deterministica.
  *
  * @returns {Float32Array} un valore 0..1 per cella, riga per riga
@@ -384,18 +397,22 @@ export class WaterSystem {
     // L'esponente è 4 invece dei 5 di Schlick: ammorbidisce la curva quel tanto
     // che basta perché una pozza si veda anche da mezz'angolo, senza tornare
     // allo specchio piatto di prima. È una scelta dichiarata, non un errore.
-    const reflectance = float(.03).add(float(.97).mul(grazing.pow(4)));
+    const reflectance = float(WATER_R0).add(float(1 - WATER_R0).mul(grazing.pow(WATER_FRESNEL_EXPONENT)));
 
     // Corpo dell'acqua: quel che si vede guardando a piombo, dove il riflesso
     // quasi non c'è.
-    let surface = vec3(.05, .11, .15);
+    let surface = vec3(.04, .09, .12);
     if (reflectorNode) {
       // Il riflesso si campiona PIEGATO dalla normale: quando un'onda passa, la
       // normale si inclina e l'immagine riflessa si spezza. È così che il moto
       // dell'acqua si vede — muovere i vertici di qualche centimetro, da solo,
       // a schermo non si nota.
-      const bend = normalView.xy.mul(.22);
-      const reflected = reflectorNode.sample(screenUV.flipX().add(bend)).rgb;
+      // Lo scostamento resta piccolo E la uv finale viene clampata. Con .22 e
+      // normali inclinate fino a .96 l'offset arrivava al 22% dello schermo:
+      // il campionamento usciva dalla texture del riflesso e tornava il colore
+      // del bordo o nero, a chiazze poligonali lungo gli spigoli dei triangoli.
+      const bend = normalView.xy.mul(.045);
+      const reflected = reflectorNode.sample(screenUV.flipX().add(bend).clamp(0, 1)).rgb;
       // Mai più luminoso della sorgente: il fattore resta sotto 1.
       surface = surface.add(reflected.mul(vec3(.78, .92, 1)).mul(reflectance));
     }

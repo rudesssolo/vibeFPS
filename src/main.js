@@ -265,7 +265,10 @@
     reflectiveFloor: true,
     // Il reflector viene sfocato tramite mipmap prima di essere miscelato con
     // l'asfalto: riflessi bagnati leggibili, ma mai da superficie a specchio.
-    reflector: { strength: 0.34, blur: 0.32 }
+    // L'asfalto è ruvido e bagnato, non uno specchio: riflette poco e sfocato.
+    // Prima era a .34, cioè PIÙ della pozzanghera a distanza ravvicinata —
+    // l'acqua deve essere la superficie più riflettente della scena.
+    reflector: { strength: 0.18, blur: 0.45 }
   };
 
   // Gruppi di collisione (bitmask)

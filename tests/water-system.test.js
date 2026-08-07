@@ -2,9 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   WaterSystem, computePuddleMask, rippleHeight, carveObstacles,
-  RIPPLE_SLOTS, RIPPLE_LIFE, RIPPLE_SPEED, PUDDLE_THRESHOLD, PUDDLE_FEATHER
+  RIPPLE_SLOTS, RIPPLE_LIFE, RIPPLE_SPEED, PUDDLE_THRESHOLD, PUDDLE_FEATHER,
+  WATER_R0, WATER_FRESNEL_EXPONENT
 } from '../src/water-system.js';
 import { QUALITY_PROFILES } from '../src/config.js';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const scene = () => ({ add() {}, remove() {} });
 const make = () => new WaterSystem({ scene: scene(), size: 44, maskSize: 128 });
@@ -187,6 +190,23 @@ test('la pozza è geometria: triangoli solo dove c\'è acqua, e seguono la coper
     'nessun ostacolo cadeva su una pozza: lo scavo non è dimostrato');
   assert.ok(carveObstacles(new Float32Array(16).fill(1), 4, 8, []).every(v => v === 1),
     'senza ostacoli la maschera non va toccata');
+
+  // L'acqua dev'essere la superficie più riflettente della scena, a OGNI angolo.
+  // La curva di Fresnel parte da WATER_R0 e cresce, quindi basta confrontare il
+  // pavimento della curva con la riflettanza piatta dell'asfalto.
+  const main = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'src', 'main.js'), 'utf8');
+  const asfalto = main.match(/reflector: \{ strength: ([\d.]+), blur: ([\d.]+) \}/);
+  assert.ok(asfalto, 'la configurazione del reflector del pavimento è cambiata forma');
+  assert.ok(WATER_R0 > Number(asfalto[1]),
+    `a piombo l'acqua riflette ${WATER_R0} contro ${asfalto[1]} dell'asfalto: meno del pavimento su cui poggia`);
+  assert.ok(WATER_FRESNEL_EXPONENT > 0 && WATER_R0 < 1);
+
+  // Il riflesso va campionato con uv CLAMPATE: la deformazione dovuta alle onde
+  // portava il campionamento fuori dalla texture, e ne tornava il colore del
+  // bordo — chiazze poligonali scure lungo gli spigoli dei triangoli.
+  const sorgente = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'src', 'water-system.js'), 'utf8');
+  assert.match(sorgente, /reflectorNode\.sample\(.*\.clamp\(0, 1\)\)/,
+    'il campionamento del riflesso non è più clampato');
 
   const scala = make();
   scala.setQuality({ city: { puddleCoverage: .2, puddleRipples: .5 } });

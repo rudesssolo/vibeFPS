@@ -42,6 +42,7 @@ Secondo gruppo, **CPU**: i proiettili sono integrati da Cannon *e* sottoposti a 
 |---|---|---|
 | Throttle della reflection per profilo (2/4/2 frame) | `reflection-throttle.js › ReflectionScheduler` | il pass reflection vale ≈175–200 draw call, saltati sui frame non dovuti |
 | `resolutionScale` scritto sul nodo giusto | `main.js › updateReflectionQuality` | il budget del riflesso non aveva **mai** avuto effetto: la target restava al `.3` del costruttore |
+| Riflesso dell'asfalto attenuato da .34 a .18 e più sfocato | `main.js › GRAPHICS.reflector` | l'acqua deve essere la superficie più riflettente della scena: a .34 l'asfalto rifletteva **più** di una pozzanghera vista da vicino |
 | Budget del riflesso ancorato all'**altezza** del buffer | `config.js › reflectorHeight` | su 3440×1440: 512×214 → **2580×1080** in ultra; risultato indipendente dall'aspect ratio |
 | Throttle disattivato sui frame lenti; deriva max .35 m / .05 rad | `reflection-throttle.js › shouldUpdate` | zero frame lenti con reflection non allineata, su traiettoria di salto con hitch iniettati |
 | Set di luci fissato al boot | `explosion-system.js › lightSlots` | cambio di tier **2200 ms → 36 ms**; pipeline costanti a 214 invece di 213→252→213 |

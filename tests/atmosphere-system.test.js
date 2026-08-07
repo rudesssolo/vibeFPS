@@ -25,7 +25,7 @@ function makeLogicSystem() {
   return { system, thunderCount: () => thunder };
 }
 
-test('lightning has a bounded flash envelope and fires thunder once', () => {
+test('il lampo ha un inviluppo limitato, il tuono parte una volta, e da spento non si innesca', () => {
   const { system, thunderCount } = makeLogicSystem();
   assert.equal(system.triggerLightning(), true);
   for (let i = 0; i < 80; i++) {
@@ -34,10 +34,8 @@ test('lightning has a bounded flash envelope and fires thunder once', () => {
     assert.ok(flash >= 0 && flash <= 1);
   }
   assert.equal(thunderCount(), 1);
-});
 
-test('disabled lightning cannot be triggered', () => {
-  const { system } = makeLogicSystem();
-  system.lightningEnabled = false;
-  assert.equal(system.triggerLightning(), false);
+  const off = makeLogicSystem().system;
+  off.lightningEnabled = false;
+  assert.equal(off.triggerLightning(), false);
 });

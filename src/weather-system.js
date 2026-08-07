@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { makeRng } from './rng.js';
+import { unlitBasic } from './materials.js';
 
 const MAX_RAIN = 2200;
 const MAX_SPLASHES = 32;
@@ -122,7 +123,7 @@ export class WeatherSystem {
       return { mesh, material, active: false, age: 0, life: .2 };
     });
     this.ripples = Array.from({ length: MAX_RIPPLES }, () => {
-      const material = new THREE.MeshBasicMaterial({
+      const material = unlitBasic({
         map: this.rippleTexture,
         color: 0x89ceff,
         transparent: true,

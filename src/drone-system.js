@@ -5,11 +5,32 @@ import {
   getApexStats, getApexStatsFor, getMegaBossStats
 } from './config.js';
 import { makeRng } from './rng.js';
+import { unlitBasic } from './materials.js';
 
 const clampLength = (vector, max) => {
   if (vector.lengthSq() > max * max) vector.setLength(max);
   return vector;
 };
+
+/**
+ * Marca come caster/receiver solo le parti solide di un drone o di un Apex.
+ *
+ * Restano fuori l'occhio (emissivo, opaco ma senza volume credibile) e ogni
+ * mesh trasparente o additiva. Il filtro è per materiale e non per lista di
+ * eccezioni perché con T1 le decorazioni d'archetipo — orbite VEX, orbite e
+ * corona OVERLORD, afterimage WRAITH — sono entrate nel grafo della scena:
+ * elencandole a mano, un archetipo aggiunto in seguito tornerebbe a proiettare
+ * blocchi d'ombra opachi al posto di un bagliore.
+ */
+function applyShadowFlags(root, eye) {
+  root.traverse(object => {
+    if (!object.isMesh || object === eye) return;
+    const material = object.material;
+    if (material && (material.transparent === true || material.blending === THREE.AdditiveBlending)) return;
+    object.castShadow = true;
+    object.receiveShadow = true;
+  });
+}
 
 export class DroneSystem {
   constructor({ scene, camera, targetLayer, targetProvider, onFire, onTelegraph, onApexAttack, onApexContact, onApexMine, onApexSummon, onApexShockwave, onApexTelegraph, arenaLimit }) {
@@ -55,9 +76,68 @@ export class DroneSystem {
     this.orbitGeometry = new THREE.SphereGeometry(.2, 12, 10);
     this.miniGeometry = new THREE.SphereGeometry(.28, 12, 10);
     this.apexes = [];
+    // Fantasmi del blink: sagome che restano dove il WRAITH era e dove ricompare.
+    // Poolizzate — un blink ogni ~2.4 s con tre archetipi in scena non deve
+    // allocare geometria durante il combattimento.
+    this.blinkFrom = new THREE.Vector3();
+    this.blinkGhosts = [];
     // Primary alive Apex retained for older consumers; multi-boss-aware code
     // uses apexes/getAliveApexes/getBossHudState.
     this.apex = null;
+  }
+
+  /**
+   * Sagoma che marca un capo del teletrasporto. `grow > 1` la dilata mentre
+   * svanisce (partenza: il corpo si disperde), `grow < 1` la contrae (arrivo:
+   * si ricompone). Senza queste il blink era invisibile: l'afterimage esistente
+   * è figlia del gruppo e quindi si sposta CON l'Apex, marcando solo l'arrivo.
+   */
+  spawnBlinkGhost(position, apex, startScale, grow) {
+    let ghost = this.blinkGhosts.find(entry => !entry.active);
+    if (!ghost) {
+      if (this.blinkGhosts.length >= 8) return null;
+      ghost = {
+        active: false,
+        // `color` esplicito: la tinta viene poi presa dall'Apex a ogni riuso, ma
+        // il materiale deve nascere con una Color già istanziata.
+        mesh: new THREE.Mesh(this.coreGeometry, unlitBasic({
+          color: 0xffffff, transparent: true, opacity: 0,
+          blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
+        }))
+      };
+      ghost.mesh.frustumCulled = false;
+      this.scene.add(ghost.mesh);
+      this.blinkGhosts.push(ghost);
+    }
+    ghost.active = true;
+    ghost.age = 0;
+    ghost.life = .42;
+    ghost.startScale = startScale;
+    ghost.endScale = startScale * grow;
+    ghost.mesh.material.color.set(apex.coreMaterial.emissive.getHex());
+    ghost.mesh.position.copy(position);
+    if (ghost.mesh.quaternion?.copy && apex.group?.quaternion) ghost.mesh.quaternion.copy(apex.group.quaternion);
+    ghost.mesh.scale.setScalar(startScale);
+    ghost.mesh.visible = true;
+    return ghost;
+  }
+
+  updateBlinkGhosts(delta) {
+    for (const ghost of this.blinkGhosts) {
+      if (!ghost.active) continue;
+      ghost.age += delta;
+      const t = Math.min(1, ghost.age / ghost.life);
+      if (t >= 1) {
+        ghost.active = false;
+        ghost.mesh.visible = false;
+        ghost.mesh.material.opacity = 0;
+        continue;
+      }
+      // Sfarfallio anche sul fantasma: non svanisce liscio, si spegne a scatti.
+      const stutter = .55 + Math.sin(ghost.age * 92) * .45;
+      ghost.mesh.material.opacity = (1 - t) * (1 - t) * .85 * stutter;
+      ghost.mesh.scale.setScalar(ghost.startScale + (ghost.endScale - ghost.startScale) * t);
+    }
   }
 
   clear() {
@@ -89,6 +169,10 @@ export class DroneSystem {
     }
     this.apexes.length = 0;
     this.apex = null;
+    for (const ghost of this.blinkGhosts || []) {
+      ghost.active = false;
+      ghost.mesh.visible = false;
+    }
   }
 
   spawnWave(wave, count) {
@@ -238,8 +322,21 @@ export class DroneSystem {
   }
 
   /** Costruisce la silhouette visiva dell'Apex per archetipo e restituisce i riferimenti. */
+  /**
+   * Silhouette dell'Apex per archetipo **e tier**.
+   *
+   * Il roster cicla ogni 4 ondate, quindi lo stesso archetipo torna al tier 2 e
+   * al tier 3: senza differenze visive l'ondata 5 sembrava l'ondata 1 con più
+   * vita. Ogni archetipo cresce lungo la **propria** abilità — quella che il
+   * tier 2 gli sblocca davvero — così la forma anticipa il comportamento invece
+   * di essere una decorazione: piastre d'ariete per la doppia carica del
+   * VANGUARD, lame per il triplo blink del WRAITH, orbite per le mine del VEX,
+   * corone per i minion del SENTINEL. In più una cresta dorsale di `tier` pinne,
+   * uguale per tutti: dice il rango a colpo d'occhio anche di spalle.
+   */
   buildApexVisual(stats) {
     const visual = new THREE.Group();
+    const tier = Math.max(1, Math.min(3, Math.round(stats.tier) || 1));
     const coreMaterial = new THREE.MeshPhysicalMaterial({
       color: 0x0c111a,
       metalness: .92,
@@ -248,7 +345,8 @@ export class DroneSystem {
       clearcoatRoughness: .08,
       envMapIntensity: 1.8,
       emissive: stats.color,
-      emissiveIntensity: .55
+      // Il nucleo scotta di più a ogni ciclo.
+      emissiveIntensity: .55 + (tier - 1) * .22
     });
     const parts = [];
     let coreScale = 1.15;
@@ -256,36 +354,49 @@ export class DroneSystem {
     switch (stats.archetype.id) {
       case 'vanguard': {
         coreScale = 1.55;
-        const armor = new THREE.Mesh(
-          this.armorGeometry,
-          new THREE.MeshPhysicalMaterial({ color: 0x141d2b, metalness: .9, roughness: .3, clearcoat: .5, envMapIntensity: 1.6 })
-        );
-        armor.position.set(0, .02, .46);
-        armor.rotation.x = .12;
-        parts.push(armor);
-        for (const x of [-.95, .95]) {
-          const spike = new THREE.Mesh(this.spikeGeometry, this.darkMaterial);
-          spike.position.set(x, .32, 0);
-          spike.rotation.z = x < 0 ? .5 : -.5;
-          spike.rotation.x = -Math.PI / 2;
-          parts.push(spike);
+        const armorMaterial = new THREE.MeshPhysicalMaterial({ color: 0x141d2b, metalness: .9, roughness: .3, clearcoat: .5, envMapIntensity: 1.6 });
+        // Una piastra d'ariete per tier, stratificate in avanti: è la doppia
+        // carica del tier 2 resa forma. Marcate tutte, non solo la prima:
+        // `applyApexDamage` le nasconde insieme quando l'armatura cede.
+        for (let layer = 0; layer < tier; layer++) {
+          const armor = new THREE.Mesh(this.armorGeometry, armorMaterial);
+          armor.position.set(0, .02 - layer * .06, .46 + layer * .18);
+          armor.rotation.x = .12 + layer * .05;
+          armor.scale.setScalar(1 - layer * .17);
+          armor.userData.apexArmor = true;
+          parts.push(armor);
+        }
+        // Un paio di corni per tier, sempre più abbassati in assetto d'urto.
+        for (let pair = 0; pair < tier; pair++) {
+          for (const x of [-.95, .95]) {
+            const spike = new THREE.Mesh(this.spikeGeometry, this.darkMaterial);
+            spike.position.set(x * (1 - pair * .13), .32 - pair * .29, pair * .1);
+            spike.rotation.z = x < 0 ? .5 : -.5;
+            spike.rotation.x = -Math.PI / 2 - pair * .18;
+            parts.push(spike);
+          }
         }
         const lowerPlate = new THREE.Mesh(this.miniGeometry, this.darkMaterial);
-        lowerPlate.scale.setScalar(2.1);
+        lowerPlate.scale.setScalar(2.1 + (tier - 1) * .22);
         lowerPlate.position.set(0, -.28, .1);
         parts.push(lowerPlate);
         break;
       }
       case 'wraith': {
         coreScale = 1.25;
-        for (const x of [-.8, .8]) {
-          const blade = new THREE.Mesh(this.bladeGeometry, this.darkMaterial);
-          blade.position.set(x, 0, 0);
-          blade.rotation.z = x < 0 ? .1 : -.1;
-          blade.rotation.y = x < 0 ? .25 : -.25;
-          parts.push(blade);
+        // Una lama per lato per tier: la sagoma si apre a ventaglio, e il
+        // ventaglio è quanti blink può incatenare.
+        for (let i = 0; i < tier; i++) {
+          for (const x of [-.8, .8]) {
+            const blade = new THREE.Mesh(this.bladeGeometry, this.darkMaterial);
+            blade.position.set(x * (1 + i * .24), i * .2 - (tier - 1) * .1, -i * .14);
+            blade.rotation.z = (x < 0 ? .1 : -.1) * (1 + i * 1.8);
+            blade.rotation.y = x < 0 ? .25 : -.25;
+            blade.scale.setScalar(1 - i * .13);
+            parts.push(blade);
+          }
         }
-        const afterimageMat = new THREE.MeshBasicMaterial({
+        const afterimageMat = unlitBasic({
           color: stats.color,
           transparent: true,
           opacity: 0,
@@ -302,24 +413,40 @@ export class DroneSystem {
         coreScale = 1.4;
         const core = new THREE.Mesh(
           this.orbitGeometry,
-          new THREE.MeshBasicMaterial({ color: stats.color, transparent: true, opacity: .5, blending: THREE.AdditiveBlending, depthWrite: false })
+          unlitBasic({ color: stats.color, transparent: true, opacity: .5, blending: THREE.AdditiveBlending, depthWrite: false })
         );
         core.scale.setScalar(3.4);
         parts.push(core);
-        for (let i = 0; i < 3; i++) {
-          const orb = new THREE.Mesh(this.orbitGeometry, new THREE.MeshBasicMaterial({ color: stats.color, transparent: true, opacity: .85, blending: THREE.AdditiveBlending, depthWrite: false }));
+        // Una mina in orbita in più per tier (3/4/5): il tier 2 ne posa 3
+        // invece di 2, e si vede prima ancora che le sganci.
+        const orbitTotal = 2 + tier;
+        for (let i = 0; i < orbitTotal; i++) {
+          const orb = new THREE.Mesh(this.orbitGeometry, unlitBasic({ color: stats.color, transparent: true, opacity: .85, blending: THREE.AdditiveBlending, depthWrite: false }));
           orb.userData.orbitIndex = i;
+          orb.userData.orbitTotal = orbitTotal;
+          orb.scale.setScalar(1 + (tier - 1) * .12);
           parts.push(orb);
         }
         break;
       }
       case 'sentinel': {
         coreScale = 1.9;
-        for (let i = 0; i < 6; i++) {
+        // Corona superiore: 6/8/10 punte. Dal tier 2 se ne aggiunge una
+        // inferiore, rivolta in basso — un rastrello di minion in più.
+        const crown = 4 + tier * 2;
+        for (let i = 0; i < crown; i++) {
           const spike = new THREE.Mesh(this.spikeGeometry, this.darkMaterial);
-          const a = i / 6 * Math.PI * 2;
+          const a = i / crown * Math.PI * 2;
           spike.position.set(Math.cos(a) * .62, .3, Math.sin(a) * .62);
           spike.rotation.x = -Math.PI / 2;
+          parts.push(spike);
+        }
+        for (let i = 0; tier >= 2 && i < tier * 2; i++) {
+          const spike = new THREE.Mesh(this.spikeGeometry, this.darkMaterial);
+          const a = (i + .5) / (tier * 2) * Math.PI * 2;
+          spike.position.set(Math.cos(a) * .5, -.36, Math.sin(a) * .5);
+          spike.rotation.x = Math.PI / 2;
+          spike.scale.setScalar(.72);
           parts.push(spike);
         }
         break;
@@ -329,7 +456,7 @@ export class DroneSystem {
         // Corona tetra-assiale: leggibile anche a grande distanza e distinta
         // dalle silhouette del roster standard.
         for (let i = 0; i < 8; i++) {
-          const spike = new THREE.Mesh(this.spikeGeometry, i % 2 ? this.darkMaterial : new THREE.MeshBasicMaterial({ color: stats.color }));
+          const spike = new THREE.Mesh(this.spikeGeometry, i % 2 ? this.darkMaterial : unlitBasic({ color: stats.color }));
           const a = i / 8 * Math.PI * 2;
           spike.position.set(Math.cos(a) * .78, Math.sin(i * 1.7) * .22, Math.sin(a) * .78);
           spike.rotation.x = -Math.PI / 2;
@@ -340,7 +467,7 @@ export class DroneSystem {
         for (let i = 0; i < 4; i++) {
           const orb = new THREE.Mesh(
             this.orbitGeometry,
-            new THREE.MeshBasicMaterial({ color: stats.color, transparent: true, opacity: .9, blending: THREE.AdditiveBlending, depthWrite: false })
+            unlitBasic({ color: stats.color, transparent: true, opacity: .9, blending: THREE.AdditiveBlending, depthWrite: false })
           );
           orb.userData.overlordOrbitIndex = i;
           orb.scale.setScalar(1.35);
@@ -348,13 +475,28 @@ export class DroneSystem {
         }
         const crown = new THREE.Mesh(
           this.ringGeometry,
-          new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .7, blending: THREE.AdditiveBlending, depthWrite: false })
+          unlitBasic({ color: 0xffffff, transparent: true, opacity: .7, blending: THREE.AdditiveBlending, depthWrite: false })
         );
         crown.userData.overlordCrown = true;
         crown.rotation.x = Math.PI / 2;
         crown.scale.setScalar(2.8);
         parts.push(crown);
         break;
+      }
+    }
+
+    // Cresta dorsale: una pinna per tier, uguale per ogni archetipo. È il segno
+    // di rango — si conta a colpo d'occhio, anche da dietro e anche quando la
+    // silhouette dell'archetipo è coperta dal combattimento. Il mega boss ne è
+    // escluso: OVERLORD è unico e non appartiene alla scala dei tier.
+    if (stats.archetype.id !== 'overlord') {
+      const crestMaterial = unlitBasic({ color: stats.color });
+      for (let i = 0; i < tier; i++) {
+        const fin = new THREE.Mesh(this.bladeGeometry, crestMaterial);
+        fin.position.set(0, .46, .26 - i * .3);
+        fin.rotation.x = -.22;
+        fin.scale.set(.34, .52, .7);
+        parts.push(fin);
       }
     }
 
@@ -369,27 +511,27 @@ export class DroneSystem {
     const core = new THREE.Mesh(this.coreGeometry, coreMaterial);
     core.scale.setScalar(coreScale);
     visual.add(core);
-    const eye = new THREE.Mesh(this.eyeGeometry, new THREE.MeshBasicMaterial({ color: stats.color }));
+    const eye = new THREE.Mesh(this.eyeGeometry, unlitBasic({ color: stats.color }));
     eye.position.set(0, .04, .5 * coreScale);
     eye.scale.setScalar(1.8);
     visual.add(eye);
     const eyeHalo = new THREE.Mesh(
       this.haloGeometry,
-      new THREE.MeshBasicMaterial({ color: stats.color, transparent: true, opacity: .3, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
+      unlitBasic({ color: stats.color, transparent: true, opacity: .3, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
     );
     eyeHalo.position.set(0, .04, .52 * coreScale);
     eyeHalo.scale.setScalar(2);
     visual.add(eyeHalo);
     const ring = new THREE.Mesh(
       this.ringGeometry,
-      new THREE.MeshBasicMaterial({ color: stats.color, transparent: true, opacity: .85, blending: THREE.AdditiveBlending, depthWrite: false })
+      unlitBasic({ color: stats.color, transparent: true, opacity: .85, blending: THREE.AdditiveBlending, depthWrite: false })
     );
     ring.rotation.x = Math.PI / 2;
     ring.scale.setScalar(1.9);
     visual.add(ring);
     const secondRing = new THREE.Mesh(
       this.ringGeometry,
-      new THREE.MeshBasicMaterial({ color: stats.color, transparent: true, opacity: .4, blending: THREE.AdditiveBlending, depthWrite: false })
+      unlitBasic({ color: stats.color, transparent: true, opacity: .4, blending: THREE.AdditiveBlending, depthWrite: false })
     );
     secondRing.rotation.x = Math.PI / 2;
     secondRing.rotation.z = Math.PI / 4;
@@ -399,7 +541,7 @@ export class DroneSystem {
 
     const thrusters = [];
     for (const x of [-.7, .7]) {
-      const material = new THREE.MeshBasicMaterial({ color: stats.color, transparent: true, opacity: .85, blending: THREE.AdditiveBlending, depthWrite: false });
+      const material = unlitBasic({ color: stats.color, transparent: true, opacity: .85, blending: THREE.AdditiveBlending, depthWrite: false });
       const thruster = new THREE.Mesh(this.thrusterGeometry, material);
       thruster.position.set(x, -.55, -.05);
       thruster.scale.set(1.6, 1.6, 1.6);
@@ -407,12 +549,7 @@ export class DroneSystem {
       visual.add(thruster);
       thrusters.push(thruster);
     }
-    visual.traverse(object => {
-      if (object.isMesh && object !== eye && object !== eyeHalo && object !== ring && object !== secondRing && object !== afterimage && !thrusters.includes(object)) {
-        object.castShadow = true;
-        object.receiveShadow = true;
-      }
-    });
+    applyShadowFlags(visual, eye);
     return { visual, coreMaterial, core, eye, eyeHalo, ring, secondRing, thrusters, afterimage, parts, coreScale };
   }
 
@@ -443,37 +580,32 @@ export class DroneSystem {
     wingLeft.rotation.z = .12; wingRight.rotation.z = -.12;
     visual.add(wingLeft, wingRight);
 
-    const eye = new THREE.Mesh(this.eyeGeometry, new THREE.MeshBasicMaterial({ color: 0xff334f }));
+    const eye = new THREE.Mesh(this.eyeGeometry, unlitBasic({ color: 0xff334f }));
     eye.position.set(0, .03, .49);
     visual.add(eye);
     const eyeHalo = new THREE.Mesh(
       this.haloGeometry,
-      new THREE.MeshBasicMaterial({ color: 0xff203f, transparent: true, opacity: .22, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
+      unlitBasic({ color: 0xff203f, transparent: true, opacity: .22, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
     );
     eyeHalo.position.set(0, .03, .505);
     visual.add(eyeHalo);
     const ring = new THREE.Mesh(
       this.ringGeometry,
-      new THREE.MeshBasicMaterial({ color: index % 2 ? 0xff2d95 : 0x00e5ff, transparent: true, opacity: .72, blending: THREE.AdditiveBlending, depthWrite: false })
+      unlitBasic({ color: index % 2 ? 0xff2d95 : 0x00e5ff, transparent: true, opacity: .72, blending: THREE.AdditiveBlending, depthWrite: false })
     );
     ring.rotation.x = Math.PI / 2;
     visual.add(ring);
 
     const thrusters = [];
     for (const x of [-.46, .46]) {
-      const material = new THREE.MeshBasicMaterial({ color: 0x72f5ff, transparent: true, opacity: .75, blending: THREE.AdditiveBlending, depthWrite: false });
+      const material = unlitBasic({ color: 0x72f5ff, transparent: true, opacity: .75, blending: THREE.AdditiveBlending, depthWrite: false });
       const thruster = new THREE.Mesh(this.thrusterGeometry, material);
       thruster.position.set(x, -.38, -.05);
       thruster.rotation.z = Math.PI;
       visual.add(thruster);
       thrusters.push(thruster);
     }
-    visual.traverse(object => {
-      if (object.isMesh && object !== eye && object !== eyeHalo && object !== ring && !thrusters.includes(object)) {
-        object.castShadow = true;
-        object.receiveShadow = true;
-      }
-    });
+    applyShadowFlags(visual, eye);
 
     group.position.copy(anchor);
     this.scene.add(group);
@@ -669,6 +801,8 @@ export class DroneSystem {
 
   /** Aggiorna tutti gli Apex attivi e ritorna quanti sono ancora vivi. */
   updateApex(delta, time, { active = true, dead = false } = {}) {
+    // Fuori dal ciclo sugli Apex: i fantasmi sopravvivono a chi li ha lasciati.
+    this.updateBlinkGhosts(delta);
     let alive = 0;
     for (const apex of this.apexes) {
       if (this.updateSingleApex(apex, delta, time, { active, dead })) alive++;
@@ -741,11 +875,36 @@ export class DroneSystem {
     apex.eyeHalo.scale.setScalar(1 + Math.sin(time * 5 + apex.phase) * .16 + (apex.telegraphing ? .7 : 0));
     apex.coreMaterial.emissiveIntensity = Math.max(.5, apex.coreMaterial.emissiveIntensity - delta * 6);
     if (apex.afterimage) apex.afterimage.material.opacity = Math.max(0, apex.afterimage.material.opacity - delta * 2.4);
+    // Sfarfallio del teletrasporto. Il WRAITH non scompare e riappare: per mezzo
+    // secondo resta instabile e si vede a scatti. Due frequenze incommensurabili
+    // danno accensioni irregolari — una sola sinusoide si legge come un
+    // lampeggio meccanico, e a certi frame rate potrebbe persino sparire del
+    // tutto per battimento.
+    if (apex.state === 'blink') {
+      apex.visual.visible = Math.sin(time * 47.3) + Math.sin(time * 31.1) > -.4;
+      apex.coreMaterial.emissiveIntensity = Math.max(apex.coreMaterial.emissiveIntensity, 2.4);
+    } else if (apex.visual.visible === false) {
+      apex.visual.visible = true;
+    }
+    this.animateArchetypeParts(apex, delta, time);
+    return true;
+  }
+
+  /**
+   * Anima le decorazioni specifiche dell'archetipo (orbite VEX e OVERLORD,
+   * corona OVERLORD). Estratta da `updateSingleApex` per essere verificabile
+   * senza costruire un frame completo: fino a T1 queste parti non erano nel
+   * grafo della scena, quindi il movimento non si vedeva comunque.
+   */
+  animateArchetypeParts(apex, delta, time) {
     if (apex.archetypeId === 'vex') {
       let orbitIndex = 0;
       for (const part of apex.parts) {
         if (part.userData && part.userData.orbitIndex !== undefined) {
-          const a = time * 2.2 + orbitIndex * Math.PI * 2 / 3;
+          // Lo sfasamento si divide sul numero REALE di orbite: era fisso a 3,
+          // e dal tier 2 in poi le orbite in più si sarebbero sovrapposte.
+          const total = part.userData.orbitTotal || 3;
+          const a = time * 2.2 + orbitIndex * Math.PI * 2 / total;
           part.position.set(Math.cos(a) * 1.15, Math.sin(a * .8) * .5, Math.sin(a) * 1.15);
           orbitIndex++;
         }
@@ -761,8 +920,8 @@ export class DroneSystem {
         }
       }
     }
-    return true;
   }
+
 /** Comportamento (velocità desiderata + stati d'attacco) per archetipo. */
   apexBehavior(apex, delta, time, target, distanceXZ, active, dead) {
     const canAct = active && !dead;
@@ -847,12 +1006,18 @@ export class DroneSystem {
           blinkTarget.x = THREE.MathUtils.clamp(blinkTarget.x, -this.arenaLimit + 2, this.arenaLimit - 2);
           blinkTarget.z = THREE.MathUtils.clamp(blinkTarget.z, -this.arenaLimit + 2, this.arenaLimit - 2);
           if (apex.afterimage) apex.afterimage.material.opacity = .75;
+          // La posizione di partenza va catturata PRIMA del salto: serve al
+          // fantasma e al pan del suono, che deve dire da dove a dove.
+          this.blinkFrom.copy(apex.position);
+          const ghostScale = Math.max(.9, apex.radius * 1.5);
+          this.spawnBlinkGhost(this.blinkFrom, apex, ghostScale, 1.75);   // si disperde
+          this.spawnBlinkGhost(blinkTarget, apex, ghostScale * 2.1, .55); // si ricompone
           apex.position.copy(blinkTarget);
           apex.velocity.set(0, 0, 0);
           apex.state = 'blink';
           apex.stateTimer = .5;
           apex.blinkCooldown = apex.tier >= 2 ? 2.4 : 3.4;
-          this.onApexContact(apex, 'blink');
+          this.onApexContact(apex, 'blink', this.blinkFrom, blinkTarget);
         } else {
           const orbitPoint = this.temp3.set(
             target.x + Math.sin(time * .55 + apex.phase) * 4,
@@ -998,14 +1163,15 @@ export class DroneSystem {
     if (!apex || !apex.alive) return { hit: false, killed: false, armorBroken: false, phaseChanged: false };
     let dealt = amount;
     let armorBroken = false;
-    const armorMesh = apex.parts && apex.parts[0];
+    const armorPlates = apex.parts?.filter(part => part.userData?.apexArmor) || [];
     if (apex.armorMax > 0 && !apex.armorBroken) {
       apex.armor -= Math.min(apex.armor, dealt);
       dealt *= .5;
       if (apex.armor <= 0) {
         apex.armorBroken = true;
         armorBroken = true;
-        if (armorMesh && armorMesh.material) armorMesh.visible = false;
+        // Dal tier 2 le piastre sono più d'una: cadono tutte insieme.
+        for (const plate of armorPlates) plate.visible = false;
       }
     }
     apex.health -= dealt;

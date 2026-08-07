@@ -197,10 +197,15 @@ export function makeAsphaltCanvas(size = 1024) {
     image.data[i * 4 + 3] = 255;
   }
   ctx.putImageData(image, 0, 0);
+  // Chiazze di sporco. Solo scure: le ellissi chiare (#26303a) che c'erano qui
+  // si leggevano come pozze d'acqua dipinte sul pavimento — le "pozzanghere
+  // vecchie", statiche e senza riflesso proprio, che convivevano con quelle
+  // vere del water-system. L'asfalto conserva la sua variazione, ma non
+  // simula più l'acqua: quella adesso è geometria.
   ctx.globalAlpha = .28;
   const patches = Math.round(22 * k);
   for (let i = 0; i < patches; i++) {
-    ctx.fillStyle = i % 3 ? '#06090d' : '#26303a';
+    ctx.fillStyle = '#06090d';
     ctx.beginPath();
     ctx.ellipse(rand()*s,rand()*s,(8+rand()*50)*k,(2+rand()*11)*k,rand()*Math.PI,0,Math.PI*2);
     ctx.fill();

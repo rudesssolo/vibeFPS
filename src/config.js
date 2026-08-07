@@ -27,7 +27,7 @@ export const QUALITY_PROFILES = Object.freeze({
     smokePuffs: 5,
     dynamicLights: 4,
     atmosphere: Object.freeze({ rainStreaks: 450, fogBanks: 6, cloudOctaves: 2, aurora: .25, meteorRate: .08, splashes: 16, ripples: 12, lightning: 1 }),
-    city: Object.freeze({ facadePulse: .08, aerialTraffic: 10, wetDetail: .72 }),
+    city: Object.freeze({ facadePulse: .08, aerialTraffic: 10, wetDetail: .72, puddleCoverage: .5, puddleRipples: 1 }),
     post: Object.freeze({ flare: .22, heatHaze: .35, distortionSlots: 2, grain: .01, vignette: .92, saturation: 1.04, vibrance: .1 }),
     combat: Object.freeze({ impactDecals: 16, trailDensity: .72 })
   }),
@@ -44,7 +44,7 @@ export const QUALITY_PROFILES = Object.freeze({
     smokePuffs: 2,
     dynamicLights: 2,
     atmosphere: Object.freeze({ rainStreaks: 260, fogBanks: 0, cloudOctaves: 1, aurora: 0, meteorRate: 0, splashes: 0, ripples: 0, lightning: 1 }),
-    city: Object.freeze({ facadePulse: .04, aerialTraffic: 4, wetDetail: .4 }),
+    city: Object.freeze({ facadePulse: .04, aerialTraffic: 4, wetDetail: .4, puddleCoverage: .42, puddleRipples: .6 }),
     post: Object.freeze({ flare: 0, heatHaze: 0, distortionSlots: 0, grain: .006, vignette: .88, saturation: 1, vibrance: .04 }),
     combat: Object.freeze({ impactDecals: 8, trailDensity: .48 })
   }),
@@ -61,7 +61,7 @@ export const QUALITY_PROFILES = Object.freeze({
     smokePuffs: 8,
     dynamicLights: 6,
     atmosphere: Object.freeze({ rainStreaks: 700, fogBanks: 12, cloudOctaves: 3, aurora: .6, meteorRate: .15, splashes: 32, ripples: 24, lightning: 1 }),
-    city: Object.freeze({ facadePulse: .12, aerialTraffic: 18, wetDetail: 1 }),
+    city: Object.freeze({ facadePulse: .12, aerialTraffic: 18, wetDetail: 1, puddleCoverage: .62, puddleRipples: 1.25 }),
     post: Object.freeze({ flare: .35, heatHaze: .7, distortionSlots: 4, grain: .012, vignette: .94, saturation: 1.06, vibrance: .16 }),
     combat: Object.freeze({ impactDecals: 24, trailDensity: 1 })
   })
@@ -357,7 +357,11 @@ export function getStoredMix() {
     // timido, soprattutto la musica (moltiplicatori in AudioEngine.applyMix).
     music: safe('vibefps.mix.music', 0.82),
     sfx: safe('vibefps.mix.sfx', 0.95),
-    ambience: safe('vibefps.mix.ambience', 0.66)
+    // L'ambiente è in pratica un fruscio continuo: a due terzi di volume era la
+    // prima cosa che si sentiva aprendo il gioco. Parte quasi spento e chi lo
+    // vuole lo alza dal pannello audio — la scelta viene poi persistita, quindi
+    // questo default vale solo al primo avvio.
+    ambience: safe('vibefps.mix.ambience', 0.1)
   };
 }
 

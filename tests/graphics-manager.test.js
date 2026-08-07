@@ -40,22 +40,51 @@ function makeManager() {
   return { manager, applied, statuses, transitions };
 }
 
-test('init() applies the current auto profile', () => {
-  const restore = withAutoMode();
-  try {
-    const { manager, applied } = makeManager();
-    manager.init();
-    assert.equal(manager.profile, QUALITY_PROFILES.autoHigh);
-    assert.equal(applied.length, 1);
-    assert.equal(applied[0].info.initial, true);
-  } finally { restore(); }
+test('ULTRA esegue la transizione e spegne il watchdog degli FPS', () => {
+  {
+    const restore = withAutoMode();
+    const timers = withFakeTimers();
+    try {
+      const { manager, transitions } = makeManager();
+      manager.init();
+      manager.setMode('ultra');
+      assert.equal(manager.transitioning, true);
+      timers.flushRAF();
+      assert.equal(manager.mode, 'ultra');
+      assert.equal(manager.profile, QUALITY_PROFILES.ultra);
+      timers.flushTimeouts();
+      assert.equal(manager.transitioning, false);
+      assert.ok(transitions.some(t => t.active === false));
+    } finally { timers.restore(); restore(); }
+  }
+
+  {
+    const restore = withAutoMode();
+    const timers = withFakeTimers();
+    try {
+      const { manager } = makeManager();
+      manager.updateFPS(10, 0.5); // prima di init: autoHigh, conta
+      assert.ok(manager.lowWindows > 0);
+      manager.setMode('ultra');
+      timers.flushRAF();
+      timers.flushTimeouts();
+      assert.equal(manager.mode, 'ultra');
+      const lowBefore = manager.lowWindows;
+      manager.updateFPS(10, 0.5);
+      assert.equal(manager.lowWindows, lowBefore);
+    } finally { timers.restore(); restore(); }
+  }
 });
 
-test('downgrades to autoLow after 6 low-FPS windows and respects cooldown', () => {
+test('il tier automatico scende dopo 6 finestre lente, rispetta il cooldown e risale dopo 20 veloci', () => {
   const restore = withAutoMode();
   try {
     const { manager, applied } = makeManager();
     manager.init();
+    assert.equal(manager.profile, QUALITY_PROFILES.autoHigh, 'init deve applicare il profilo corrente');
+    assert.equal(applied.length, 1);
+    assert.equal(applied[0].info.initial, true);
+
     // 6 finestre a FPS basso, una per frame da 0.5s (nessun cooldown residuo).
     for (let i = 0; i < 6; i++) manager.updateFPS(40, 0.5);
     assert.equal(manager.autoTier, 'autoLow');
@@ -64,53 +93,9 @@ test('downgrades to autoLow after 6 low-FPS windows and respects cooldown', () =
     // Durante il cooldown non si risale, anche con FPS alti.
     for (let i = 0; i < 20; i++) manager.updateFPS(60, 0.5);
     assert.equal(manager.autoTier, 'autoLow');
-  } finally { restore(); }
-});
-
-test('upgrades to autoHigh after 20 high-FPS windows past the cooldown', () => {
-  const restore = withAutoMode();
-  try {
-    const { manager } = makeManager();
-    manager.init();
-    // Porta in autoLow e oltre il cooldown.
-    for (let i = 0; i < 6; i++) manager.updateFPS(40, 0.5);
-    assert.equal(manager.autoTier, 'autoLow');
+    // Scaduto il cooldown, 20 finestre veloci riportano su.
     manager.cooldown = 0;
     for (let i = 0; i < 20; i++) manager.updateFPS(60, 0.5);
     assert.equal(manager.autoTier, 'autoHigh');
   } finally { restore(); }
-});
-
-test('updateFPS is a no-op in ultra mode', () => {
-  const restore = withAutoMode();
-  const timers = withFakeTimers();
-  try {
-    const { manager } = makeManager();
-    manager.updateFPS(10, 0.5); // prima di init: autoHigh, counts
-    assert.ok(manager.lowWindows > 0);
-    manager.setMode('ultra');
-    timers.flushRAF();
-    timers.flushTimeouts();
-    assert.equal(manager.mode, 'ultra');
-    const lowBefore = manager.lowWindows;
-    manager.updateFPS(10, 0.5);
-    assert.equal(manager.lowWindows, lowBefore);
-  } finally { timers.restore(); restore(); }
-});
-
-test('setMode(ultra) runs the transition and ends in ultra', () => {
-  const restore = withAutoMode();
-  const timers = withFakeTimers();
-  try {
-    const { manager, transitions } = makeManager();
-    manager.init();
-    manager.setMode('ultra');
-    assert.equal(manager.transitioning, true);
-    timers.flushRAF();
-    assert.equal(manager.mode, 'ultra');
-    assert.equal(manager.profile, QUALITY_PROFILES.ultra);
-    timers.flushTimeouts();
-    assert.equal(manager.transitioning, false);
-    assert.ok(transitions.some(t => t.active === false));
-  } finally { timers.restore(); restore(); }
 });

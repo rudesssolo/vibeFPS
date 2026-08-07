@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { instancedBufferAttribute, smoothstep, uv } from 'three/tsl';
 import { VolumetricSmokeSystem } from './smoke-volume.js';
+import { unlitBasic } from './materials.js';
 
 const MAX_ADDITIVE = 720;
 const MAX_DEBRIS = 144;
@@ -211,7 +212,7 @@ export class ExplosionSystem {
     this.shockwaves = [];
     this.warmupPending = true;
     for (let i = 0; i < MAX_SHOCKWAVES; i++) {
-      const material = new THREE.MeshBasicMaterial({ color: 0x8df7ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+      const material = unlitBasic({ color: 0x8df7ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
       const mesh = new THREE.Mesh(new THREE.RingGeometry(.28, .43, 42), material);
       // Resta nel render graph con opacity 0: così la pipeline non viene compilata
       // durante la prima esplosione, causando uno stallo visibile.
@@ -224,7 +225,7 @@ export class ExplosionSystem {
     this.decalCursor = 0;
     this.decalGeometry = new THREE.CircleGeometry(1, 24);
     this.decals = Array.from({ length: MAX_DECALS }, () => {
-      const material = new THREE.MeshBasicMaterial({
+      const material = unlitBasic({
         color: 0x07080b,
         transparent: true,
         opacity: 0,

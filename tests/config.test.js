@@ -15,79 +15,104 @@ function withStorage(initial = {}) {
   return () => { Object.defineProperty(globalThis, 'localStorage', { value: original, configurable: true }); };
 }
 
-test('getStoredMix returns defaults when storage is empty (B1 regression)', () => {
-  const restore = withStorage({});
-  try {
-    assert.deepEqual(getStoredMix(), { music: 0.82, sfx: 0.95, ambience: 0.66 });
-  } finally { restore(); }
-});
+test('le preferenze persistite e il tuning della railgun', () => {
+  {
+    const DEFAULTS = { music: 0.82, sfx: 0.95, ambience: 0.1 };
+    let restore = withStorage({});
+    try {
+      assert.deepEqual(getStoredMix(), DEFAULTS, 'storage vuoto');
+      // L'ambiente è un fruscio continuo: al primo avvio parte quasi spento.
+      assert.ok(getStoredMix().ambience <= 0.15, 'il default dell\'ambiente è tornato alto');
+      storeMix({ music: 0.3, sfx: 0.4, ambience: 0.2 });
+      assert.deepEqual(getStoredMix(), { music: 0.3, sfx: 0.4, ambience: 0.2 }, 'round-trip');
+      storeQualityMode('ultra');
+      assert.equal(getStoredQualityMode(), 'ultra');
+      storeQualityMode('bogus');
+      assert.equal(getStoredQualityMode(), 'auto', 'un valore ignoto torna ad auto');
+      assert.equal(getStoredMuted(), false);
+      storeMuted(true);
+      assert.equal(getStoredMuted(), true);
+      storeMuted(false);
+      assert.equal(getStoredMuted(), false);
+    } finally { restore(); }
 
-test('getStoredMix reads persisted values and clamps out-of-range', () => {
-  const restore = withStorage({ 'vibefps.mix.music': '0.5', 'vibefps.mix.sfx': '7', 'vibefps.mix.ambience': 'abc' });
-  try {
-    assert.deepEqual(getStoredMix(), { music: 0.5, sfx: 1, ambience: 0.66 });
-  } finally { restore(); }
-});
+    restore = withStorage({ 'vibefps.mix.music': '0.5', 'vibefps.mix.sfx': '7', 'vibefps.mix.ambience': 'abc' });
+    try {
+      assert.deepEqual(getStoredMix(), { music: 0.5, sfx: 1, ambience: 0.1 }, 'fuori range e non numerici');
+    } finally { restore(); }
 
-test('storeMix then getStoredMix round-trips', () => {
-  const restore = withStorage({});
-  try {
-    storeMix({ music: 0.3, sfx: 0.4, ambience: 0.2 });
-    assert.deepEqual(getStoredMix(), { music: 0.3, sfx: 0.4, ambience: 0.2 });
-  } finally { restore(); }
-});
+    // Storage bloccato (modalità privata, cookie di terze parti): niente eccezioni
+    // in boot, si cade sui default. È la regressione B1 — gioco muto al primo avvio.
+    const original = globalThis.localStorage;
+    Object.defineProperty(globalThis, 'localStorage', { get() { throw new Error('blocked'); }, configurable: true });
+    try {
+      assert.deepEqual(getStoredMix(), DEFAULTS);
+      assert.equal(getStoredMuted(), false);
+      storeMuted(true); // non deve lanciare
+    } finally {
+      Object.defineProperty(globalThis, 'localStorage', { value: original, configurable: true });
+    }
+  }
 
-test('getStoredMix falls back to defaults when localStorage access throws', () => {
-  const original = globalThis.localStorage;
-  Object.defineProperty(globalThis, 'localStorage', { get() { throw new Error('blocked'); }, configurable: true });
-  try {
-    assert.deepEqual(getStoredMix(), { music: 0.82, sfx: 0.95, ambience: 0.66 });
-  } finally {
-    Object.defineProperty(globalThis, 'localStorage', { value: original, configurable: true });
+  {
+    assert.equal(RAILGUN_TUNING.magazineSize, 1);
+    assert.ok(RAILGUN_TUNING.damage > 100 + 1 * 12);
+    assert.ok(RAILGUN_TUNING.range >= 40);
+    assert.ok(RAILGUN_TUNING.cooldown > 0);
   }
 });
 
-test('railgun tuning guarantees a single-shot standard-drone kill', () => {
-  assert.equal(RAILGUN_TUNING.magazineSize, 1);
-  assert.ok(RAILGUN_TUNING.damage > 100 + 1 * 12);
-  assert.ok(RAILGUN_TUNING.range >= 40);
-  assert.ok(RAILGUN_TUNING.cooldown > 0);
-});
+test('il roster Apex cicla, scala col tier e culmina nel gauntlet', () => {
+  {
+    assert.equal(APEX_ROSTER.length, 4);
+    assert.deepEqual(APEX_ROSTER.map(a => a.id), ['vanguard', 'wraith', 'vex', 'sentinel']);
+    for (const archetype of APEX_ROSTER) {
+      assert.ok(archetype.baseHp > 0);
+      assert.ok(archetype.baseSpeed > 0);
+      assert.ok(archetype.color !== undefined);
+    }
 
-test('quality mode defaults to auto and persists ultra', () => {
-  assert.equal(getStoredQualityMode(), 'auto');
-  const restore = withStorage({});
-  try {
-    storeQualityMode('ultra');
-    assert.equal(getStoredQualityMode(), 'ultra');
-    storeQualityMode('bogus');
-    assert.equal(getStoredQualityMode(), 'auto');
-  } finally { restore(); }
-});
+    const w1 = getApexArchetype(1);
+    assert.equal(w1.archetype.id, 'vanguard');
+    assert.equal(w1.tier, 1);
+    assert.equal(getApexArchetype(2).archetype.id, 'wraith');
+    const w4 = getApexArchetype(4);
+    assert.equal(w4.archetype.id, 'sentinel');
+    assert.equal(w4.tier, 1);
+    // Secondo e terzo ciclo: stesso archetipo, tier crescente.
+    const w5 = getApexArchetype(5);
+    assert.equal(w5.archetype.id, 'vanguard');
+    assert.equal(w5.tier, 2);
+    assert.equal(getApexArchetype(9).tier, 3);
 
-test('mute state defaults to false and round-trips (N8)', () => {
-  const restore = withStorage({});
-  try {
-    assert.equal(getStoredMuted(), false);
-    storeMuted(true);
-    assert.equal(getStoredMuted(), true);
-    storeMuted(false);
-    assert.equal(getStoredMuted(), false);
-  } finally { restore(); }
-});
+    for (const bad of [NaN, 0, -3]) assert.equal(getApexArchetype(bad).tier, 1, `wave ${bad}`);
+    assert.equal(getApexArchetype('x').archetype.id, 'vanguard');
 
-test('mute state survives a blocked storage (N8)', () => {
-  const original = globalThis.localStorage;
-  Object.defineProperty(globalThis, 'localStorage', { get() { throw new Error('blocked'); }, configurable: true });
-  try {
-    assert.equal(getStoredMuted(), false);
-    storeMuted(true); // non deve lanciare
-  } finally {
-    Object.defineProperty(globalThis, 'localStorage', { value: original, configurable: true });
+    // Le statistiche scalano col tier, il nome no.
+    const t1 = getApexStats(1);
+    const t2 = getApexStats(5);
+    assert.equal(t2.maxHealth, Math.round(t1.maxHealth * Math.pow(APEX_TUNING.tierMultiplier, 1)));
+    assert.ok(t2.speed > t1.speed);
+    assert.ok(t2.damage > t1.damage);
+    assert.equal(t2.tier, 2);
+    assert.equal(t2.nameKey, t1.nameKey);
+  }
+
+  {
+    assert.deepEqual(getBossEncounter(8), { kind: 'standard', bossCount: 1, final: false });
+    assert.deepEqual(getBossEncounter(9), { kind: 'gauntlet', bossCount: 4, final: false });
+    assert.deepEqual(getBossEncounter(10), { kind: 'final', bossCount: 1, final: true });
+    assert.deepEqual(getBossEncounter(99), { kind: 'final', bossCount: 1, final: true });
+
+    const gauntlet = APEX_ROSTER.map(archetype => getApexStatsFor(archetype, ENDGAME_TUNING.gauntletTier));
+    assert.deepEqual(gauntlet.map(stats => stats.archetype.id), ['vanguard', 'wraith', 'vex', 'sentinel']);
+    assert.ok(gauntlet.every(stats => stats.tier === 3 && stats.maxHealth > 0));
+    const mega = getMegaBossStats();
+    assert.equal(mega.archetype.id, 'overlord');
+    assert.equal(mega.visualScale, 3);
+    assert.ok(mega.maxHealth > Math.max(...gauntlet.map(stats => stats.maxHealth)) * 2);
   }
 });
-
-// --- Profili qualità: contratto con i sistemi che li consumano ---
 
 test('ogni profilo qualità espone tutti i parametri consumati dai sistemi', () => {
   // ExplosionSystem.explode() ricava il numero di puff di fumo da smokePuffs:
@@ -127,9 +152,8 @@ test('ogni profilo qualità espone tutti i parametri consumati dai sistemi', () 
   assert.ok(QUALITY_PROFILES.autoHigh.reflectorHeight < QUALITY_PROFILES.ultra.reflectorHeight);
   assert.ok(QUALITY_PROFILES.autoLow.anisotropy <= QUALITY_PROFILES.autoHigh.anisotropy);
   assert.ok(QUALITY_PROFILES.autoHigh.anisotropy <= QUALITY_PROFILES.ultra.anisotropy);
-});
 
-test('i budget cinematici sono completi e crescono da Balanced a Ultra', () => {
+  // --- budget cinematici: completi e crescenti da Balanced a Ultra ---
   const ordered = [QUALITY_PROFILES.autoLow, QUALITY_PROFILES.autoHigh, QUALITY_PROFILES.ultra];
   for (const profile of ordered) {
     for (const group of ['atmosphere', 'city', 'post', 'combat']) {
@@ -154,67 +178,3 @@ test('i budget cinematici sono completi e crescono da Balanced a Ultra', () => {
 });
 
 // --- Apex Sentinel: roster a ciclo + tier scaling ---
-
-test('apex roster exposes the 4 archetypes with unique ids', () => {
-  assert.equal(APEX_ROSTER.length, 4);
-  const ids = APEX_ROSTER.map(a => a.id);
-  assert.deepEqual(ids, ['vanguard', 'wraith', 'vex', 'sentinel']);
-  for (const archetype of APEX_ROSTER) {
-    assert.ok(archetype.baseHp > 0);
-    assert.ok(archetype.baseSpeed > 0);
-    assert.ok(archetype.color !== undefined);
-  }
-});
-
-test('getApexArchetype cycles the roster every 4 waves and raises the tier', () => {
-  const w1 = getApexArchetype(1);
-  assert.equal(w1.archetype.id, 'vanguard');
-  assert.equal(w1.tier, 1);
-  const w2 = getApexArchetype(2);
-  assert.equal(w2.archetype.id, 'wraith');
-  const w4 = getApexArchetype(4);
-  assert.equal(w4.archetype.id, 'sentinel');
-  assert.equal(w4.tier, 1);
-  // Secondo ciclo: stesso archetipo, tier 2.
-  const w5 = getApexArchetype(5);
-  assert.equal(w5.archetype.id, 'vanguard');
-  assert.equal(w5.tier, 2);
-  const w9 = getApexArchetype(9);
-  assert.equal(w9.archetype.id, 'vanguard');
-  assert.equal(w9.tier, 3);
-});
-
-test('getApexArchetype is resilient to invalid input', () => {
-  assert.equal(getApexArchetype(NaN).tier, 1);
-  assert.equal(getApexArchetype(0).tier, 1);
-  assert.equal(getApexArchetype(-3).tier, 1);
-  assert.equal(getApexArchetype('x').archetype.id, 'vanguard');
-});
-
-test('getApexStats scales health, speed and damage with the tier', () => {
-  const t1 = getApexStats(1);
-  const t2 = getApexStats(5);
-  const multiplier = Math.pow(APEX_TUNING.tierMultiplier, 1);
-  assert.equal(t2.maxHealth, Math.round(t1.maxHealth * multiplier));
-  assert.ok(t2.speed > t1.speed);
-  assert.ok(t2.damage > t1.damage);
-  assert.equal(t2.tier, 2);
-  assert.equal(t2.nameKey, t1.nameKey);
-});
-
-test('endgame encounter plan ends with the four-Apex gauntlet and mega-boss', () => {
-  assert.deepEqual(getBossEncounter(8), { kind: 'standard', bossCount: 1, final: false });
-  assert.deepEqual(getBossEncounter(9), { kind: 'gauntlet', bossCount: 4, final: false });
-  assert.deepEqual(getBossEncounter(10), { kind: 'final', bossCount: 1, final: true });
-  assert.deepEqual(getBossEncounter(99), { kind: 'final', bossCount: 1, final: true });
-});
-
-test('wave 9 can build every Apex at tier 3 and the mega-boss is triple scale', () => {
-  const gauntlet = APEX_ROSTER.map(archetype => getApexStatsFor(archetype, ENDGAME_TUNING.gauntletTier));
-  assert.deepEqual(gauntlet.map(stats => stats.archetype.id), ['vanguard', 'wraith', 'vex', 'sentinel']);
-  assert.ok(gauntlet.every(stats => stats.tier === 3 && stats.maxHealth > 0));
-  const mega = getMegaBossStats();
-  assert.equal(mega.archetype.id, 'overlord');
-  assert.equal(mega.visualScale, 3);
-  assert.ok(mega.maxHealth > Math.max(...gauntlet.map(stats => stats.maxHealth)) * 2);
-});

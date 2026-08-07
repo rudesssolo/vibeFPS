@@ -17,7 +17,177 @@ function fakePass(name, log) {
   return { name, updateBefore() { log.push(name); return 'eseguito'; } };
 }
 
-test('un pass annidato dentro un altro viene rifiutato invece di corrompere la lista', () => {
+
+
+function makeQualityController() {
+  const value = initial => ({ value: initial });
+  return Object.assign(Object.create(RenderPipelineController.prototype), {
+    aoPass: { samples: value(0) },
+    aoBlend: value(1),
+    graphics: { grain: { amount: .01 }, vignette: { darkness: .92 }, gtao: { blendIntensity: 1 } },
+    flareStrength: value(0),
+    heatScale: value(0),
+    grainAmount: value(0),
+    vignetteDarkness: value(0),
+    gradeSaturation: value(1),
+    gradeVibrance: value(0),
+    gradeAmount: value(1),
+    heatSlots: Array.from({ length: 4 }, () => ({ strength: value(0), peak: 0 })),
+    fxOverrides: {},
+    currentProfile: null
+  });
+}
+
+function makeAoController() {
+  const controller = Object.create(RenderPipelineController.prototype);
+  let quadRenders = 0;
+  controller.aoPass = {
+    samples: { value: 0 },
+    useTemporalFiltering: false,
+    updateBefore() { quadRenders++; return 'renderizzato'; }
+  };
+  controller.aoBlend = { value: 1 };
+  controller.graphics = { grain: { amount: .01 }, vignette: { darkness: .92 }, gtao: { blendIntensity: 1 } };
+  Object.assign(controller, {
+    flareStrength: { value: 0 }, heatScale: { value: 0 }, grainAmount: { value: 0 },
+    vignetteDarkness: { value: 0 }, gradeSaturation: { value: 1 },
+    gradeVibrance: { value: 0 }, gradeAmount: { value: 1 },
+    heatSlots: Array.from({ length: 4 }, () => ({ strength: { value: 0 }, peak: 0 })),
+    fxOverrides: {}, currentProfile: null
+  });
+  controller.gateAoPass();
+  return { controller, renders: () => quadRenders };
+}
+
+test('la pipeline sopravvive ai fallimenti e i profili non ricostruiscono il grafo', () => {
+  {
+    let pipelineRenders = 0;
+    const healthy = makeController(() => { pipelineRenders++; });
+    // Sonda di regressione: il rendering non deve consultare lo stato derivato
+    // dalla posizione del giocatore, nemmeno se qualcuno lo reintroducesse.
+    healthy.edgeSafeMode = true;
+    healthy.render(1 / 60, 10);
+    assert.equal(pipelineRenders, 1);
+    assert.equal(healthy.postProcessingError, null);
+
+    const failure = new Error('shader compilation failed');
+    let shouldFail = true;
+    const controller = makeController(() => {
+      controller.renderer.toneMapping = 'NoToneMapping';
+      controller.renderer.outputColorSpace = 'working';
+      controller.renderer.xr.enabled = false;
+      if (shouldFail) throw failure;
+    });
+    let reports = 0;
+    const persistent = makeController(() => { throw failure; }, () => { reports++; });
+    const originalConsoleError = console.error;
+    console.error = () => {};
+    try {
+      assert.equal(controller.render(1 / 60, 10), false);
+      assert.equal(controller.postProcessingError, failure);
+      assert.equal(controller.consecutivePostProcessingErrors, 1);
+      assert.equal(controller.renderer.toneMapping, 'ACES', 'toneMapping non ripristinato');
+      assert.equal(controller.renderer.outputColorSpace, 'sRGB');
+      assert.equal(controller.renderer.xr.enabled, true);
+      assert.equal(controller.renderer.setRenderTargetCalls, 1);
+      assert.equal(controller.renderer.setMRTCalls, 1);
+
+      shouldFail = false;
+      assert.equal(controller.render(1 / 60, 11), true, 'il frame successivo deve ritentare');
+      assert.equal(controller.postProcessingError, null);
+      assert.equal(controller.consecutivePostProcessingErrors, 0);
+
+      // Fallimento persistente: segnalato una volta sola, senza fallback scuro.
+      for (let frame = 0; frame < 120; frame++) persistent.render(1 / 60, frame / 60);
+      assert.equal(reports, 1);
+      assert.equal(persistent.consecutivePostProcessingErrors, 120);
+      assert.equal(persistent.renderer.setRenderTargetCalls, 120);
+    } finally {
+      console.error = originalConsoleError;
+    }
+  }
+
+  {
+    const controller = makeQualityController();
+    controller.setQuality(QUALITY_PROFILES.ultra);
+    assert.equal(controller.flareStrength.value, QUALITY_PROFILES.ultra.post.flare);
+    assert.equal(controller.heatScale.value, QUALITY_PROFILES.ultra.post.heatHaze);
+    assert.equal(controller.heatSlotLimit, 4);
+    assert.equal(controller.gradeVibrance.value, QUALITY_PROFILES.ultra.post.vibrance);
+
+    const fx = makeQualityController();
+    fx.setQuality(QUALITY_PROFILES.autoHigh);
+    fx.setFxOverrides({ flare: false, heatHaze: false, grain: false });
+    assert.equal(fx.flareStrength.value, 0);
+    assert.equal(fx.heatScale.value, 0);
+    assert.equal(fx.grainAmount.value, 0);
+    fx.setFxOverrides({ flare: true, heatHaze: true, grain: true });
+    assert.equal(fx.flareStrength.value, QUALITY_PROFILES.autoHigh.post.flare);
+    assert.equal(fx.heatScale.value, QUALITY_PROFILES.autoHigh.post.heatHaze);
+    assert.equal(fx.grainAmount.value, QUALITY_PROFILES.autoHigh.post.grain);
+  }
+});
+
+test('eventi ottici e gate della GTAO', () => {
+  {
+    const controller = Object.assign(Object.create(RenderPipelineController.prototype), { camera: {} });
+    const point = projected => ({
+      x: 0, y: 0, z: 0,
+      clone: () => ({ project: () => projected })
+    });
+    assert.equal(controller._projectWorldPosition(point({ x: 0, y: 0, z: 0 })).z, 0);
+    assert.equal(controller._projectWorldPosition(point({ x: 2, y: 0, z: 0 })), null, 'fuori schermo');
+    assert.equal(controller._projectWorldPosition(point({ x: 0, y: 0, z: Number.NaN })), null);
+    assert.equal(controller._projectWorldPosition({ x: Number.NaN, y: 0, z: 0 }), null);
+
+    const flash = Object.assign(Object.create(RenderPipelineController.prototype), { lightningFlash: { value: 0 } });
+    flash.setLightningFlash(7);
+    assert.equal(flash.lightningFlash.value, 1);
+    flash.setLightningFlash(Number.NaN);
+    assert.equal(flash.lightningFlash.value, 0);
+  }
+
+  // Q8. `aoPass.enabled = false` non faceva niente: il GTAONode vendorizzato non
+  // consulta quella proprietà e in `updateBefore` disegna comunque il suo quad a
+  // schermo intero, anche con `gtaoSamples: 0`.
+  {
+    const off = makeAoController();
+    off.controller.setQuality(QUALITY_PROFILES.autoLow);
+    assert.equal(off.controller.aoPass.enabled, false);
+    assert.equal(off.controller.aoBlend.value, 0, 'il mix deve neutralizzare la texture non aggiornata');
+    for (let frame = 0; frame < 10; frame++) off.controller.aoPass.updateBefore({});
+    // Un solo render: quello che inizializza la render target. Prima erano 10.
+    assert.equal(off.renders(), 1);
+    // Il gate non restituisce false: quel valore farebbe annullare la
+    // registrazione a NodeFrame, che ritenterebbe il nodo per ogni render object.
+    assert.notEqual(off.controller.aoPass.updateBefore({}), false);
+
+    const on = makeAoController();
+    on.controller.setQuality(QUALITY_PROFILES.ultra);
+    assert.equal(on.controller.aoPass.enabled, true);
+    assert.equal(on.controller.aoPass.samples.value, QUALITY_PROFILES.ultra.gtaoSamples);
+    assert.equal(on.controller.aoBlend.value, 1);
+    assert.equal(on.controller.aoPass.useTemporalFiltering, true);
+    for (let frame = 0; frame < 10; frame++) {
+      assert.equal(on.controller.aoPass.updateBefore({}), 'renderizzato');
+    }
+    assert.equal(on.renders(), 10);
+
+    // Riaccensione a caldo: riparte senza ricostruire il grafo.
+    const back = makeAoController();
+    back.controller.setQuality(QUALITY_PROFILES.autoLow);
+    for (let frame = 0; frame < 5; frame++) back.controller.aoPass.updateBefore({});
+    const spenta = back.renders();
+    back.controller.setQuality(QUALITY_PROFILES.autoHigh);
+    for (let frame = 0; frame < 5; frame++) back.controller.aoPass.updateBefore({});
+    assert.equal(back.renders(), spenta + 5);
+    assert.equal(back.controller.aoBlend.value, 1);
+    // autoHigh ha 8 campioni: il filtro temporale resta acceso solo sopra 4.
+    assert.equal(back.controller.aoPass.useTemporalFiltering, QUALITY_PROFILES.autoHigh.gtaoSamples > 4);
+  }
+});
+
+test('la guardia di rientranza rifiuta il pass annidato, lascia passare gli altri e si riarma', () => {
   const log = [];
   const normalPass = fakePass('normal', log);
   let nested;
@@ -42,27 +212,24 @@ test('un pass annidato dentro un altro viene rifiutato invece di corrompere la l
   // Fuori dall'annidamento riparte: NodeFrame lo ritenta dopo il rollback.
   assert.equal(normalPass.updateBefore({}), 'eseguito');
   assert.deepEqual(log, ['scene:inizio', 'scene:fine', 'normal']);
-});
 
-test('fuori dal contesto annidato i pass girano normalmente', () => {
-  const log = [];
-  const normalPass = fakePass('normal', log);
-  const scenePass = fakePass('scene', log);
-  guardPassReentrancy([normalPass, scenePass]);
-  assert.equal(normalPass.updateBefore({}), 'eseguito');
-  assert.equal(scenePass.updateBefore({}), 'eseguito');
-  assert.deepEqual(log, ['normal', 'scene']);
-});
+  // Senza annidamento i pass girano normalmente, in ordine.
+  const plain = [];
+  const first = fakePass('normal', plain);
+  const second = fakePass('scene', plain);
+  guardPassReentrancy([first, second]);
+  assert.equal(first.updateBefore({}), 'eseguito');
+  assert.equal(second.updateBefore({}), 'eseguito');
+  assert.deepEqual(plain, ['normal', 'scene']);
 
-test('la guardia si riarma anche se il pass lancia', () => {
-  const log = [];
-  const boom = { name: 'boom', updateBefore() { log.push('boom'); throw new Error('render fallito'); } };
-  const other = fakePass('other', log);
+  // Senza il finally la guardia resterebbe alzata e spegnerebbe i pass per sempre.
+  const crash = [];
+  const boom = { name: 'boom', updateBefore() { crash.push('boom'); throw new Error('render fallito'); } };
+  const other = fakePass('other', crash);
   guardPassReentrancy([boom, other]);
   assert.throws(() => boom.updateBefore({}), /render fallito/);
-  // Senza il finally la guardia resterebbe alzata e spegnerebbe i pass per sempre.
   assert.equal(other.updateBefore({}), 'eseguito');
-  assert.deepEqual(log, ['boom', 'other']);
+  assert.deepEqual(crash, ['boom', 'other']);
 });
 
 function makeController(renderPipeline, onPersistentFailure = () => {}) {
@@ -87,124 +254,3 @@ function makeController(renderPipeline, onPersistentFailure = () => {}) {
   });
   return controller;
 }
-
-test('wall proximity cannot bypass a healthy post-processing pipeline', () => {
-  let pipelineRenders = 0;
-  const controller = makeController(() => { pipelineRenders++; });
-
-  // Preserve the old failure trigger as a regression probe. Rendering must not
-  // consult this player-position-derived state, even if a caller reintroduces it.
-  controller.edgeSafeMode = true;
-  controller.render(1 / 60, 10);
-
-  assert.equal(pipelineRenders, 1);
-  assert.equal(controller.postProcessingError, null);
-});
-
-test('a transient pipeline failure restores renderer state and retries', () => {
-  const failure = new Error('shader compilation failed');
-  let shouldFail = true;
-  const controller = makeController(() => {
-    controller.renderer.toneMapping = 'NoToneMapping';
-    controller.renderer.outputColorSpace = 'working';
-    controller.renderer.xr.enabled = false;
-    if (shouldFail) throw failure;
-  });
-  const originalConsoleError = console.error;
-  console.error = () => {};
-
-  try {
-    assert.equal(controller.render(1 / 60, 10), false);
-    assert.equal(controller.postProcessingError, failure);
-    assert.equal(controller.consecutivePostProcessingErrors, 1);
-    assert.equal(controller.renderer.toneMapping, 'ACES');
-    assert.equal(controller.renderer.outputColorSpace, 'sRGB');
-    assert.equal(controller.renderer.xr.enabled, true);
-    assert.equal(controller.renderer.setRenderTargetCalls, 1);
-    assert.equal(controller.renderer.setMRTCalls, 1);
-
-    shouldFail = false;
-    assert.equal(controller.render(1 / 60, 11), true);
-    assert.equal(controller.postProcessingError, null);
-    assert.equal(controller.consecutivePostProcessingErrors, 0);
-  } finally {
-    console.error = originalConsoleError;
-  }
-});
-
-test('persistent pipeline failures are reported once without a dark fallback', () => {
-  const failure = new Error('persistent failure');
-  let reports = 0;
-  const controller = makeController(() => { throw failure; }, () => { reports++; });
-  const originalConsoleError = console.error;
-  console.error = () => {};
-
-  try {
-    for (let frame = 0; frame < 120; frame++) controller.render(1 / 60, frame / 60);
-    assert.equal(reports, 1);
-    assert.equal(controller.consecutivePostProcessingErrors, 120);
-    assert.equal(controller.renderer.setRenderTargetCalls, 120);
-  } finally {
-    console.error = originalConsoleError;
-  }
-});
-
-function makeQualityController() {
-  const value = initial => ({ value: initial });
-  return Object.assign(Object.create(RenderPipelineController.prototype), {
-    aoPass: { samples: value(0) },
-    graphics: { grain: { amount: .01 }, vignette: { darkness: .92 } },
-    flareStrength: value(0),
-    heatScale: value(0),
-    grainAmount: value(0),
-    vignetteDarkness: value(0),
-    gradeSaturation: value(1),
-    gradeVibrance: value(0),
-    gradeAmount: value(1),
-    heatSlots: Array.from({ length: 4 }, () => ({ strength: value(0), peak: 0 })),
-    fxOverrides: {},
-    currentProfile: null
-  });
-}
-
-test('quality profiles update cinematic uniforms without recompiling the graph', () => {
-  const controller = makeQualityController();
-  controller.setQuality(QUALITY_PROFILES.ultra);
-  assert.equal(controller.flareStrength.value, QUALITY_PROFILES.ultra.post.flare);
-  assert.equal(controller.heatScale.value, QUALITY_PROFILES.ultra.post.heatHaze);
-  assert.equal(controller.heatSlotLimit, 4);
-  assert.equal(controller.gradeVibrance.value, QUALITY_PROFILES.ultra.post.vibrance);
-});
-
-test('FX overrides disable and restore the active profile values', () => {
-  const controller = makeQualityController();
-  controller.setQuality(QUALITY_PROFILES.autoHigh);
-  controller.setFxOverrides({ flare: false, heatHaze: false, grain: false });
-  assert.equal(controller.flareStrength.value, 0);
-  assert.equal(controller.heatScale.value, 0);
-  assert.equal(controller.grainAmount.value, 0);
-  controller.setFxOverrides({ flare: true, heatHaze: true, grain: true });
-  assert.equal(controller.flareStrength.value, QUALITY_PROFILES.autoHigh.post.flare);
-  assert.equal(controller.heatScale.value, QUALITY_PROFILES.autoHigh.post.heatHaze);
-  assert.equal(controller.grainAmount.value, QUALITY_PROFILES.autoHigh.post.grain);
-});
-
-test('world-space optical events reject invalid and off-screen projections', () => {
-  const controller = Object.assign(Object.create(RenderPipelineController.prototype), { camera: {} });
-  const point = projected => ({
-    x: 0, y: 0, z: 0,
-    clone: () => ({ project: () => projected })
-  });
-  assert.equal(controller._projectWorldPosition(point({ x: 0, y: 0, z: 0 })).z, 0);
-  assert.equal(controller._projectWorldPosition(point({ x: 2, y: 0, z: 0 })), null);
-  assert.equal(controller._projectWorldPosition(point({ x: 0, y: 0, z: Number.NaN })), null);
-  assert.equal(controller._projectWorldPosition({ x: Number.NaN, y: 0, z: 0 }), null);
-});
-
-test('lightning exposure is finite and clamped', () => {
-  const controller = Object.assign(Object.create(RenderPipelineController.prototype), { lightningFlash: { value: 0 } });
-  controller.setLightningFlash(7);
-  assert.equal(controller.lightningFlash.value, 1);
-  controller.setLightningFlash(Number.NaN);
-  assert.equal(controller.lightningFlash.value, 0);
-});

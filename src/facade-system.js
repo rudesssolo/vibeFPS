@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { makeRng } from './rng.js';
+import { unlitBasic } from './materials.js';
 import { fillNormalArray, fillNormalRow, luminanceFromCanvas, normalTextureFromArray } from './normal-map.js';
 
 function canvasTexture(canvas, { color = false, anisotropy = 1 } = {}) {
@@ -217,7 +218,7 @@ function paintNumberCanvas(text, color, resolution, seed) {
  * sfere): evita di vendorizzare BufferGeometryUtils e di introdurre una
  * dipendenza in più nella modalità offline (§13.3 del piano performance).
  */
-function mergeStaticGeometries(entries) {
+export function mergeStaticGeometries(entries) {
   let vertexCount = 0;
   let indexCount = 0;
   for (const { geometry } of entries) {
@@ -308,7 +309,7 @@ export class FacadeSystem {
     this.pulseAmplitude = .08;
     this.wetDetail = .72;
     this.beaconGeometry = new THREE.SphereGeometry(.075, 6, 4);
-    this.beaconMaterials = [0xff4f68, 0x72edff].map(color => new THREE.MeshBasicMaterial({
+    this.beaconMaterials = [0xff4f68, 0x72edff].map(color => unlitBasic({
       color,
       transparent: true,
       opacity: .8,

@@ -154,6 +154,10 @@ export class RenderPipelineController {
     this.aoPass.resolutionScale = .5;
     this.aoPass.useTemporalFiltering = true;
     this.applyAoSettings(graphics.gtao);
+    // Q8: intensità della miscelazione come uniform e non come costante nel
+    // grafo, così spegnere l'AO non richiede di ricompilare i materiali.
+    this.aoBlend = uniform(graphics.gtao.blendIntensity);
+    this.gateAoPass();
 
     const scenePass = pass(scene, camera);
     // `normalPass` e `scenePass` renderizzano entrambi (scene, camera), quindi
@@ -164,7 +168,7 @@ export class RenderPipelineController {
 
     const aoTexture = this.aoPass.getTextureNode();
     const aoFactor = graphics.gtao.enabled
-      ? mix(float(1), aoTexture.sample(screenUV).r, float(graphics.gtao.blendIntensity))
+      ? mix(float(1), aoTexture.sample(screenUV).r, this.aoBlend)
       : float(1);
     scenePass.contextNode = builtinAOContext(aoFactor);
 
@@ -185,6 +189,35 @@ export class RenderPipelineController {
     outputNode = this.addGrain(outputNode);
     outputNode = this.addVignette(outputNode);
     this.pipeline.outputNode = renderOutput(outputNode);
+  }
+
+  /**
+   * Rende `aoPass.enabled` una proprietà che ha davvero un effetto (Q8).
+   *
+   * Il `GTAONode` vendorizzato non la consulta: `updateBefore` disegna il suo
+   * quad a schermo intero a ogni frame anche con `samples = 0`, quindi su
+   * autoLow l'AO costava un pass completo per un risultato che nessuno usava.
+   * Qui il render del quad viene saltato quando l'AO è spento — la texture
+   * resta l'ultima prodotta, ma `aoBlend` a 0 la rende irrilevante nel mix.
+   *
+   * Il primo frame passa sempre: serve a dimensionare e riempire la render
+   * target una volta. Saltarlo anche lì significherebbe campionare una texture
+   * mai renderizzata, ed è esattamente la classe di rischio (schermo scuro da
+   * dato non inizializzato) che questo progetto ha già pagato con R1.
+   *
+   * Non restituisce `false` come `guardPassReentrancy`: quel valore fa
+   * annullare la registrazione a `NodeFrame`, che riproverebbe il nodo per ogni
+   * render object del frame. Uscire senza valore lo marca come già aggiornato.
+   */
+  gateAoPass() {
+    this._aoInitialized = false;
+    const runAoUpdate = this.aoPass.updateBefore.bind(this.aoPass);
+    this.aoPass.updateBefore = frame => {
+      if (this.aoPass.enabled === false && this._aoInitialized) return;
+      this._aoInitialized = true;
+      return runAoUpdate(frame);
+    };
+    return this.aoPass;
   }
 
   applyAoSettings(settings) {
@@ -440,14 +473,15 @@ export class RenderPipelineController {
   setQuality(profile) {
     if (!profile) return;
     this.currentProfile = profile;
-    // GTAO early-out: 0 samples disables AO computation entirely on autoLow.
+    // GTAO: 0 campioni significa spento. `enabled` è consultata da gateAoPass()
+    // — il GTAONode di three la ignora — e `aoBlend` a 0 neutralizza il mix,
+    // così la texture non aggiornata non entra mai nell'immagine (Q8).
     const gtaoSamples = Math.max(0, profile.gtaoSamples ?? 0);
+    const aoEnabled = gtaoSamples > 0;
     this.aoPass.samples.value = gtaoSamples;
-    // When disabled, skip temporal filtering and reduce AO resolution overhead.
-    this.aoPass.enabled = gtaoSamples > 0;
-    if (this.aoPass.enabled !== undefined) {
-      this.aoPass.useTemporalFiltering = gtaoSamples > 4;
-    }
+    this.aoPass.enabled = aoEnabled;
+    this.aoPass.useTemporalFiltering = gtaoSamples > 4;
+    this.aoBlend.value = aoEnabled ? this.graphics.gtao.blendIntensity : 0;
     const post = profile.post || {};
     this.flareStrength.value = post.flare ?? 0;
     this.heatScale.value = post.heatHaze ?? 0;

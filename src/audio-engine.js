@@ -844,6 +844,31 @@ export class AudioEngine {
   apexCharge() { this.tone(90, 320, .34, .07, 'sawtooth', null, null, 0); this.noise(.3, .05, 700, 'lowpass', 0); }
   apexBarrage() { this.tone(300, 900, .2, .05, 'square', null, null, 0); this.noise(.16, .04, 4200, 'bandpass', 0); }
   apexShot(pan = 0) { this.tone(720, 160, .2, .06, 'sawtooth', null, null, pan); this.noise(.12, .05, 2600, 'bandpass', pan); }
+  /**
+   * Blink del WRAITH. Due stadi, non uno: un collasso discendente da dove
+   * sparisce e, 90 ms dopo, una materializzazione ascendente da dove ricompare.
+   * I due pan sono diversi, quindi il suono dice **dove è andato** anche se il
+   * giocatore stava guardando altrove — che è l'unica informazione utile contro
+   * un nemico che si teletrasporta alle spalle.
+   */
+  apexBlink(panFrom = 0, panTo = 0) {
+    if (!this.started) return;
+    const now = this.ctx.currentTime;
+    // Partenza: implosione.
+    this.tone(1400, 180, .16, .055, 'sawtooth', now, null, panFrom);
+    this.noise(.14, .05, 3600, 'bandpass', panFrom, now, null, 2.4);
+    // Arrivo: si ricompone, con una coda metallica.
+    this.tone(160, 1500, .2, .06, 'square', now + .09, null, panTo);
+    this.noise(.2, .045, 5200, 'highpass', panTo, now + .09);
+    this.tone(880, 1760, .26, .028, 'sine', now + .12, null, panTo);
+  }
+
+  /** Passo dentro una pozza: schizzo breve, filtrato alto, senza corpo. */
+  waterStep(pan = 0) {
+    this.noise(.16, .045, 2600, 'bandpass', pan, null, null, 1.1);
+    this.noise(.09, .03, 6200, 'highpass', pan);
+  }
+
   apexSplit() { this.tone(500, 150, .25, .06, 'square', null, null, 0); this.noise(.2, .05, 1800, 'bandpass', 0); }
   apexSummon() { this.tone(100, 300, .4, .05, 'sawtooth', null, null, 0); this.noise(.3, .05, 1200, 'lowpass', 0); }
   apexMine() { this.tone(1200, 600, .22, .05, 'sine', null, null, 0); this.noise(.12, .04, 5000, 'highpass', 0); }

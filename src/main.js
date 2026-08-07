@@ -1,11 +1,12 @@
   import * as THREE from 'three/webgpu';
   import {
-    color, dot, instancedBufferAttribute, max, mix, sin,
-    positionGeometry, reflector, smoothstep, uniform, vec3
+    color, dot, instancedBufferAttribute, length, max, mix, normalView, sin,
+    positionGeometry, positionViewDirection, reflector, smoothstep, uniform, uv, vec3
   } from 'three/tsl';
+  import { unlitBasic } from './materials.js';
   import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
   import { RectAreaLightTexturesLib } from 'three/addons/lights/RectAreaLightTexturesLib.js';
-  import { FacadeSystem } from './facade-system.js';
+  import { FacadeSystem, mergeStaticGeometries } from './facade-system.js';
   import { DroneSystem } from './drone-system.js';
   import { ExplosionSystem } from './explosion-system.js';
   import { AudioEngine } from './audio-engine.js';
@@ -17,6 +18,8 @@
   import { makeRng } from './rng.js';
   import { constrainBodyToSquare } from './player-collision.js';
   import { ReflectionScheduler } from './reflection-throttle.js';
+  import { WeaponDropRegistry } from './weapon-drops.js';
+  import { WaterSystem } from './water-system.js';
   import { getStoredSensitivity, storeSensitivity, getStoredQualityMode, APEX_TUNING, ENDGAME_TUNING, RAILGUN_TUNING, WEAPON_TUNING, QUALITY_PROFILES, getBossEncounter } from './config.js';
   import { t, getLanguage, setLanguage } from './i18n.js';
 
@@ -336,7 +339,13 @@
   renderer.domElement.id = 'game-canvas';
   document.body.appendChild(renderer.domElement);
   const rendererBackend = 'WEBGPU';
-  document.querySelector('#overlay .build').textContent = `BUILD 2.6.08 // ${rendererBackend}`;
+  // La data vive solo in index.html (unica fonte, timbrata da `npm run
+  // stamp:build`): qui si sostituisce soltanto il suffisso di stato. Importarla
+  // da config.js aggiungerebbe un simbolo di cui main.js ha bisogno per
+  // linkare, e un config.js servito dalla cache insieme a un main.js nuovo
+  // bloccherebbe il boot prima di qualsiasi disegno — è il difetto Q5.
+  const buildEl = document.querySelector('#overlay .build');
+  if (buildEl) buildEl.textContent = buildEl.textContent.replace(/\/\/.*$/, `// ${rendererBackend}`);
 
   // --- MOBILE / TOUCH ---------------------------------------------------------
   // Rileva un dispositivo "touch-primary" (telefono/tablet), non un PC con
@@ -455,25 +464,52 @@
     scene.add(stars);
   }
 
-  // Luna con alone
+  // Luna con alone.
+  //
+  // I due dischi stavano alla STESSA distanza, quindi erano complanari: il disco
+  // opaco scrive la profondità e l'alone additivo la testa con LessEqual, ma le
+  // due circonferenze hanno raggi diversi e quindi triangoli diversi. Alla stessa
+  // profondità matematica l'interpolazione per-pixel differisce di un ulp e il
+  // test passa a scacchi lungo gli spigoli dei settori: sulla luna comparivano
+  // pale a ventaglio grigie, dove l'alone non veniva sommato.
+  //
+  // L'alone va dietro alla luna, non davanti: davanti la coprirebbe di azzurro.
+  // Il raggio è scalato con la distanza, così la dimensione a schermo non cambia.
+  const MOON_DISTANCE = 360;
+  const MOON_HALO_DISTANCE = 372;   // 12 unità: separazione ampia rispetto alla
+                                    // precisione del depth buffer a questa quota
   function createMoon() {
-    const moonPos = new THREE.Vector3(...GRAPHICS.lights.moon.pos).normalize().multiplyScalar(360);
-    const moon = new THREE.Mesh(
-      new THREE.CircleGeometry(13, 32),
-      new THREE.MeshBasicMaterial({ color: 0xdce9ff, fog: false })
-    );
-    moon.position.copy(moonPos);
+    const moonDirection = new THREE.Vector3(...GRAPHICS.lights.moon.pos).normalize();
+    const haloScale = MOON_HALO_DISTANCE / MOON_DISTANCE;
+
+    // `lights = false` è il punto di tutto. In WebGPU un MeshBasicMaterial NON è
+    // unlit: three lo converte in MeshBasicNodeMaterial, che dichiara
+    // `lights = true` e passa per BasicLightingModel, dove
+    // `indirectDiffuse.mulAssign(ambientOcclusion)` moltiplica il colore per l'AO
+    // del contesto — cioè per la nostra GTAO. Il disco della luna è un piano
+    // isolato a 360 unità con il cielo 30 unità dietro: un salto di profondità
+    // enorme, che la GTAO legge come occlusione quasi totale. Risultato: la luna
+    // usciva NERA, e quella che si vedeva era solo l'alone. Con lights=false il
+    // materiale salta il modello di illuminazione e resta davvero non illuminato.
+    const moonMaterial = new THREE.MeshBasicNodeMaterial({ color: 0xdce9ff, fog: false });
+    moonMaterial.lights = false;
+    const moon = new THREE.Mesh(new THREE.CircleGeometry(13, 64), moonMaterial);
+    moon.position.copy(moonDirection).multiplyScalar(MOON_DISTANCE);
     moon.lookAt(0, 0, 0);
     scene.add(moon);
 
-    const halo = new THREE.Mesh(
-      new THREE.CircleGeometry(30, 32),
-      new THREE.MeshBasicMaterial({
-        color: 0x7fb0ff, transparent: true, opacity: 0.35,
-        blending: THREE.AdditiveBlending, depthWrite: false, fog: false
-      })
-    );
-    halo.position.copy(moonPos);
+    // L'alone stava dietro un disco a bordo netto e opacità costante: un cerchio
+    // di cartone azzurro, non un bagliore. La UV di CircleGeometry ha il centro
+    // a (.5,.5), quindi la distanza dal centro dà la sfumatura radiale.
+    const haloMaterial = new THREE.MeshBasicNodeMaterial({
+      color: 0x7fb0ff, transparent: true,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: false
+    });
+    haloMaterial.lights = false;
+    const haloFalloff = length(uv().sub(.5)).mul(2).clamp(0, 1);
+    haloMaterial.opacityNode = haloFalloff.oneMinus().pow(2.6).mul(.55);
+    const halo = new THREE.Mesh(new THREE.CircleGeometry(30 * haloScale, 64), haloMaterial);
+    halo.position.copy(moonDirection).multiplyScalar(MOON_HALO_DISTANCE);
     halo.lookAt(0, 0, 0);
     scene.add(halo);
   }
@@ -538,7 +574,7 @@
     for (const p of panels) {
       const mesh = new THREE.Mesh(
         new THREE.PlaneGeometry(p.w, p.h),
-        new THREE.MeshBasicMaterial({ color: p.color })
+        unlitBasic({ color: p.color })
       );
       mesh.material.color.multiplyScalar(Math.min(p.intensity, 4) * 0.25);
       mesh.position.set(...p.pos);
@@ -570,7 +606,7 @@
     for (const panel of weaponReflectionPanels) {
       const mesh = new THREE.Mesh(
         new THREE.PlaneGeometry(panel.w, panel.h),
-        new THREE.MeshBasicMaterial({ color: panel.color })
+        unlitBasic({ color: panel.color })
       );
       mesh.position.set(...panel.pos);
       mesh.rotation.y = panel.yaw;
@@ -645,6 +681,9 @@
   // texture/reflector non deve mai finire nel frustum mentre si corre rasenti
   // al perimetro.
   let floorReflection = null;
+  // Dichiarata prima del reflector: il wrapper qui sotto la nasconde durante il
+  // render dello specchio, e viene costruita più in basso, col pavimento.
+  let waterSystem = null;
   // Il reflector rende la scena una seconda volta ogni frame: lo scheduler
   // decide su quali frame quel lavoro viene effettivamente svolto (vedi
   // reflection-throttle.js). L'intervallo arriva dal profilo qualità.
@@ -666,7 +705,22 @@
     reflectorNode.updateBefore = frame => {
       if (!reflectionAllowed) return;
       reflectionRenderCount++;
-      return runUpdateBefore(frame);
+      // La lamina d'acqua sparisce durante il render dello specchio. Due
+      // motivi, il secondo grave: un velo d'acqua dentro il proprio riflesso non
+      // ha senso fisico, e — soprattutto — quel materiale CAMPIONA il reflector,
+      // quindi disegnarlo qui significa leggere la render target mentre è
+      // quella attiva. `bounces: false` fa restituire `false` all'update
+      // annidato, e `false` fa annullare la registrazione a NodeFrame, che
+      // ritenta: due consumatori del riflesso bastavano a farlo rirenderizzare
+      // a rimbalzo e a restituire un riflesso sbagliato.
+      const water = waterSystem?.mesh;
+      const wasVisible = water ? water.visible : false;
+      if (water) water.visible = false;
+      try {
+        return runUpdateBefore(frame);
+      } finally {
+        if (water) water.visible = wasVisible;
+      }
     };
   } else {
     const floorMesh = new THREE.Mesh(
@@ -722,6 +776,17 @@
   asphaltSkin.receiveShadow = true;
   if (floorReflection) asphaltSkin.add(floorReflection.target);
   scene.add(asphaltSkin);
+
+  // Lamina d'acqua sopra l'asfalto: dove la maschera è accesa ci sono pozze
+  // vere, con riflesso deformato dalle increspature. Riusa il reflector del
+  // pavimento invece di renderizzarne un secondo.
+  waterSystem = new WaterSystem({
+    scene,
+    size: floorSize,
+    y: .045,
+    reflectorNode: floorReflection,
+    seed: visualSeed
+  });
 
   // Corpo fisico del pavimento (senza mesh: il visual è il riflettore)
   addStaticBox(0, -0.5, 0, floorSize, 1, floorSize, null);
@@ -835,9 +900,27 @@
   });
 
   /* ---- Strutture extra: piattaforma, rampa, colonne, coperture, piedistallo ---- */
-  function addStaticCylinder(x, y, z, radius, height, mesh) {
+  /**
+   * Cilindro statico allineato a Y, come `THREE.CylinderGeometry`.
+   *
+   * `CANNON.Cylinder` è costruito lungo **Z**: i suoi vertici variano di raggio
+   * in x,y e di ±height/2 in z. `CylinderGeometry` di three è lungo **Y**.
+   * Senza questa rotazione i corpi restavano coricati: le colonne diventavano
+   * cilindri orizzontali lunghi 4 m che iniziavano a y = 1.4, cioè sopra la
+   * testa del collider del giocatore (centro ~1 m, raggio .5) — e il giocatore
+   * ci passava attraverso. Il piedistallo diventava un disco largo 3.6 m in
+   * piedi, spesso 60 cm.
+   *
+   * La rotazione va sulla FORMA, non sul corpo: `body.quaternion` resta
+   * identità, così chi legge l'orientamento del corpo (sync della mesh, raycast)
+   * non trova una rotazione che nella scena non esiste.
+   */
+  function addStaticCylinder(x, y, z, radius, height, mesh, radiusTop = radius) {
     const body = new CANNON.Body({ mass: 0, material: matGround });
-    body.addShape(new CANNON.Cylinder(radius, radius, height, 16));
+    const upright = new CANNON.Quaternion();
+    // -90° attorno a X manda +Z su +Y: il primo raggio resta quello superiore.
+    upright.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+    body.addShape(new CANNON.Cylinder(radiusTop, radius, height, 16), new CANNON.Vec3(), upright);
     body.position.set(x, y, z);
     body.collisionFilterGroup = COLLISION.STATIC;
     body.collisionFilterMask = -1;
@@ -925,7 +1008,9 @@
   pedestal.castShadow = true;
   pedestal.receiveShadow = true;
   scene.add(pedestal);
-  addStaticCylinder(0, 0.3, 0, 1.8, 0.6, null);
+  // Il piedistallo è troncoconico (1.5 in cima, 1.8 alla base): passiamo
+  // entrambi i raggi invece di usare il maggiore per tutta l'altezza.
+  addStaticCylinder(0, 0.3, 0, 1.8, 0.6, null, 1.5);
 
   const crystalMat = new THREE.MeshStandardMaterial({ color: 0x0f2233, emissive: 0x00e5ff, emissiveIntensity: 2.0, roughness: 0.2, metalness: 0.1 });
   const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.5), crystalMat);
@@ -953,20 +1038,20 @@
 
   const padRing = new THREE.Mesh(
     new THREE.RingGeometry(CONFIG.padSize * 0.6, CONFIG.padSize * 0.66, 48),
-    new THREE.MeshBasicMaterial({ color: 0xff2d95, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
+    unlitBasic({ color: 0xff2d95, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
   );
   padRing.rotation.x = -Math.PI / 2;
   padRing.position.set(CONFIG.padPos.x, 0.38, CONFIG.padPos.z);
   scene.add(padRing);
 
-  const padArrowMat = new THREE.MeshBasicMaterial({ color: 0xff7b2d });
+  const padArrowMat = unlitBasic({ color: 0xff7b2d });
   const padArrow = new THREE.Mesh(new THREE.ConeGeometry(0.55, 0.9, 4), padArrowMat);
   padArrow.position.set(CONFIG.padPos.x, 0.8, CONFIG.padPos.z);
   scene.add(padArrow);
 
   const arrowGlow = new THREE.Mesh(
     new THREE.ConeGeometry(1.15, 1.9, 4),
-    new THREE.MeshBasicMaterial({ color: 0xff7b2d, transparent: true, opacity: 0.14, blending: THREE.AdditiveBlending, depthWrite: false })
+    unlitBasic({ color: 0xff7b2d, transparent: true, opacity: 0.14, blending: THREE.AdditiveBlending, depthWrite: false })
   );
   arrowGlow.position.set(CONFIG.padPos.x, 0.95, CONFIG.padPos.z);
   scene.add(arrowGlow);
@@ -1000,52 +1085,184 @@
   // G3: insegne neon con flicker discreto (fase e velocità per insegna).
   const flickerSigns = [];
   const reactiveNeonLights = [];
+  let neonSignLight = null;
 
-  // Insegna neon "VIBE" sul muro ovest
+  // Insegna "VIBE" in tubi al neon sul muro ovest.
+  //
+  // Era testo disegnato su canvas e mappato su un quad: da vicino si legge come
+  // un adesivo, perché non ha spessore, non prende la prospettiva e il "glow" è
+  // un'ombra sfocata dipinta dentro la texture. Qui i tubi sono geometria vera —
+  // TubeGeometry lungo le curve delle lettere — quindi hanno parallasse, si
+  // occludono fra loro e ricevono il bloom della pipeline come qualsiasi altra
+  // sorgente luminosa.
+  //
+  // Struttura di un tubo al neon reale: il vetro con il gas eccitato è quasi
+  // BIANCO al centro e colorato solo ai bordi e nell'alone. Ecco perché il core
+  // è 0xffe8f6 e non magenta: la saturazione la danno il manicotto additivo
+  // attorno e il bloom.
+  const neonTubes = [];
   (function createSign() {
-    const sw = 256, sh = 128;
-    const c = document.createElement('canvas');
-    c.width = sw; c.height = sh;
-    const ctx = c.getContext('2d');
-    ctx.clearRect(0, 0, sw, sh);
-    ctx.font = 'bold 74px "Segoe UI", system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.shadowColor = '#ff2d95';
-    ctx.shadowBlur = 16;
-    ctx.fillStyle = '#ff2d95';
-    ctx.fillText('VIBE', sw / 2, sh / 2);
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = '#ffd6ee';
-    ctx.fillText('VIBE', sw / 2, sh / 2);
-    const tex = new THREE.CanvasTexture(c);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    const sign = new THREE.Mesh(
-      new THREE.PlaneGeometry(5, 2.5),
-      new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide })
-    );
-    sign.position.set(-19.35, 3.5, -4);
-    sign.rotation.y = Math.PI / 2;
-    scene.add(sign);
-    flickerSigns.push({ material: sign.material, phase: 0, speed: 6.1 });
+    const H = 1.5;                  // altezza delle lettere
+    const CORE_RADIUS = .042;
+    const GAP = .28;
+    const half = H / 2;
 
-    const frame = new THREE.Mesh(
+    // Lettere angolari: spigoli vivi e angoli smussati a 45°, non curve
+    // tipografiche. È il vocabolario dell'insegnistica al neon — il tubo si
+    // piega a caldo su angoli netti — ed è anche ciò che legge come cyberpunk
+    // invece che come un font di sistema.
+    //
+    // Ogni tratto è una polilinea; ogni SEGMENTO diventa un tubo dritto a sé, e
+    // a ogni vertice va una sfera. Non è un dettaglio decorativo: una singola
+    // curva con angoli vivi fa ruotare il frame di Frenet e il tubo si attorciglia
+    // sulla piega. Un tubo per segmento ha un frame stabile per costruzione, e la
+    // sfera al vertice è esattamente ciò che si vede in un tubo piegato davvero.
+    const LETTERS = [
+      { width: .92, strokes: [[[0, half], [.30, -half + .22], [.46, -half], [.62, -half + .22], [.92, half]]] },
+      {
+        width: .46, strokes: [
+          [[.23, -half], [.23, half]],
+          [[.02, half], [.44, half]],
+          [[.02, -half], [.44, -half]]
+        ]
+      },
+      {
+        width: .86, strokes: [
+          [[0, -half], [0, half]],
+          [[0, half], [.62, half], [.86, half - .24], [.86, .16], [.66, 0], [0, 0]],
+          [[0, 0], [.70, 0], [.86, -.18], [.86, -half + .24], [.62, -half], [0, -half]]
+        ]
+      },
+      {
+        width: .8, strokes: [
+          [[0, -half], [0, half]],
+          [[0, half], [.66, half], [.8, half - .14]],
+          [[0, 0], [.58, 0]],
+          [[0, -half], [.66, -half], [.8, -half + .14]]
+        ]
+      }
+    ];
+
+    const totalWidth = LETTERS.reduce((sum, l) => sum + l.width, 0) + GAP * (LETTERS.length - 1);
+    const group = new THREE.Group();
+    group.position.set(-19.28, 3.5, -4);
+    group.rotation.y = Math.PI / 2;   // il piano locale guarda dentro l'arena
+    scene.add(group);
+
+    // `facing` vale 1 dove la normale punta alla camera — il centro del tubo,
+    // dove lo sguardo attraversa più gas — e 0 sulla silhouette.
+    const facing = dot(normalView, positionViewDirection).abs().clamp(0, 1);
+    const GLASS_OFF = color(0x2b2732);   // vetro spento: grigio, non nero
+
+    let cursor = -totalWidth / 2;
+    for (const letter of LETTERS) {
+      const build = (radius, radialSegments, sphereSegments) => {
+        const entries = [];
+        for (const points of letter.strokes) {
+          for (let i = 0; i < points.length; i++) {
+            const [x, y] = points[i];
+            entries.push({
+              geometry: new THREE.SphereGeometry(radius, sphereSegments, Math.max(3, sphereSegments - 2)),
+              matrix: new THREE.Matrix4().makeTranslation(cursor + x, y, 0)
+            });
+            if (i === points.length - 1) continue;
+            const [nx, ny] = points[i + 1];
+            // Un segmento dritto non ha curvatura: un solo anello basta.
+            entries.push({
+              geometry: new THREE.TubeGeometry(
+                new THREE.LineCurve3(
+                  new THREE.Vector3(cursor + x, y, 0),
+                  new THREE.Vector3(cursor + nx, ny, 0)
+                ), 1, radius, radialSegments, false
+              ),
+              matrix: new THREE.Matrix4()
+            });
+          }
+        }
+        return mergeStaticGeometries(entries);
+      };
+
+      // Il flicker pilota questa uniform, non il colore: così la tinta del gas
+      // resta quella e si spegne verso il vetro, invece di sbiadire al grigio.
+      const level = uniform(1);
+      const tint = color(0xff2d95);
+
+      // Un tubo al neon acceso è quasi BIANCO al centro e colorato ai bordi:
+      // al centro la linea di vista attraversa la colonna di gas per il lungo e
+      // satura, sulla silhouette ne attraversa poco e resta la tinta.
+      const coreMaterial = unlitBasic({});
+      coreMaterial.colorNode = mix(GLASS_OFF, mix(tint, color(0xfff2fb), facing.pow(2.4)), level);
+      const core = new THREE.Mesh(build(CORE_RADIUS, 8, 6), coreMaterial);
+      group.add(core);
+
+      // Il manicotto è un guscio: sulla silhouette il raggio ne attraversa una
+      // corda lunga, al centro solo lo spessore. Quindi è l'INVERSO del core —
+      // ed è ciò che disegna l'alone attorno al tubo invece di una fascia piatta.
+      const glowMaterial = unlitBasic({
+        transparent: true, blending: THREE.AdditiveBlending,
+        depthWrite: false, side: THREE.DoubleSide
+      });
+      glowMaterial.colorNode = tint;
+      glowMaterial.opacityNode = facing.oneMinus().pow(2.2).mul(level).mul(.62);
+      const glow = new THREE.Mesh(build(CORE_RADIUS * 3.2, 6, 5), glowMaterial);
+      group.add(glow);
+
+      neonTubes.push({
+        level,
+        phase: neonTubes.length * 1.9,
+        speed: 5.3 + neonTubes.length * .7,
+        // La 'B' è il tubo mezzo andato: si guasta dieci volte più spesso.
+        glitchThreshold: neonTubes.length === 2 ? .955 : .9975
+      });
+      cursor += letter.width + GAP;
+    }
+
+    // Pannello di fondo: dà il nero contro cui il neon stacca, e nasconde il
+    // muro dietro i tubi.
+    const backing = new THREE.Mesh(
       new THREE.BoxGeometry(0.1, 2.9, 5.4),
-      new THREE.MeshStandardMaterial({ color: 0x0a0d13, metalness: 0.8, roughness: 0.4 })
+      new THREE.MeshStandardMaterial({ color: 0x0a0d13, metalness: 0.85, roughness: 0.28 })
     );
-    frame.position.set(-19.47, 3.5, -4);
-    scene.add(frame);
-
-    // Finto volumetric light shaft sotto l'insegna
-    const shaft = new THREE.Mesh(
-      new THREE.PlaneGeometry(2.4, 7),
-      new THREE.MeshBasicMaterial({ color: 0xff2d95, transparent: true, opacity: 0.07, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
-    );
-    shaft.position.set(-19.25, 2.0, -4);
-    shaft.rotation.y = Math.PI / 2;
-    shaft.rotation.z = 0.08;
-    scene.add(shaft);
+    backing.position.set(-19.47, 3.5, -4);
+    scene.add(backing);
   })();
+
+  /**
+   * Flicker dei tubi al neon.
+   *
+   * Un tubo al neon non "pulsa" con una sinusoide: sta acceso e stabile quasi
+   * sempre, con un lieve battito di rete, e ogni tanto — quando l'elettrodo è
+   * consumato — entra in una crisi di qualche decimo di secondo in cui si
+   * accende e si spegne a scatti quasi binari. Modellare la crisi come finestra
+   * rara e lo stutter come onda veloce dentro quella finestra dà quel
+   * comportamento senza bisogno di rumore per-frame né di stato.
+   *
+   * Il livello pilota una uniform, non il colore del materiale: il grafo TSL
+   * miscela fra vetro spento e gas acceso mantenendo la tinta. Scalare il
+   * colore invece porterebbe verso il nero, e un tubo spento non è nero — è un
+   * cilindro di vetro grigio che riflette la stanza.
+   */
+  function updateNeonTubes(elapsed, lightningFlash) {
+    let brightest = 0;
+    for (const tube of neonTubes) {
+      const mains = .96 + Math.sin(elapsed * tube.speed + tube.phase) * .04;
+      const crisis = Math.sin(elapsed * .77 + tube.phase * 3.1)
+        * Math.sin(elapsed * .31 + tube.phase * 1.7);
+      let level = mains;
+      if (crisis > tube.glitchThreshold) {
+        // Dentro la crisi: scatti a ~25 Hz con un secondo battito sfasato, così
+        // non si legge come un'onda regolare.
+        const stutter = Math.sin(elapsed * 51 + tube.phase * 7.3) + Math.sin(elapsed * 23.4);
+        level = stutter > .2 ? mains : .06;
+      }
+      level = Math.min(1.3, level + lightningFlash * .2);
+      tube.level.value = level;
+      brightest = Math.max(brightest, level);
+    }
+    // La luce sul muro segue il tubo più acceso: quando la 'B' se ne va, il
+    // resto dell'insegna tiene ancora illuminata la parete.
+    if (neonSignLight) neonSignLight.intensity = 2 * brightest;
+  }
 
   // Luci ad area fisiche (soft box) per illuminazione fotorealistica
   THREE.RectAreaLightNode.setLTC(RectAreaLightTexturesLib.init());
@@ -1055,7 +1272,10 @@
     signLight.position.set(-18.7, 3.5, -4);
     signLight.lookAt(0, 3.5, -4);
     scene.add(signLight);
-    reactiveNeonLights.push({ light: signLight, base: 2, phase: 0 });
+    // Fuori da reactiveNeonLights: questa luce non "respira" per conto suo, la
+    // pilota il flicker dei tubi. Un'insegna che sfarfalla mentre la luce che
+    // getta sul muro resta ferma è la cosa che tradisce il finto.
+    neonSignLight = signLight;
 
     // Jump pad -> soft box magenta dall'alto
     const padLight = new THREE.RectAreaLight(0xff2d95, 1.6, 6, 6);
@@ -1081,7 +1301,7 @@
     const h = 0.9 * scale;
     const sign = new THREE.Mesh(
       new THREE.PlaneGeometry(w, h),
-      new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide })
+      unlitBasic({ map: tex, transparent: true, side: THREE.DoubleSide })
     );
     sign.position.set(pos[0], pos[1], pos[2]);
     sign.lookAt(pos[0] + normal[0], pos[1] + normal[1], pos[2] + normal[2]);
@@ -1117,27 +1337,22 @@
   const animatedSteam = [];
   (function createIndustrialSetDressing() {
     const rand = makeRng(8119);
-    const puddleMat = new THREE.MeshPhysicalMaterial({
-      color: 0x09131d, roughness: .08, metalness: .05, clearcoat: 1,
-      clearcoatRoughness: .04, transparent: true, opacity: .62,
-      envMapIntensity: 2, depthWrite: false
-    });
-    weatherSystem.registerWetMaterial(puddleMat, { dryRoughness: .18, wetRoughness: .045, animatedNormal: true });
-    for (let i=0;i<17;i++) {
-      const puddle = new THREE.Mesh(new THREE.CircleGeometry(.45+rand()*1.4,18),puddleMat);
-      puddle.rotation.x=-Math.PI/2;
-      puddle.scale.y=.35+rand()*.5;
-      puddle.rotation.z=rand()*Math.PI;
-      puddle.position.set(-17+rand()*34,.058,-17+rand()*34);
-      scene.add(puddle);
-    }
+    // Qui c'erano 17 ellissi piatte chiamate `puddle`: dischi a clearcoat 1 e
+    // envMapIntensity 2, posati a y=.058 — cioè SOPRA la lamina d'acqua vera,
+    // che sta a .045. Erano le "pozzanghere vecchie": non riflettevano la scena
+    // ma l'environment map (da cui l'alone arancione della luce rim), non
+    // reagivano a niente e coprivano quelle nuove. Rimosse: le pozzanghere ora
+    // sono geometria in `water-system.js`, con una forma irregolare e una
+    // superficie che si muove.
+    // `rand` resta consumato dagli elementi seguenti, quindi il set dressing
+    // successivo non cambia disposizione.
 
     // Griglie di scolo e piccoli marker stradali rompono le grandi superfici uniformi.
     const grateMat = new THREE.MeshStandardMaterial({color:0x090c11,metalness:.92,roughness:.3});
     for (const [gx,gz,rot] of [[-4,11,.2],[10,4,-.7],[-13,-3,.9],[14,-14,.1]]) {
       const grate=new THREE.Group();
       const rim=new THREE.Mesh(new THREE.BoxGeometry(1.45,.05,.7),grateMat); rim.position.y=.07; grate.add(rim);
-      for(let i=-3;i<=3;i++){const slot=new THREE.Mesh(new THREE.BoxGeometry(.07,.025,.58),new THREE.MeshBasicMaterial({color:0x010205}));slot.position.set(i*.18,.105,0);grate.add(slot);}
+      for(let i=-3;i<=3;i++){const slot=new THREE.Mesh(new THREE.BoxGeometry(.07,.025,.58),unlitBasic({color:0x010205}));slot.position.set(i*.18,.105,0);grate.add(slot);}
       grate.position.set(gx,0,gz); grate.rotation.y=rot; scene.add(grate);
     }
 
@@ -1170,10 +1385,10 @@
 
     // Fari industriali con cono volumetrico simulato.
     const lampMat=new THREE.MeshStandardMaterial({color:0x1b222b,metalness:.85,roughness:.3});
-    const beamMat=new THREE.MeshBasicMaterial({color:0x9fefff,transparent:true,opacity:.025,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide});
+    const beamMat=unlitBasic({color:0x9fefff,transparent:true,opacity:.025,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide});
     for(const [lx,lz] of [[-14,-14],[14,13],[-14,13]]){
       const housing=new THREE.Mesh(new RoundedBoxGeometry(1.2,.16,.55,2,.05),lampMat);housing.position.set(lx,6.35,lz);housing.castShadow=true;scene.add(housing);
-      const panel=new THREE.Mesh(new THREE.PlaneGeometry(.9,.3),new THREE.MeshBasicMaterial({color:0xbaf7ff}));panel.rotation.x=Math.PI/2;panel.position.set(lx,6.25,lz);scene.add(panel);
+      const panel=new THREE.Mesh(new THREE.PlaneGeometry(.9,.3),unlitBasic({color:0xbaf7ff}));panel.rotation.x=Math.PI/2;panel.position.set(lx,6.25,lz);scene.add(panel);
       const light=new THREE.PointLight(0xa8ecff,3.2,10,2);light.position.set(lx,6,lz);scene.add(light);
       const beam=new THREE.Mesh(new THREE.ConeGeometry(3.2,6.1,24,1,true),beamMat);beam.position.set(lx,3.25,lz);scene.add(beam);
     }
@@ -1196,7 +1411,7 @@
       const group=new THREE.Group();
       const beam=new THREE.Mesh(new RoundedBoxGeometry(3,.42,.35,2,.06),barrierMat);beam.position.y=.78;beam.castShadow=true;group.add(beam);
       for(const sx of [-1,1]){const foot=new THREE.Mesh(new THREE.BoxGeometry(.32,.8,.7),barrierMat);foot.position.set(sx*1.12,.4,0);foot.castShadow=true;group.add(foot);}
-      const led=new THREE.Mesh(new THREE.BoxGeometry(2.5,.035,.37),new THREE.MeshBasicMaterial({color:0xffb347}));led.position.set(0,.82,.01);group.add(led);
+      const led=new THREE.Mesh(new THREE.BoxGeometry(2.5,.035,.37),unlitBasic({color:0xffb347}));led.position.set(0,.82,.01);group.add(led);
       group.position.set(bx,0,bz);group.rotation.y=rot;scene.add(group);
       addStaticBoxRotated(bx,.5,bz,3,1,.7,[0,1,0],rot,null);
     }
@@ -1393,10 +1608,10 @@
         clearcoat: .48, clearcoatRoughness: .24,
         envMap: weaponEnvironment, envMapIntensity: 1.35
       }),
-      glow: new THREE.MeshBasicMaterial({
+      glow: unlitBasic({
         color: glow, toneMapped: false, blending: THREE.AdditiveBlending
       }),
-      glowHot: new THREE.MeshBasicMaterial({
+      glowHot: unlitBasic({
         color: glowHot, toneMapped: false, blending: THREE.AdditiveBlending
       }),
       glass: new THREE.MeshPhysicalMaterial({
@@ -1771,7 +1986,7 @@
   // Flash di sparo (additivo, raccolto dal bloom) — tenuti separati dai modelli
   // così i riferimenti restano stabili tra una ricostruzione e l'altra.
   function createWeaponMuzzleFlash(colorValue, radius, position) {
-    const material = new THREE.MeshBasicMaterial({
+    const material = unlitBasic({
       color: colorValue, transparent: true, opacity: 0,
       blending: THREE.AdditiveBlending, depthWrite: false,
       toneMapped: false
@@ -2125,6 +2340,16 @@
       cameraDamageKick = Math.min(.2, cameraDamageKick + amount);
     }
   });
+  // Ogni esplosione increspa l'acqua. Avvolto una volta sola invece di aggiungere
+  // la chiamata ai sette punti che invocano explode(): l'ottavo che qualcuno
+  // aggiungerà funzionerà senza doverselo ricordare.
+  (function coupleExplosionsToWater() {
+    const runExplode = explosionSystem.explode.bind(explosionSystem);
+    explosionSystem.explode = (position, ...rest) => {
+      splashAt(position, 1.5);
+      return runExplode(position, ...rest);
+    };
+  })();
   loadingUI.update(.84, 'COMBAT SYSTEMS', 'Particles, drones and impact systems...');
 
   const reflectionBufferSize = new THREE.Vector2();
@@ -2180,6 +2405,7 @@
       step('facade', () => facadeSystem.setQuality(profile));
       step('atmosphere', () => atmosphereSystem.setQuality(profile));
       step('weather', () => weatherSystem.setQuality(profile));
+      step('water', () => waterSystem.setQuality(profile));
       step('explosion', () => explosionSystem.setQuality(profile));
       // Ricostruisce i modelli delle armi quando si passa da/a ULTRA.
       if (mode === 'ultra' !== weaponDetailUltra) {
@@ -2251,7 +2477,7 @@
     color: 0xffc857, emissive: 0x8a4d00, emissiveIntensity: 1.8,
     metalness: .55, roughness: .28
   });
-  const ammoPickupRingMaterial = new THREE.MeshBasicMaterial({
+  const ammoPickupRingMaterial = unlitBasic({
     color: 0xffe2a0, transparent: true, opacity: .82,
     blending: THREE.AdditiveBlending, depthWrite: false
   });
@@ -2274,7 +2500,7 @@
   const heartMaterial = new THREE.MeshStandardMaterial({
     color: 0xff3b5c, emissive: 0x9a0a2c, emissiveIntensity: 1.6, metalness: .4, roughness: .3
   });
-  const heartRingMaterial = new THREE.MeshBasicMaterial({
+  const heartRingMaterial = unlitBasic({
     color: 0xff8fa5, transparent: true, opacity: .7,
     blending: THREE.AdditiveBlending, depthWrite: false
   });
@@ -2344,10 +2570,10 @@
     color: 0x243746, emissive: 0x063a52, emissiveIntensity: 1.25,
     metalness: .92, roughness: .2
   });
-  const railgunPickupRailMaterial = new THREE.MeshBasicMaterial({
+  const railgunPickupRailMaterial = unlitBasic({
     color: 0x9efaff, toneMapped: false, blending: THREE.AdditiveBlending
   });
-  const railgunPickupCoilMaterial = new THREE.MeshBasicMaterial({
+  const railgunPickupCoilMaterial = unlitBasic({
     color: 0x00e5ff, toneMapped: false, blending: THREE.AdditiveBlending
   });
   const playerTarget = new THREE.Vector3();
@@ -2361,7 +2587,10 @@
   const hostileClosest = new THREE.Vector3();
   let aliveEnemyCount = 0;
   let apexSpawned = false;
-  let railgunDropSpawned = false;
+  // T2: chi può cadere, quando, e cosa è già a terra. Deriva gli id e le ondate
+  // da WEAPON_TUNING, così aggiungere un'arma droppabile non richiede di
+  // toccare questa lista.
+  const weaponDrops = new WeaponDropRegistry(WEAPON_TUNING);
   // S7: cooldown del danno da contatto della carica VANGUARD (una volta per
   // ~0.9s invece di ogni frame: 16 frame di overlap facevano ~350 danno).
   let apexChargeContactCooldown = 0;
@@ -2380,7 +2609,14 @@
       audio.droneTelegraph(Math.max(-.9, Math.min(.9, projected.x)));
     },
     onApexAttack: (apex, type) => handleApexAttack(apex, type),
-    onApexContact: () => {},
+    // Il blink del WRAITH arrivava qui e veniva buttato via: nessun suono,
+    // nessun segnale. I due pan sono diversi apposta — il suono dice da dove a
+    // dove, che contro un nemico che si teletrasporta alle spalle è l'unica
+    // informazione utile se stavi guardando altrove.
+    onApexContact: (apex, kind, from, to) => {
+      if (kind !== 'blink') return;
+      audio.apexBlink(panForWorld(from || apex.group.position), panForWorld(to || apex.group.position));
+    },
     onApexMine: apex => spawnVexMines(apex),
     onApexSummon: apex => summonMinions(apex),
     onApexShockwave: apex => apexShockwave(apex),
@@ -2482,11 +2718,11 @@
       spawnHeartDrop(impactPosition);
       // Il boss dell'ondata 1 è la ricompensa di progressione: lascia una
       // railgun persistente, raccolta dal giocatore entrando nel suo raggio.
-      if(gameState.wave===1)spawnRailgunDrop(impactPosition);
+      spawnRailgunDrop(impactPosition);
       // I boss successivi droppano le armi nuove: VULCAN, HELLSTORM, PYRE.
-      // Ogni spawnWeaponDrop gating internamente sull'onda (ogni 4, stesso
-      // archetipo) e sullo stato di sblocco: se il drop è mancato/scaduto,
-      // riappare alla prossima ondata dello stesso archetipo (T2).
+      // Il gating è tutto in `weaponDrops`: ondata dello stesso archetipo (ogni
+      // 4), arma non ancora sbloccata, nessun esemplare già a terra. Se il drop
+      // è scaduto senza essere raccolto, riappare al ciclo successivo (T2).
       spawnWeaponDrop('minigun',impactPosition);
       spawnWeaponDrop('rpg',impactPosition);
       spawnWeaponDrop('flame',impactPosition);
@@ -2639,7 +2875,7 @@
   const vexMineGeometry=new THREE.SphereGeometry(.2,10,8);
   const vexMineRingGeometry=new THREE.TorusGeometry(.34,.03,6,16);
   const vexMineMaterial=new THREE.MeshStandardMaterial({color:0xffc857,emissive:0x8a4d00,emissiveIntensity:2,metalness:.5,roughness:.3});
-  const vexMineRingMaterial=new THREE.MeshBasicMaterial({color:0xffe2a0,transparent:true,opacity:.85,blending:THREE.AdditiveBlending,depthWrite:false});
+  const vexMineRingMaterial=unlitBasic({color:0xffe2a0,transparent:true,opacity:.85,blending:THREE.AdditiveBlending,depthWrite:false});
 
   function spawnVexMines(apex){
     const count=apex.tier>=2?3:APEX_TUNING.vexMineCount;
@@ -2685,7 +2921,7 @@
   function apexShockwave(apex){
     // Anello visivo espanso + spinta sul giocatore + danno.
     const geo=new THREE.RingGeometry(.5,.8,32);
-    const mat=new THREE.MeshBasicMaterial({
+    const mat=unlitBasic({
       color:apex.coreMaterial.emissive.getHex(),
       transparent:true,opacity:.85,side:THREE.DoubleSide,
       blending:THREE.AdditiveBlending,depthWrite:false
@@ -2708,6 +2944,50 @@
     playerBody.velocity.z+=push.z*force;
     damagePlayer(apex.mega?22:8);
     if(apex.mega)audio.megaShockwave();else audio.apexShockwave();
+  }
+
+  /**
+   * Increspatura da impatto. Un'esplosione o un colpo che arriva a terra muove
+   * l'acqua se cade dentro una pozza; `disturb` filtra da sé, quindi qui non
+   * serve sapere dove sono le pozze.
+   */
+  function splashAt(position, strength = 1) {
+    if (!position) return false;
+    // Solo quello che arriva davvero a pelo d'acqua: un'esplosione a mezz'aria
+    // non increspa la pozza sotto.
+    if (!Number.isFinite(position.y) || position.y > 1.6) return false;
+    return waterSystem.disturb(position.x, position.z, strength);
+  }
+
+  /**
+   * Tutto ciò che entra nell'acqua la increspa: casse che cadono, proiettili che
+   * finiscono a terra. Un solo osservatore sullo stato fisico invece di un
+   * aggancio a ogni punto d'impatto — i punti d'impatto sono sparsi e chi ne
+   * aggiungerà un altro non dovrà ricordarsi di questa riga.
+   */
+  const WATER_LEVEL = .05;
+  const crateSplashCooldown = new WeakMap();
+  function updateWaterInteractions(delta, elapsed) {
+    // Casse: contano quelle che scendono, non quelle già posate dentro la pozza,
+    // o una cassa ferma nell'acqua incresperebbe a ogni frame.
+    for (const entry of synced) {
+      const body = entry.body;
+      if (!body || body.mass <= 0) continue;
+      if (body.position.y > .95 || body.velocity.y > -.8) continue;
+      const next = crateSplashCooldown.get(body) || 0;
+      if (elapsed < next) continue;
+      if (waterSystem.disturb(body.position.x, body.position.z, Math.min(1.4, .5 + Math.abs(body.velocity.y) / 6))) {
+        crateSplashCooldown.set(body, elapsed + .35);
+        audio.waterStep(panForWorld(body.position));
+      }
+    }
+    // Proiettili: al primo passaggio sotto il pelo dell'acqua, una volta sola.
+    for (const bullet of bullets) {
+      if (bullet.splashed || !bullet.body) continue;
+      if (bullet.body.position.y > WATER_LEVEL + .12) continue;
+      bullet.splashed = true;
+      waterSystem.disturb(bullet.body.position.x, bullet.body.position.z, .7);
+    }
   }
 
   function updateApexShockwaves(delta){
@@ -2739,7 +3019,7 @@
   }
 
   function spawnRailgunDrop(position) {
-    if (gameState.wave !== 1 || gameState.railgunUnlocked || railgunDropSpawned) return;
+    if (!weaponDrops.canSpawn('railgun', gameState.wave, gameState.railgunUnlocked)) return;
     const group = new THREE.Group();
     const body = new THREE.Mesh(railgunPickupBodyGeometry, railgunPickupBodyMaterial);
     const rails = [-.105, .105].map(x => {
@@ -2766,7 +3046,7 @@
     group.traverse(object => { if (object.isMesh) object.castShadow = true; });
     scene.add(group);
     railgunPickups.push({ group, coils, age: 0, startY, baseY: .68, phase: Math.random() * Math.PI * 2 });
-    railgunDropSpawned = true;
+    weaponDrops.markSpawned('railgun');
     toast(`<b>${t('weapon.railgun')}</b> · ${t('toast.railgunDrop')}`);
   }
 
@@ -2795,6 +3075,10 @@
       if (pickup.age >= RAILGUN_TUNING.pickupLifetime) {
         scene.remove(pickup.group);
         railgunPickups.splice(i, 1);
+        // T2: senza questo rilascio la railgun mancata all'ondata 1 non tornava
+        // più per tutta la run — la progressione restava bloccata sull'arma
+        // iniziale senza che nulla lo segnalasse.
+        weaponDrops.release('railgun');
       }
     }
   }
@@ -2802,6 +3086,7 @@
   function clearRailgunPickups() {
     for (const pickup of railgunPickups) scene.remove(pickup.group);
     railgunPickups.length = 0;
+    weaponDrops.release('railgun');
   }
 
   // --- Drop delle armi nuove (VULCAN/HELLSTORM/PYRE) dai boss dopo il primo. ---
@@ -2809,10 +3094,9 @@
   // la raccoglie, resta in possesso per la run. Riusa la stessa logica del
   // drop railgun ma con un visuale dedicato per arma.
   const weaponPickups = [];
-  const weaponDropSpawned = { minigun: false, rpg: false, flame: false };
   const wpMetal = new THREE.MeshStandardMaterial({ color: 0x2a3a46, metalness: .9, roughness: .3, emissive: 0x0a2a3a, emissiveIntensity: .4 });
   const wpDark = new THREE.MeshStandardMaterial({ color: 0x0c0f13, metalness: .92, roughness: .4 });
-  const wpAccent = new THREE.MeshBasicMaterial({ color: 0xffb24a, toneMapped: false, blending: THREE.AdditiveBlending });
+  const wpAccent = unlitBasic({ color: 0xffb24a, toneMapped: false, blending: THREE.AdditiveBlending });
 
   function buildWeaponPickupVisual(id) {
     const group = new THREE.Group();
@@ -2860,13 +3144,7 @@
   function spawnWeaponDrop(id, position) {
     if (id === 'railgun') { spawnRailgunDrop(position); return; }
     const tuning = WEAPON_TUNING[id];
-    // T2: la guardia era `wave === unlockWave` (solo onda 2/3/4). Dato che il
-    // roster cicla ogni 4 ondate (2,6,10 = stesso archetipo), si riapre il drop
-    // alle ondate successive dello stesso archetipo finché l'arma non è stata
-    // raccolta — evita il soft-lock se il primo drop scade/è mancato.
-    const waveOk = gameState.wave >= tuning.unlockWave
-      && (gameState.wave - tuning.unlockWave) % 4 === 0;
-    if (!tuning || !waveOk || weaponUnlocked(id) || weaponDropSpawned[id]) return;
+    if (!tuning || !weaponDrops.canSpawn(id, gameState.wave, weaponUnlocked(id))) return;
     const group = buildWeaponPickupVisual(id);
     group.rotation.y = Math.PI * .25;
     group.rotation.z = -.16;
@@ -2878,7 +3156,7 @@
     );
     scene.add(group);
     weaponPickups.push({ id, group, age: 0, startY, baseY: .68, phase: Math.random() * Math.PI * 2 });
-    weaponDropSpawned[id] = true;
+    weaponDrops.markSpawned(id);
     toast(`<b>${t(tuning.nameKey)}</b> · ${t('toast.weaponDrop')}`);
   }
 
@@ -2908,13 +3186,16 @@
         weaponPickups.splice(i, 1);
         // T2: il drop è scaduto senza essere raccolto → riapri la possibilità
         // di un nuovo drop alla prossima ondata dello stesso archetipo.
-        weaponDropSpawned[pickup.id] = false;
+        weaponDrops.release(pickup.id);
       }
     }
   }
 
   function clearWeaponPickups() {
-    for (const pickup of weaponPickups) scene.remove(pickup.group);
+    for (const pickup of weaponPickups) {
+      scene.remove(pickup.group);
+      weaponDrops.release(pickup.id);
+    }
     weaponPickups.length = 0;
   }
 
@@ -3659,6 +3940,9 @@
       audio.land(Math.min(1.5, Math.abs(lastVerticalVelocity) / 8));
       // G4: la camera "incassa" l'atterraggio in proporzione alla velocità.
       landingKick = Math.min(1, Math.abs(lastVerticalVelocity) / 11);
+      // Un tuffo pesa più di un passo: l'ampiezza segue la velocità d'impatto.
+      waterSystem.disturb(playerBody.position.x, playerBody.position.z,
+        Math.min(1.6, .7 + Math.abs(lastVerticalVelocity) / 9));
     }
     wasGrounded = onGround;
 
@@ -3688,6 +3972,11 @@
     if (onGround && len > 0 && isGameplayActive() && elapsed >= nextFootstep) {
       audio.playFootstep({ sprint: isSprinting });
       nextFootstep = elapsed + (isSprinting ? .31 : .43);
+      // Il passo increspa solo se cade dentro una pozza: sull'asfalto asciutto
+      // `disturb` rifiuta da sé, la condizione sta nella maschera e non qui.
+      if (waterSystem.disturb(playerBody.position.x, playerBody.position.z, isSprinting ? .85 : .55)) {
+        audio.waterStep(panForWorld(playerBody.position));
+      }
     }
 
     // 3) Salto (solo da terra e non sul jump pad)
@@ -3718,7 +4007,7 @@
   const bulletGeo = new THREE.SphereGeometry(CONFIG.bulletRadius, 12, 10);
   // Nucleo del proiettile: additivo, non tone-mapped e quasi bianco, così supera
   // la soglia del bloom (0.85) e produce un vero alone luminoso + riflesso.
-  const bulletMat = new THREE.MeshBasicMaterial({
+  const bulletMat = unlitBasic({
     color: 0xffffff, toneMapped: false, transparent: true,
     blending: THREE.AdditiveBlending, depthWrite: false
   });
@@ -3756,7 +4045,7 @@
   function shotCoreMaterial(colorHex) {
     let material = shotCoreMaterials.get(colorHex);
     if (!material) {
-      material = new THREE.MeshBasicMaterial({
+      material = unlitBasic({
         color: colorHex, toneMapped: false, transparent: true,
         blending: THREE.AdditiveBlending, depthWrite: false
       });
@@ -3841,7 +4130,7 @@
   // Alone volumetrico del raggio: cilindro additivo orientato lungo la direzione.
   const railBeamCylinder = new THREE.Mesh(
     new THREE.CylinderGeometry(.05, .05, 1, 12, 1, true),
-    new THREE.MeshBasicMaterial({ color: 0xff6a00, transparent: true, opacity: 0, toneMapped: false, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
+    unlitBasic({ color: 0xff6a00, transparent: true, opacity: 0, toneMapped: false, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
   );
   railBeamCylinder.visible = false;
   const railImpactSprite = makeGlowSprite(0xffa040, .72);
@@ -4026,6 +4315,9 @@
     bullet.prev.set(bulletOrigin.x, bulletOrigin.y, bulletOrigin.z);
     bullet.targetHit = false;
     bullet.targetRef = null;
+    // I proiettili sono poolizzati: senza questo azzeramento un colpo riusato
+    // risulterebbe "già entrato in acqua" e non increspicherebbe mai più.
+    bullet.splashed = false;
     bullet.damage = damage;
     bullets.push(bullet);
     return bullet;
@@ -4493,10 +4785,7 @@
     gameState.shots = 0;
     gameState.hits = 0;
     gameState.started = wasStarted;
-    railgunDropSpawned = false;
-    weaponDropSpawned.minigun = false;
-    weaponDropSpawned.rpg = false;
-    weaponDropSpawned.flame = false;
+    weaponDrops.reset();
 
     elapsed = 0;
     lastVisualEvent = -99;
@@ -4625,6 +4914,12 @@
       if (Number.isFinite(nextYaw)) yaw = nextYaw;
       if (Number.isFinite(nextPitch)) pitch = nextPitch;
     };
+    // Controparte in lettura di __vibeTeleport: senza, una collisione statica
+    // non è verificabile dall'esterno — si può mettere il giocatore dentro un
+    // ostacolo ma non sapere se la fisica ce l'ha tolto.
+    window.__vibePlayerPosition = () => ({
+      x: playerBody.position.x, y: playerBody.position.y, z: playerBody.position.z
+    });
     // Forza un cambio di tier lungo il percorso reale (applyProfile), che è
     // quello che in gioco scatta da updateFPS quando gli FPS restano bassi.
     window.__vibeStall = ms => { injectedStallMs = Math.max(0, Number(ms) || 0); };
@@ -4642,6 +4937,9 @@
     // Esplosione a comando: serve a misurare il costo del fumo volumetrico
     // con la camera dentro i puff, che è il caso peggiore per il raymarch.
     window.__vibeExplode = (x, y, z) => explosionSystem.explode(new THREE.Vector3(x, y, z), 0xff7b2d);
+    // Come __vibeScene: rende ispezionabile dall'esterno un sistema che altrimenti
+    // si potrebbe giudicare solo a occhio, e i pixel qui non sono leggibili.
+    window.__vibeWater = waterSystem;
     window.__vibeSmoke = () => ({
       attivi: explosionSystem.volumetric.activeCount,
       dentro: explosionSystem.volumetric.puffs.filter(p => p.active && p.inside).length,
@@ -4839,6 +5137,8 @@
     }
     const lightningFlash = atmosphereSystem.update(delta, elapsed);
     weatherSystem.update(delta, elapsed);
+    waterSystem.update(delta, elapsed);
+    updateWaterInteractions(delta, elapsed);
     renderPipeline.setLightningFlash(lightningFlash);
     if (moonLight) moonLight.intensity = GRAPHICS.lights.moon.intensity * (1 + lightningFlash * 1.2);
     facadeSystem.update(elapsed, lightningFlash);
@@ -4855,6 +5155,7 @@
         const breath = .9 + Math.sin(elapsed * .8 + reactive.phase) * .08;
         reactive.light.intensity = reactive.base * (breath + lightningFlash * .28);
       }
+      updateNeonTubes(elapsed, lightningFlash);
     }
 
     // Cristallo centrale: fluttuazione e rotazione

@@ -208,6 +208,16 @@
 }
 .target-marker.apex-marker .target-health { top: -9px; height: 3px; }
 .target-marker.apex-marker .target-health i { background: var(--pink, #ff2d95); box-shadow: 0 0 8px var(--pink, #ff2d95); }
+/* Un boss fuori inquadratura tiene la sua barra. La regola generica
+   `.target-marker.offscreen .target-health { display: none }` è giusta per i
+   droni — sono molti e i loro rombi devono restare piccoli — ma su un Apex
+   toglie l'unico riscontro che i colpi stiano arrivando, e nel gauntlet
+   dell'ondata 9 almeno due dei quattro sono quasi sempre fuori campo.
+   Quattro classi contro tre: questa regola vince per specificità. */
+.target-marker.apex-marker.offscreen .target-health {
+  display: block;
+  left: -7px; right: -7px; top: -11px; height: 3px;
+}
 .target-marker.apex-marker::after { top: 55px; color: rgba(255,170,199,.9); font: 800 9px ui-monospace,monospace; }
 
 /* Vital HUD: pannello a strati in basso a sinistra, con valori e barre

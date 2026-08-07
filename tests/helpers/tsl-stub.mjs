@@ -68,8 +68,26 @@ export const sin = node;
 export const smoothstep = node;
 export const sqrt = node;
 export const triNoise3D = node;
-export const uniform = node;
+/**
+ * `uniform` deve conservare un `.value` REALE: i sistemi ci scrivono dentro a
+ * ogni frame (increspature dell'acqua, slot dell'heat haze) e i test verificano
+ * proprio quel valore. Per tutto il resto si comporta da nodo.
+ */
+export const uniform = initial => {
+  const holder = { value: initial };
+  return new Proxy(function uniformNode() {}, {
+    get: (target, property) => (property === 'value' ? holder.value : node),
+    set: (target, property, value) => { if (property === 'value') holder.value = value; return true; },
+    apply: () => node,
+    has: () => true
+  });
+};
 export const uv = node;
 export const vec2 = node;
 export const vec3 = node;
 export const vec4 = node;
+// Aggiunti per water-system.js
+export const clamp = node;
+export const cos = node;
+export const positionViewDirection = node;
+export const texture = node;

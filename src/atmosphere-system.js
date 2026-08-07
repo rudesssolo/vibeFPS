@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { max, positionGeometry, sin, smoothstep, uniform, vec3 } from 'three/tsl';
 import { makeRng } from './rng.js';
+import { unlitBasic } from './materials.js';
 
 const METEOR_POOL = 4;
 const TRAFFIC_POOL = 18;
@@ -112,7 +113,7 @@ export class AtmosphereSystem {
   }
 
   _buildTraffic() {
-    const material = new THREE.MeshBasicMaterial({ color: 0x76ecff, toneMapped: false });
+    const material = unlitBasic({ color: 0x76ecff, toneMapped: false });
     const geometry = new THREE.SphereGeometry(.08, 6, 4);
     this.trafficMesh = new THREE.InstancedMesh(geometry, material, TRAFFIC_POOL);
     this.trafficMesh.count = 0;

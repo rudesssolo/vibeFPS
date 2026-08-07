@@ -1,7 +1,69 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { RenderPipelineController } from '../src/render-pipeline.js';
+import { RenderPipelineController, guardPassReentrancy } from '../src/render-pipeline.js';
 import { QUALITY_PROFILES } from '../src/config.js';
+
+// --- Rientranza fra PassNode -------------------------------------------------
+// Regressione dal difetto "schermo nero per secondi": normalPass e scenePass
+// renderizzano la stessa coppia (scene, camera) e quindi condividono la render
+// list poolizzata. Il contextNode dell'AO lega gli oggetti della scene pass alla
+// texture della normal pre-pass, così un oggetto poteva far ri-scattare la
+// normal pass DENTRO la scene pass: il render annidato azzerava la lista mentre
+// `_renderObjects` aveva già catturato la lunghezza, e three lanciava
+// «Cannot destructure property 'object' of renderList[i]». La pipeline
+// catturava l'eccezione e non disegnava: in WebGPU un frame senza disegno è nero.
+
+function fakePass(name, log) {
+  return { name, updateBefore() { log.push(name); return 'eseguito'; } };
+}
+
+test('un pass annidato dentro un altro viene rifiutato invece di corrompere la lista', () => {
+  const log = [];
+  const normalPass = fakePass('normal', log);
+  let nested;
+  // La scene pass, mentre renderizza, fa ri-scattare la normal pass: è
+  // esattamente ciò che accade quando un oggetto della scene pass dipende dalla
+  // texture della normal pre-pass tramite il contextNode dell'AO.
+  const scenePass = {
+    name: 'scene',
+    updateBefore(frame) {
+      log.push('scene:inizio');
+      nested = normalPass.updateBefore(frame);
+      log.push('scene:fine');
+      return 'eseguito';
+    }
+  };
+  guardPassReentrancy([normalPass, scenePass]);
+
+  assert.equal(scenePass.updateBefore({}), 'eseguito');
+  assert.equal(nested, false, 'il pass annidato deve restituire false, non eseguire');
+  // Il corpo della normal pass non è mai partito dentro la scene pass.
+  assert.deepEqual(log, ['scene:inizio', 'scene:fine']);
+  // Fuori dall'annidamento riparte: NodeFrame lo ritenta dopo il rollback.
+  assert.equal(normalPass.updateBefore({}), 'eseguito');
+  assert.deepEqual(log, ['scene:inizio', 'scene:fine', 'normal']);
+});
+
+test('fuori dal contesto annidato i pass girano normalmente', () => {
+  const log = [];
+  const normalPass = fakePass('normal', log);
+  const scenePass = fakePass('scene', log);
+  guardPassReentrancy([normalPass, scenePass]);
+  assert.equal(normalPass.updateBefore({}), 'eseguito');
+  assert.equal(scenePass.updateBefore({}), 'eseguito');
+  assert.deepEqual(log, ['normal', 'scene']);
+});
+
+test('la guardia si riarma anche se il pass lancia', () => {
+  const log = [];
+  const boom = { name: 'boom', updateBefore() { log.push('boom'); throw new Error('render fallito'); } };
+  const other = fakePass('other', log);
+  guardPassReentrancy([boom, other]);
+  assert.throws(() => boom.updateBefore({}), /render fallito/);
+  // Senza il finally la guardia resterebbe alzata e spegnerebbe i pass per sempre.
+  assert.equal(other.updateBefore({}), 'eseguito');
+  assert.deepEqual(log, ['boom', 'other']);
+});
 
 function makeController(renderPipeline, onPersistentFailure = () => {}) {
   const controller = Object.create(RenderPipelineController.prototype);

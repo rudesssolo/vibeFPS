@@ -32,6 +32,39 @@ import { smaa } from 'three/addons/tsl/display/SMAANode.js';
 
 const PERSISTENT_FAILURE_FRAMES = 60;
 
+/**
+ * Impedisce che due PassNode che renderizzano la stessa coppia (scene, camera)
+ * si annidino l'uno dentro l'altro.
+ *
+ * three riusa la render list poolizzata per quella coppia. Un render annidato
+ * chiama `begin()` e la azzera, ma `_renderObjects` ha già catturato
+ * `il = renderList.length`: le iterazioni successive leggono `undefined` e
+ * three lancia «Cannot destructure property 'object' of renderList[i]».
+ * La pipeline cattura l'eccezione e non disegna nulla — e in WebGPU un frame
+ * senza disegno è nero, non l'ultimo frame valido.
+ *
+ * Restituire `false` è la convenzione di three stesso (la usa ReflectorBaseNode
+ * per lo stesso motivo): NodeFrame annulla la registrazione e ritenta il pass
+ * fuori dal contesto annidato. Il pass esterno ha comunque già prodotto la sua
+ * texture in questo frame, quindi il dato letto è aggiornato.
+ */
+export function guardPassReentrancy(passNodes) {
+  let insidePassRender = false;
+  for (const passNode of passNodes) {
+    const runUpdateBefore = passNode.updateBefore.bind(passNode);
+    passNode.updateBefore = frame => {
+      if (insidePassRender) return false;
+      insidePassRender = true;
+      try {
+        return runUpdateBefore(frame);
+      } finally {
+        insidePassRender = false;
+      }
+    };
+  }
+  return passNodes;
+}
+
 // Bloom a 1/4 della risoluzione di output: equivalente di
 // `UnrealBloomPass.resolution = (window.innerWidth/4, ...)`. `setSize()` viene
 // invocato da `updateBefore()` a ogni frame con la dimensione del drawing
@@ -123,6 +156,12 @@ export class RenderPipelineController {
     this.applyAoSettings(graphics.gtao);
 
     const scenePass = pass(scene, camera);
+    // `normalPass` e `scenePass` renderizzano entrambi (scene, camera), quindi
+    // condividono la render list poolizzata; il legame che li può annidare è
+    // `scenePass.contextNode` qui sotto, che lega gli oggetti della scene pass
+    // alla texture della normal pre-pass. Vedi guardPassReentrancy.
+    guardPassReentrancy([normalPass, scenePass]);
+
     const aoTexture = this.aoPass.getTextureNode();
     const aoFactor = graphics.gtao.enabled
       ? mix(float(1), aoTexture.sample(screenUV).r, float(graphics.gtao.blendIntensity))

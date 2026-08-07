@@ -59,6 +59,7 @@ export class VolumetricSmokeSystem {
     // Regolati da setQuality(): quanti puff genera un'esplosione e quanti
     // volumi possono essere vivi insieme (tetto all'overdraw del raymarch).
     this.puffBudget = 8;
+    this.coverageBudget = 2;
     this.maxActive = MAX_PUFFS;
     this.cursor = 0;
     this.activeCount = 0;
@@ -66,6 +67,7 @@ export class VolumetricSmokeSystem {
       active: false,
       mesh: null,
       inside: false,
+      culled: false,
       age: 0,
       life: 1,
       radius: 0.5,
@@ -256,6 +258,12 @@ export class VolumetricSmokeSystem {
   setQuality(profile) {
     const budget = Number.isFinite(profile?.smokePuffs) ? profile.smokePuffs : 8;
     this.puffBudget = Math.max(0, Math.min(MAX_PUFFS, Math.round(budget)));
+    // Schermate di overdraw concesse al raymarch. Deriva dal budget dei puff
+    // così scala con la qualità senza un campo di profilo in più. Con la camera
+    // dentro la nuvola ogni puff vale una schermata piena, quindi questo si
+    // traduce in 2 strati a schermo pieno su ultra/autoHigh e 1 su autoLow —
+    // contro i 16 che il solo tetto maxActive consentiva.
+    this.coverageBudget = Math.max(1, this.puffBudget * .25);
     this.maxActive = Math.max(this.puffBudget, Math.min(MAX_PUFFS, this.puffBudget * 2));
     // Selezione fra varianti già compilate: nessuna costruzione di materiali e
     // nessun dispose, quindi il cambio di tier non compila shader dentro un
@@ -405,17 +413,57 @@ export class VolumetricSmokeSystem {
     if (puff.mesh) puff.mesh.visible = false;
   }
 
+  /**
+   * Decide quali puff possono disegnarsi, entro un budget di copertura dello
+   * schermo espresso in "schermate di overdraw".
+   *
+   * Il cull precedente scartava solo i puff troppo PICCOLI, cioè il caso
+   * economico. Quello costoso è l'opposto: quando la camera è dentro un puff
+   * l'hull riempie tutto lo schermo, e il tetto `maxActive` ne consente fino a
+   * 16 in ultra. Sedici raymarch a schermo pieno da 12 passi, ciascuno con due
+   * triNoise3D, mandano la GPU in timeout: il driver si resetta e lo schermo
+   * resta nero per qualche secondo.
+   *
+   * I puff più vicini dominano il risultato composito, quindi si ordinano per
+   * distanza e si spengono quelli che sfondano il budget.
+   */
+  _applyCoverageBudget(camera) {
+    const candidates = this._coverageCandidates || (this._coverageCandidates = []);
+    candidates.length = 0;
+    const halfFovTan = Math.tan((camera.fov ?? 75) * Math.PI / 360);
+    for (const puff of this.puffs) {
+      if (!puff.active || puff.age < 0 || !puff.mesh) continue;
+      const distance = camera.position.distanceTo(puff.position);
+      const hull = puff.radius * HULL_MARGIN;
+      // Dentro il puff l'hull copre l'intera viewport; fuori, la frazione di
+      // semi-altezza coperta è ~ raggio / (distanza · tan(fov/2)).
+      const fraction = distance <= hull
+        ? 1
+        : Math.min(1, puff.radius / Math.max(.001, distance * halfFovTan));
+      candidates.push({ puff, distance, coverage: fraction * fraction });
+    }
+    candidates.sort((a, b) => a.distance - b.distance);
+    let spent = 0;
+    for (const candidate of candidates) {
+      const { puff } = candidate;
+      // Il cull originale: puff minuscoli e lontani non valgono un draw.
+      const projected = (puff.radius * 900) / Math.max(1, candidate.distance);
+      const tooSmall = projected < 6 && puff.radius < 1.2;
+      const overBudget = spent >= this.coverageBudget;
+      puff.culled = tooSmall || overBudget;
+      if (!puff.culled) spent += candidate.coverage;
+    }
+  }
+
   update(delta, camera = null) {
     if (this.activeCount === 0) return;
+    if (camera?.isCamera) this._applyCoverageBudget(camera);
     for (const puff of this.puffs) {
       if (!puff.active) continue;
       puff.age += delta;
       if (puff.age < 0) continue; // delay: la mesh resta invisibile
-      // Screen-coverage cull: nasconde puff troppo piccolo a schermo (< 6px).
       if (camera?.isCamera) {
-        const dist = camera.position.distanceTo(puff.position);
-        const projected = (puff.radius * 900) / Math.max(1, dist);
-        if (projected < 6 && puff.radius < 1.2) {
+        if (puff.culled) {
           if (puff.mesh.visible) puff.mesh.visible = false;
           continue;
         }

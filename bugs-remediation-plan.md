@@ -1,674 +1,124 @@
-# VIBE FPS — Bug Remediation & Improvement Plan
+# VIBE FPS — Registro dei bug
 
-> **Data analisi:** 3 agosto 2026 (prima e seconda tornata) · **4 agosto 2026 (terza tornata — stato attuale)**
-> **Commit analizzato:** `88bc585` (prima tornata) → `9ed349a` + **working tree 4 agosto 2026** (terza tornata)
-> **Scope:** revisione statica completa di `index.html` (~4200 righe), `src/*.js` (14 moduli), `styles/hud.css`, `tests/`, `tools/`. Verifiche: suite `node --test` **51/51 verdi**, `npm run lint:tsl` OK, `npm run smoke` OK (boot headless WebGPU).
-> **Stato documento:** ✅ **TUTTE LE AZIONI DELLE TORNATE 1-2 VERIFICATE PRESENTI**. La terza tornata (4 agosto) aggiunge nuove funzionalità (vite/cuori, 5 armi, drop boss) e rinviene 9 nuovi rilievi (§16). Vedi §13 e §16.
->
-> **Stato implementazione (tornate 1-2):** completato in 4 commit:
-> - `4d1d0b9` · Fase 1 — bug fix chirurgici (B1, B2, B3, B4, B5, B7, B8, C1, C2, C3)
-> - `63a718b` · Fase 2 — performance e UX (B6, B9, C4, C5, M2, M3)
-> - `fed7449` · Fase 3 — test, SRI, CI (M1, M4, M6)
-> - `96a08b6` · Fase 3 — M5: estrazione texture procedurali in `src/textures.js`
->
-> **Funzionalità aggiunte nella terza tornata (working tree 4/8):** sistema vite/cuori con GAME OVER; **5 armi** (pulse, railgun, **VULCAN** minigun, **HELLSTORM** RPG, **PYRE** lanciafiamme) droppate dai boss (onda 1 → railgun; onde 2/3/4 → VULCAN/HELLSTORM/PYRE); HP boss ×4 + barra boss con numerico; drop munizioni ogni 10 s; selezione arma con tasti 1-5 / rotella / Q; ammo per-arma; `src/normal-map.js` (kernel condiviso); refactor vari (§16, "Terza tornata").
+> Revisione: 7 agosto 2026 · Storico dei difetti trovati e corretti, e di quelli ancora aperti.
 
----
+## Come leggere questo documento
 
-## 1. Contesto e metodologia
+- **§1 Aperti** è l'unica sezione che richiede azione. Il resto è storia chiusa, tenuta per non ripercorrere strade già battute.
+- Gli ID sono per tornata: `B/C/M` prima, `N` seconda, `T` terza, `Q` quarta, `R` quinta.
+- I riferimenti al codice sono `file › simbolo`, non numeri di riga: i numeri marciscono a ogni modifica.
+- Qui stanno i **difetti**. Gli interventi di performance stanno in `performance-optimization-plan.md`.
 
-VIBE FPS è una tech demo FPS cyberpunk: rendering WebGPU (three.js r184, TSL), fisica cannon.js 0.6.2, audio 100% procedurale WebAudio, game loop e maggior parte della logica in un'unica funzione `bootGame()` in `index.html`; sistemi riusabili in `src/`.
+## 1. Aperti
 
-Metodologia della revisione:
+| ID | Sev. | Titolo | Codice | Nota |
+|----|------|--------|--------|------|
+| **T1** | 🔴 | I visuali specifici degli archetipi Apex non vengono renderizzati | `drone-system.js › buildApexVisual` | Serve conferma visiva su GPU reale: mai verificato a schermo |
+| **T2** | 🟠 | Il drop di un'arma può sparire per sempre (soft-lock) | `main.js › updateWeaponPickups` | Serve conferma visiva su GPU reale |
+| **Q8** | 🟡 | `aoPass.enabled = false` è inerte — il `GTAONode` vendorizzato non consulta quella proprietà — e la guardia `if (this.aoPass.enabled !== undefined)` è sempre vera | `render-pipeline.js › setQuality` | Da affrontare insieme alla variante di pipeline per autoLow, non isolatamente. Vedi §4.1 del piano performance |
 
-1. Lettura integrale di tutti i sorgenti (nessun file escluso).
-2. Esecuzione della suite esistente (`node --test` → 4/4 verdi).
-3. Verifica sperimentale dei sospetti su snippet isolati con Node (es. `Number(null)`).
-4. Ricerche mirate su pattern sospetti: dead code, variabili di stato non resettate, scritture DOM per-frame, gestione timer/scheduler.
-5. Classificazione per **impatto utente × probabilità**, con stima effort e rischio per ogni intervento.
+Non c'è altro di aperto. I difetti latenti segnalati in passato — Q6 (patch dello smoke test inefficaci) e Q7 (dead code) — sono stati corretti.
 
----
+## 2. Quinta tornata — schermo nero (7 agosto 2026)
 
-## 2. Sintesi esecutiva
+### R1 — Schermo nero per secondi saltando verso una parete 🔴
 
-| ID | Titolo | Severità | Effort | Fase |
-|----|--------|----------|--------|------|
-| B1 | Gioco muto al primo avvio (volumi default mai applicati) | 🔴 Critica | S | 1 |
-| B2 | Il menu di pausa non sospende la simulazione | 🟠 Alta | M | 1 |
-| B3 | Raffica audio/stallo dopo tab in background | 🟠 Alta | S | 1 |
-| B4 | Tunneling dei colpi nemici a FPS bassi | 🟠 Alta | S | 1 |
-| B5 | `resetLevel`/`respawnPlayer`: stato incompleto (footstep, stamina) | 🟡 Media | S | 1 |
-| B6 | `updateMarkers`: layout thrash DOM per-frame | 🟡 Media | M | 2 |
-| B7 | Desync UI qualità durante transizione ULTRA | 🟡 Media | S | 1 |
-| B8 | Pickup munizioni consumato a riserva piena | 🟡 Media | S | 1 |
-| B9 | `heightToNormal` a 2048 blocca il main thread | 🟡 Media | M | 2 |
-| C1–C5 | Dead code, tuning hardcoded, pointer lock, allocazioni | ⚪ Bassa | S | 1–2 |
-| M1–M6 | Test, magic numbers, UX, CDN, refactor moduli, CI | 🔧 Strutturale | S–L | 2–3 |
+**Sintomo.** Saltando in alto verso una parete, in ULTRA, il canvas 3D diventa completamente nero per alcuni secondi mentre l'HUD (che è DOM) continua a disegnarsi. Poi torna normale. Frame rate normale prima e dopo: ~100 FPS.
 
-**Quick win assoluto:** B1 (una riga, ripristina l'audio per ogni nuovo utente) + test di regressione.
+**Errore reale**, dalla console dell'utente:
 
-
----
-
-## 3. Bug critici
-
-### B1 — Il gioco parte MUTO al primo avvio 🔴
-
-- **File:** `src/config.js:83-94` (`getStoredMix`)
-- **Severità:** critica (colpisce il 100% dei nuovi utenti)
-- **Effort:** S · **Rischio fix:** nullo
-
-**Root cause.** `localStorage.getItem()` su chiave mancante restituisce `null`, e `Number(null) === 0` (verificato sperimentalmente: `Number('') === 0`, solo `Number(undefined) === NaN`). Il ramo di fallback non viene quindi mai eseguito quando lo storage esiste ma è vuoto:
-
-```js
-const safe = (key, fallback) => {
-  const value = Number(readStorage(storage, key));   // null → 0
-  return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : fallback;
-};
+```
+VIBE post-processing frame skipped; retrying
+TypeError: Cannot destructure property 'object' of 'renderList[i]' as it is undefined.
+  at WebGPURenderer._renderObjects
+  ...
+  at PassNode.updateBefore                 ← un oggetto fa ripartire un pass
+  at WebGPURenderer._renderObjectDirect    ← mentre un altro pass sta iterando
 ```
 
-Risultato: al primo avvio `music/sfx/ambience` valgono **0** invece di `0.72/0.9/0.58`. Il mixer (`AudioEngine.applyMix`) azzera i gain e il gioco è silenzioso finché l'utente non tocca manualmente gli slider del pannello settings.
+**Causa.** `normalPass` e `scenePass` renderizzano entrambi la coppia `(scene, camera)`: three riusa per loro la **stessa render list poolizzata**. Il collegamento che li fa annidare è `scenePass.contextNode = builtinAOContext(aoFactor)`, che lega gli oggetti della scene pass alla texture della normal pre-pass. Un oggetto poteva quindi far ri-scattare la normal pass **dentro** la scene pass; il render annidato azzera la lista con `begin()`, ma `_renderObjects` ha già catturato `il = renderList.length`, e le iterazioni successive leggono `undefined`.
 
-**Fix proposto:**
+La pipeline cattura l'eccezione e non disegna nulla. In WebGPU la texture del canvas è invalidata dopo il present, quindi **un frame senza disegno è nero**, non l'ultimo frame valido. Ripetuto su decine di frame, sono i secondi di nero.
 
-```js
-const safe = (key, fallback) => {
-  const raw = readStorage(storage, key);
-  const value = raw === null || raw === '' ? Number.NaN : Number(raw);
-  return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : fallback;
-};
-```
+**Fix.** `render-pipeline.js › guardPassReentrancy`: se un pass sta già renderizzando, un secondo pass restituisce `false` invece di eseguire. È la convenzione di three stesso — `ReflectorBaseNode` usa lo stesso meccanismo con `_inReflector`. `NodeFrame` annulla la registrazione e ritenta fuori dal contesto annidato; il dato non si perde perché il pass esterno ha già prodotto la sua texture in quel frame. Tre test di regressione, incluso il riarmo della guardia quando un pass lancia.
 
-**Test di regressione (nuovo, `tests/config.test.js`):** mock di `globalThis.localStorage` con chiavi assenti → attesi i default `0.72/0.9/0.58`; valori memorizzati validi → rispettati; valori fuori range (`'7'`, `'NaN'`, `'abc'`) → clamp/fallback. Questo test avrebbe intercettato il bug.
+**Ipotesi verificate e scartate**, documentate per non ripercorrerle: compilazione delle pipeline del pass reflection (senza warmup se ne crea **una sola** salendo in quota, non un burst); resize della render target della reflection o della shadow map (uguagliando quei parametri fra profili lo stallo non cambiava); `needsUpdate` in `_applyWetness`; sovraccarico del fumo volumetrico — il difetto si presenta a wave 01 con 0 kill, quindi **senza fumo in scena**.
 
----
+**Nota di metodo.** Questa classe di difetto **non è riproducibile sull'adapter software** di sviluppo: non c'è driver da resettare. È stata risolta solo grazie al log della console dell'utente. Da lì è nato il "referto del frame lento" descritto in §7 del piano performance.
 
-## 4. Bug di priorità alta
+## 3. Quarta tornata — cambio di tier e reflection (6 agosto 2026)
 
-### B2 — Il menu di pausa non sospende la simulazione 🟠
+Contesto: la sessione di ottimizzazione ha reso raggiungibile un difetto preesistente e ne ha introdotto uno nuovo.
 
-- **File:** `index.html` — `animate()` (:2707+), `updateDrones` (:2097), `updateHostileShots` (:2103), `updateGameplay` (:2134)
-- **Severità:** alta (bug gameplay: si può morire o avanzare di ondata mentre si è in pausa)
-- **Effort:** M · **Rischio fix:** basso (gating, nessuna logica riscritta)
+| ID | Sev. | Titolo | Fix |
+|----|------|--------|-----|
+| **Q1** | 🔴 | Cambio di tier automatico → ~2 s di freeze. `ExplosionSystem.setQuality` cambiava `light.visible`: in WebGPU il `lightsNode` aggrega le luci **visibili** dentro lo shader, quindi variarlo **ricompila ogni materiale della scena** — 39 pipeline create e distrutte a ogni switch | Set di luci fissato al boot al massimo `dynamicLights` fra i profili; il budget per profilo resta effettivo tramite il pool di allocazione. Misurato: **2200 ms → 36 ms**, pipeline costanti a 214 |
+| **Q2** | 🟠 | Frammenti di un fotogramma precedente sul pavimento dopo un hitch. **Regressione introdotta dal throttle della reflection**, che limitava la staleness in *frame*: durante un hitch un solo frame resta a schermo per un secondo, con una reflection catturata prima | Soglia di deriva della posa stretta a .35 m / .05 rad (era 2 m / 0,35 rad ≈ 20°); un frame oltre 40 ms disattiva il throttle; scheduler resettato al cambio profilo e su frame fallito |
+| **Q3** | 🟡 | `updateReflectionQuality` era **inefficace**: `resolutionScale` vive su `ReflectorBaseNode`, non sul `ReflectorNode` restituito da `reflector()`. Il budget del riflesso non aveva mai avuto effetto | Scritto sul nodo giusto, e poi ancorato all'altezza del buffer invece che al lato lungo: su schermi larghi la risoluzione verticale collassava a 512×214 su 3440×1440 |
+| **Q4** | 🟡 | `VolumetricSmokeSystem.setQuality` ricostruiva i materiali al variare dei passi del raymarch: ~35 pipeline compilate nello stesso frame di Q1 | Entrambe le varianti precompilate al boot; `setQuality` scambia riferimenti |
+| **Q5** | 🟡 | `Math.min(getMaxAnisotropy(), profile.anisotropy)` dà **`NaN`** se il profilo non espone il campo (es. `config.js` servito dalla cache del browser insieme a un `main.js` nuovo). `NaN` nel sampler descriptor è un errore di validazione WebGPU: muri, asfalto e casse smetterebbero di disegnarsi | Valore validato con `Number.isFinite`, fallback a 8, più `Math.max(1, …)` |
+| **Q6** | 🟡 | `tools/smoke-boot.mjs` sostituiva stringhe in `index.html` che dopo la modularizzazione vivono in `src/main.js`: `SMOKE_WAVE` e `SMOKE_WEAPON` **non facevano più nulla, silenziosamente** | Le patch agganciano `src/main.js`; un'ancora mancante ora esce con errore invece di essere un no-op |
+| **Q7** | 🟡 | Dead code in `applyWeaponDetail`: closure `attachIfNeeded` mai chiamata che duplicava il loop successivo, più quattro `const` inutilizzate | Rimossi |
 
-**Evidenza.** Con Esc premuto (`locked=false`, `gameState.started=true`) il loop continua a eseguire:
+Difetto ulteriore trovato nella stessa tornata e corretto: il **fumo volumetrico** consentiva fino a 16 puff con la camera dentro, cioè 16 raymarch a schermo pieno da 12 passi nello stesso frame. Un budget di copertura ora ne ammette 2 in ultra. Non era la causa di R1, ma era un difetto reale.
 
-- `world.step()` e i constraint fisici: casse e corpi continuano a muoversi;
-- `updateDrones`: la guardia è `if (!gameState.started && !locked) return;` → con partita avviata i droni pattugliano durante la pausa (non sparano, `active:false`);
-- `updateHostileShots`: i colpi già in volo avanzano e chiamano `damagePlayer()` → **morte durante la pausa**;
-- `updateGameplay`: decrementa `waveDelay` → `spawnWave(true)` può scattare nel menu; decrementa `respawnTimer` → respawn automatico in pausa; scudo/combo avanzano;
-- `updateAmmoPickups`: i pickup scadono (`ammoDropLifetime: 35s`) mentre il giocatore legge il menu.
+## 4. Terza tornata — armi, Apex e luci (4 agosto 2026)
 
-Contraddice il sottotitolo "SIMULAZIONE SOSPESA · STATO DI COMBATTIMENTO CONSERVATO".
+Tutte chiuse tranne T1 e T2, che restano in §1 in attesa di verifica visiva.
 
-**Fix proposto.** Un unico gate calcolato a inizio frame:
+| ID | Titolo | Fix |
+|----|--------|-----|
+| T3 | Tuning railgun duplicato (due fonti di verità) | `RAILGUN_TUNING` derivato da `WEAPON_TUNING.railgun` |
+| T4 | Leak/duplicazione delle canne del minigun allo switch ULTRA | Cache dei due LOD, niente ricostruzione |
+| T5 | Cella munizioni "piena" con arma a colpo singolo scarica | Cella 0 piena solo se `ammo > 0` |
+| T6 | Cono del lanciafiamme: distanza XZ con direzione 3D → NaN-bypass | Direzione e offset proiettati su XZ, guardia su distanza ≈ 0 |
+| T7 | Bonus munizioni di fine ondata solo alla riserva del pulse | `setWeaponAmmo` sull'arma attiva |
+| T8 | `audio.flame()` allocava 2 burst di rumore per tick (20/s) | Throttle a ~1 ogni 0,12 s |
+| T9 | `flameBurst` saturava il pool additivo da 720 particelle | Count per burst ridotto a ~5 |
+| T10 | Salto in alto vicino ai muri → l'arena si scuriva | La "modalità edge-safe" **bypassava tutto il post-processing**. Bypass rimosso: resta solo lo swap del materiale delle pareti |
 
-```js
-const gameplayActive = locked && gameState.started && !gameStartLoading;
-```
+## 5. Seconda tornata — pausa, audio e HUD (3 agosto 2026)
 
-- `!gameplayActive` → saltare: blocco fuoco continuo, `updateDrones`, `updateAmmoPickups`, `updateBullets`, `updateEffects`, `updateHostileShots`, `updateShockwaves`, `updateGameplay`, il while di `world.step` (azzerando `accumulator` per evitare la raffica di step al rientro).
-- Sempre attivi: `syncHudVisibility`, `updatePlayer` (già guarded), camera/HUD/pioggia/vapore, `explosionSystem.update` (solo visuale), `audio.update` (musica nel menu: scelta voluta), render.
-- Attenzione a `updateDrones`: la guardia attuale va sostituita, non sommata, per non congelare i droni prima del primo start (oggi sono statici fino al via: comportamento da conservare).
+Tutte chiuse.
 
-**Validazione:** pausa durante colpi in volo → nessun danno; pausa a fine ondata → nessuno spawn; ripresa → stato coerente.
+| ID | Titolo | Fix |
+|----|--------|-----|
+| N1 | Lo switch ULTRA bloccava il main thread (B9 riaperto da un revert) | `heightToNormalAsync` chunked, rebuild con token di generazione |
+| N2 | Input di gioco attivo in pausa | Gate sul `keydown` |
+| N3 | Accuracy oltre il 100% con il melee | `damageDrone(..., countHit)` |
+| N4 | Cooldown dry-fire sovrascritto dal loop | `fireBullet` gestisce da solo il cooldown |
+| N5 | Copy della pausa contraddittorio | Testo allineato al comportamento reale |
+| N6 | Toast senza tetto | Cap a 5 con espulsione del più vecchio |
+| N7 | Scritture DOM per-frame (`sprinting`, `firing`) | Dirty-check |
+| N8 | Mute non persistito, HUD non sincronizzato | `getStoredMuted` / `storeMuted` |
+| N9 | Pan stereo incoerente su esplosioni e impatti | Helper `panForWorld` |
+| N10 | Pareti che cambiavano colore avvicinandosi | Rimosso lo swap di materiale della modalità edge-safe |
 
-### B3 — Raffica audio e stallo dopo tab in background 🟠
+## 6. Prima tornata — bug fondamentali (3 agosto 2026)
 
-- **File:** `src/audio-engine.js:378-393` (`update`)
-- **Severità:** alta (stallo main-thread + raffica di suoni al ritorno sulla tab)
-- **Effort:** S · **Rischio fix:** nullo
+Tutte chiuse.
 
-**Root cause.** Lo scheduler musicale usa `AudioContext.currentTime`, che avanza anche con tab nascosta (in Chrome il contesto resta `running`), mentre `animate()` (rAF) è fermo. Al ritorno:
+**Bug:** B1 gioco muto al primo avvio; B2 il menu di pausa non sospendeva la simulazione (si poteva morire in pausa); B3 raffica audio dopo un tab in background; B4 tunneling dei colpi nemici a FPS bassi; B5 reset di stato incompleto; B6 layout thrash DOM dei marker; B7 desync della UI durante la transizione ULTRA; B8 pickup munizioni consumato a riserva piena; B9 `heightToNormal` a 2048 bloccava il main thread.
 
-```js
-while (this.nextStepTime < this.ctx.currentTime + .12) { ... } // migliaia di iterazioni
-```
+**Pulizia:** C1 dead code; C2 telegraph da `DRONE_TUNING`; C3 pointer lock rilasciato sui pannelli di errore; C4 vettori temporanei riusati nel percorso caldo; C5 origine dei proiettili clampata entro l'arena.
 
-Un minuto in background ≈ 512 step da 16ª a 128 BPM × più nodi (oscillatori/noise) per step → migliaia di nodi WebAudio creati in un frame e schedulati "nel passato".
+**Struttura:** M1 copertura test; M2 magic number in `CONFIG`; M3 UX a costo nullo; M4 SRI sulle dipendenze; M6 CI minima. **M5** (rifattorizzazione di `bootGame()`) non è un bug ma lavoro aperto: avviato con l'estrazione di `textures.js` e proseguito con la modularizzazione in `src/`.
 
-**Fix proposto:**
-
-```js
-const now = this.ctx.currentTime;
-if (this.nextStepTime < now - .25) this.nextStepTime = now + .05; // riallinea
-let scheduled = 0;
-while (this.nextStepTime < now + .12 && scheduled < 8) { ... scheduled++; }
-```
-
-Il riallineamento copre anche il caso `ctx.state` `suspended → running` (early-return attuale, stessa deriva al resume).
-
-**Validazione:** tab nascosta 60s → ritorno senza burst; la musica riprende dal beat successivo.
-
-### B4 — Tunneling dei colpi nemici a FPS bassi 🟠
-
-- **File:** `index.html:2112` (`updateHostileShots`)
-- **Severità:** alta a FPS degradati (la demo ha un profilo "balanced" proprio per macchine deboli)
-- **Effort:** S · **Rischio fix:** nullo
-
-**Root cause.** Il danno al giocatore è un test punto-distanza sulla sola posizione corrente:
-
-```js
-if(!remove && s.pos.distanceToSquared(hostilePlayerPoint) < .52) { damagePlayer(...); }
-```
-
-Con `delta` clampato a 0.1s e velocità proiettile `18 + wave*0.65` (onda 10 ≈ 24.5 m/s) il colpo percorre fino a ~2.4 m/frame: raggio utile ~0.72 m → il proiettile "salta" il giocatore. I proiettili del giocatore usano invece correttamente lo sweep segmento→punto (`bulletSegment.closestPointToPoint`, :2514-2524) contro i droni.
-
-**Fix proposto.** Replicare il pattern esistente con due temp object riusati:
-
-```js
-hostileSegment.start.copy(s.prev);
-hostileSegment.end.copy(s.pos);
-hostileSegment.closestPointToPoint(hostilePlayerPoint, true, hostileClosest);
-if (hostileClosest.distanceToSquared(hostilePlayerPoint) < .52) { damagePlayer(...); remove = true; }
-```
-
-**Validazione:** a 10 FPS simulati, colpo diretto → danno registrato; colpo di striscio → nessun falso positivo.
-
----
-
-## 5. Bug di priorità media
-
-### B5 — `resetLevel`/`respawnPlayer`: ripristino di stato incompleto 🟡
-
-- **File:** `index.html:2627` (`resetLevel`), :2093 (`respawnPlayer`), :2327 (consumer)
-- **Effort:** S
-
-`resetLevel` azzera `elapsed = 0` ma non `nextFootstep` (dichiarata :1787, mai resettata — verificato con ricerca su tutte le occorrenze). Dopo un reset a run avanzata (es. `elapsed ≈ 500`), i passi restano muti finché il nuovo `elapsed` non raggiunge il vecchio valore: minuti di gioco senza footstep. Inoltre:
-
-- `isGrounded` non viene riallineato (residuo transitorio del bob);
-- `respawnPlayer` ripristina vita e scudo ma non `stamina`: si può rinascere con energia a 0.
-
-**Fix:** in `resetLevel` aggiungere `nextFootstep = 0; isGrounded = false;`; in `respawnPlayer` aggiungere `gameState.stamina = 100;` + `updateHUD()` implicito già coperto.
-
-### B6 — `updateMarkers`: layout thrash DOM per-frame 🟡
-
-- **File:** `src/drone-system.js:295-324`
-- **Effort:** M · **Fase 2**
-
-Ogni frame, per ogni drone vivo (fino a 9): `drone.position.clone()` (allocazione), `projected.project()`, scrittura di **4 proprietà di stile** (`--target-x/y`, `left`, `top`), `dataset.range` (attributo → invalidation stile), `textContent` dello stato, e 2 `querySelector` per marker. A 60 FPS sono ~1000 scritture DOM/attributi al secondo, in gran parte con valori identici.
-
-**Fix:**
-
-1. In `createDrone` cachare i riferimenti: `markerHealth = marker.querySelector('.target-health i')`, `markerState = marker.querySelector('.target-state')`; salvare sul drone.
-2. Riutilizzare un `THREE.Vector3` di classe al posto di `clone()`.
-3. Dirty-check come in `HudController.render`: aggiornare `dataset.range` solo se la stringa cambia, `textContent` solo se lo stato cambia, `classList.toggle` solo su transizione (oggi `toggle` è già idempotente ma la scrittura di `display` ad ogni frame no).
-4. Scrivere solo `transform: translate(...)` (compositor-friendly) invece di `left/top` + custom properties duplicate.
-
-**Nota:** il CSS usa `--target-x/y` e `left/top`: verificare quale dei due canali è effettivamente consumato da `hud.css` prima di rimuoverne uno.
-
-### B7 — Desync UI qualità durante la transizione ULTRA 🟡
-
-- **File:** `src/graphics-manager.js:22-34`, `src/hud-controller.js:138-141`, `index.html:1950`
-- **Effort:** S
-
-Click su AUTO mentre `transitioning === true`: `setMode` esce subito (`if (this.transitioning || nextMode === this.mode) return;`) ma `mountSettings` ha già applicato la classe `selected` al bottone → la UI mostra AUTO mentre il motore resta in ULTRA.
-
-**Fix:** `mountSettings` espone il setter della selezione (return `{ panel, setSelected }` oppure `panel.syncMode = setSelected`); in `index.html`:
-
-```js
-onQuality: mode => { graphicsManager.setMode(mode); settings.syncMode(graphicsManager.mode); }
-```
-
-Così la selezione visiva riflette sempre lo stato reale del manager, anche quando la richiesta è ignorata.
-
-### B8 — Pickup munizioni consumato a riserva piena 🟡
-
-- **File:** `index.html:2041-2054` (`updateAmmoPickups`)
-- **Effort:** S
-
-Con riserva al massimo, `amount` vale 0: il pickup viene comunque rimosso dalla scena con toast "MUNIZIONI AL MASSIMO". Il giocatore perde una risorsa senza beneficio.
-
-**Fix:** se `amount <= 0` saltare la raccolta (`continue` senza `splice`): il pickup resta a terra finché non serve. Opzionale: mostrare l'hint "riserva piena" solo al primo contatto (throttle con un timestamp sul pickup per evitare spam di toast restando fermi sopra il drop).
-
-### B9 — `heightToNormal` a 2048 blocca il main thread 🟡
-
-- **File:** `src/facade-system.js:13-37`, chiamato da `rebuildMaterials` (:210) via `setQuality` (:242)
-- **Effort:** M · **Fase 2**
-
-In ULTRA (`facadeResolution: 2048`) la conversione height→normal è un loop JS su 4,19 Mpx con `Math.hypot` per pixel: centinaia di ms di blocco sul main thread durante lo switch di qualità. Il modale di transizione maschera in parte il jank, ma il frame loop è comunque congelato.
-
-**Fix (una delle due):**
-
-1. **Chunking async:** `heightToNormal` elabora fasce di ~64 righe per tick con `await new Promise(r => setTimeout(r))`; `createFacadeMaps`/`rebuildMaterials` diventano async; il constructor può avviare la build 1024 in fire-and-forget (il boot è già async) e `setQuality` awaita sotto il modale di transizione.
-2. **OffscreenCanvas + Worker:** soluzione più pulita ma richiede un file worker separato (o Blob URL) — valutare in Fase 3 insieme al refactor moduli.
-
-Raccomandazione: opzione 1, minima invasività.
-
-
----
-
-## 6. Pulizia e fix minori
-
-### C1 — Dead code accertato
-
-Verificato con ricerca globale su tutti i consumer (nessuna occorrenza oltre la definizione):
-
-| Simbolo | Posizione | Note |
-|---------|-----------|------|
-| `addShockwave` | `index.html:2009-2012` | Funzione mai chiamata: le shockwave attive sono quelle di `ExplosionSystem` e del post chain |
-| `addSpark` | `index.html:2452-2472` | Mai chiamata (gli impatti usano `explosionSystem.sparkBurst`) |
-| `bulletCurrent` | `index.html:2478` | Vector3 mai usato |
-| `gun()` alias | `src/audio-engine.js:581` | Mai usato (`fireBullet` chiama `playShoot`) |
-| `makeNoise()` alias | `src/audio-engine.js:127` | Mai usato |
-| `AdaptiveAudioEngine` | `src/audio-engine.js:627` | Sottoclasse di compatibilità mai importata |
-| `renderer.onError` | `index.html:561` | Proprietà custom: WebGPURenderer non la invoca |
-
-Anche l'array `shockwaves` di `index.html` (:1959) e `updateShockwaves`/`clearShockwaves` diventano candidati alla rimozione **solo dopo** aver rimosso `addShockwave` (sono il suo unico consumer). Valutare se invece riutilizzare `addShockwave` per l'impatto dei colpi nemici sui muri (oggi spariscono senza feedback — vedi M3).
-
-### C2 — Telegraph hardcoded nel danno drone
-
-- **File:** `src/drone-system.js:288` — `THREE.MathUtils.lerp(.14, .22, drone.random())` duplica i valori di `DRONE_TUNING.telegraphMin/Max` (0.14/0.24) con un massimo diverso.
-- **Fix:** usare `DRONE_TUNING.telegraphMin/Max` come in `registerProjectileThreat` (:172).
-
-### C3 — Pointer lock non rilasciato sui pannelli di errore
-
-- **File:** `index.html:539` (`showRendererFailure`), :556 (`onDeviceLost`)
-- Se il device si perde o il loop va in errore persistente mentre il pointer lock è attivo, l'overlay di recovery appare ma il cursore resta catturato: l'utente non può interagire né leggere comodamente.
-- **Fix:** `document.exitPointerLock?.()` in entrambi i percorsi.
-
-### C4 — Allocazioni nel percorso caldo
-
-- `fireBullet` (`index.html:2380-2381`): 2 `Vector3` per colpo (~8/s a fuoco continuo) → temp object di modulo.
-- `onTelegraph` (`index.html:1983`) e `applyDamage` (`drone-system.js:285,292`): `clone()` per evento → temp object.
-- B6 copre il caso più pesante (`updateMarkers`).
-- **Nota:** i cloni restituiti da `applyDamage` (`position`) sono consumati come punto di impatto: se si introduce un temp, copiarlo esplicitamente nei consumer (`damageDrone` lo usa subito, quindi è sicuro).
-
-### C5 — Origine proiettile oltre la parete (edge case, opzionale)
-
-- **File:** `index.html:2381` — spawn a `camera.position + dir*0.6`: con la schiena a 0.12 m dalla parete e mirando all'indietro il colpo nasce dentro/oltre il muro e vive 1.6s fuori arena (innocuo ma sporco).
-- **Fix opzionale:** clamp dell'origine entro `±(arenaInnerFace - 0.2)` su X/Z, coerente con i limiti già usati per camera e corpi.
-
-
----
-
-## 7. Miglioramenti strutturali
-
-### M1 — Copertura test (Fase 1 parziale → Fase 3)
-
-Setup `node --test` già presente; oggi coperto solo `player-collision.js`. Nuovi test proposti, tutti su moduli puri o con mock leggeri (niente DOM/WebGPU):
-
-1. `tests/config.test.js` **(Fase 1, con B1):** default del mix a storage vuoto; valori persistiti; clamp fuori range; storage assente/eccezioni (privacy mode) → fallback senza throw; round-trip `storeMix` → `getStoredMix`.
-2. `tests/graphics-manager.test.js` (Fase 3): mock di `requestAnimationFrame`/`applyProfile`; transizione AUTO HIGH→BALANCED dopo 6 finestre <50 FPS; risalita dopo 20 finestre >58 FPS; rispetto del cooldown 30s; `setMode('ultra')` → sequenza transizione e stato finale.
-3. `tests/rng.test.js` (Fase 3): stesso seed → stessa sequenza; seed diversi → sequenze diverse; output in `[0, 1)`.
-
-### M2 — Magic numbers → CONFIG (Fase 2)
-
-Duplicati tra logica e HUD, oggi allineati solo per disciplina manuale:
-
-| Valore | Occorrenze |
-|--------|-----------|
-| Scudo max `75` | `gameState` (:1861), regen (:2139), bonus ondata (:2140), respawn (:2094), reset (:2639), HUD (`hud-controller.js:45`) |
-| Rigenerazione scudo `9/s`, delay `4.5s` | `index.html:2139` |
-| Combo finestra `3.2s`, max `x5`, step `+.25` | `index.html:2070-2072` |
-| Punteggi kill `100`, impatto `12` | `index.html:2073-2081` |
-| Raggio danno giocatore `0.52` (≈0.72²) | `index.html:2112` (da condividere con il fix B4) |
-
-Proposta: estendere l'oggetto `CONFIG` in `index.html` (`maxShield`, `shieldRegen`, `shieldRegenDelay`, `comboWindow`, …) e passare i massimi a `HudController` via state o costruttore.
-
-### M3 — UX/gameplay a costo nullo (Fase 2)
-
-- **Accuracy in telemetry:** `gameState.shots/hits` sono già tracciati ma mai mostrati → riga "ACCURACY" nel pannello telemetry (`hits/shots`).
-- **Toast bonus fine ondata:** +25 scudo e +60 munizioni (:2140) sono oggi invisibili → un toast li rende percepibili.
-- **Feedback impatto colpi nemici sui muri:** oggi il colpo sparisce; riusare `addShockwave`/`sparkBurst` (vedi C1: decidere se dare uno scopo ad `addShockwave` invece di cancellarla).
-- **Sensibilità mouse:** slider nel settings panel (oggi hardcoded `0.0022`, :2209-2210), persistita in localStorage come il mix.
-
-### M4 — Robustezza delle dipendenze CDN (Fase 3)
-
-- `cannon.js` è caricato con `<script src>` semplice → aggiungere `integrity` (SRI) + `crossorigin="anonymous"`.
-- Per l'import map di three: la specifica import map supporta il campo `"integrity"` (Chrome 127+); in alternativa **vendoring locale** di `three.webgpu.js`, `three.tsl.js`, addons usati e `cannon.min.js` sotto `vendor/` → il gioco funzionerebbe anche offline e senza rischio di modifiche CDN. Da valutare insieme al refactor moduli (M5).
-- Nota: `cannon.js` 0.6.2 è fermo al 2015; la migrazione a `cannon-es` (fork mantenuto, API quasi identica, ESM nativo) è un'opzione da pianificare a parte, non inclusa in questo piano.
-
-### M5 — Refactor: spezzare `bootGame()` (Fase 3, invasivo)
-
-`index.html` concentra ~2400 righe di logica in una closure unica: stato condiviso implicito, testabilità nulla, merge difficili. Estrazione incrementale proposta (ogni step lascia il gioco funzionante):
-
-1. `src/main.js` come entry (import da `index.html`, che resta solo markup + import map);
-2. `src/arena-builder.js` (sezioni 3–5: cielo, materiali, arena, set dressing);
-3. `src/game-state.js` (`gameState`, `resetLevel`, danno/respawn, onde — con unit test);
-4. `src/weapon-system.js` (proiettili, melee, tracer);
-5. `src/input.js` (pointer lock, tastiera, mouse).
-
-Sequenza vincolata: prima M2 (costanti in un posto solo) e M1 (rete di sicurezza sui moduli puri), poi l'estrazione.
-
-### M6 — CI minima (Fase 3)
-
-Workflow GitHub Actions: `node --test` su push/PR + `node --check` su ogni file di `src/` e `tests/`. Per l'`index.html` (script inline di tipo module): estrazione del blocco `<script type="module">` in un file temporaneo `.mjs` e `node --check` (solo parsing: gli import bare/URL non vengono risolti da `--check`, quindi il controllo è fattibile in CI).
-
-
----
-
-## 8. Falsi positivi verificati (non-bug)
-
-Piste controllate e scartate, per non riesaminarle in futuro:
-
-- **`constrainBodyToSquare`**: la semantica "rimuovi solo la velocità uscente" è corretta e coperta dai 4 test esistenti (parete, direzione entrante, angolo, NaN).
-- **`DroneSystem.clear()`**: dispone i materiali per-drone ma non le geometrie/shared `darkMaterial` → corretto, sono risorse condivise di classe.
-- **Deriva orizzontale della pioggia** (`arr[i*3] += sin(elapsed…)`): è l'integrale di un seno → oscillazione limitata, nessuna fuga di coordinate.
-- **Radar 440px attributo / 220px CSS:** intenzionale (HiDPI), non un mismatch.
-- **Override CSS duplicati** (`#crosshair`, `#radar`… tra `<style>` inline e `styles/hud.css`): hud.css è caricato dopo → vince; funziona, ma va consolidato in M5.
-- **`mesh.castShadow = true` sul `Group` dei pickup:** no-op innocuo (il Group non ha geometria).
-- **`randomDirection()` con vettore quasi nullo:** `THREE.Vector3.normalize()` gestisce length 0 (`divideScalar(length || 1)`) → nessun NaN.
-- **Casse spinte dai proiettili:** comportamento voluto (commento :1223), non un glitch fisico.
-- **`THREE.Timer` da `three/webgpu`:** presente nella build pinnata r184 e usato correttamente (`connect(document)` per la gestione visibilità).
-- **`safeStorage`/`readStorage` in `config.js`:** correttamente protetti da try/catch (privacy mode, file://); il bug B1 è solo nel `Number(null)`.
-- **Singleton `AudioEngine`:** il doppio ingresso via `getInstance` e `new` è gestito in entrambi i rami.
-- **`hud.css` `.hud-shell.sprinting + #hud`:** `#game-hud` e `#hud` sono effettivamente sibling nel DOM → il selettore funziona.
-
----
-
-## 9. Piano di implementazione
-
-### Fase 1 — Bug fix chirurgici (questo sprint)
-
-Ordine consigliato (ogni punto = un commit separato, test verdi tra un punto e l'altro):
-
-| # | Item | File | Dipendenze |
-|---|------|------|-----------|
-| 1.1 | **B1** fix `getStoredMix` + nuovo `tests/config.test.js` | `src/config.js`, `tests/` | — |
-| 1.2 | **B3** riallineamento scheduler musicale | `src/audio-engine.js` | — |
-| 1.3 | **B4** sweep segmento per colpi nemici | `index.html` | — |
-| 1.4 | **B2** gate `gameplayActive` in `animate` | `index.html` | fare dopo 1.3 per testare il tunneling in pausa |
-| 1.5 | **B5** reset `nextFootstep`/`isGrounded`, stamina al respawn | `index.html` | — |
-| 1.6 | **B8** pickup non consumato a riserva piena | `index.html` | — |
-| 1.7 | **B7** re-sync selezione qualità | `src/hud-controller.js`, `src/graphics-manager.js`, `index.html` | — |
-| 1.8 | **C1** rimozione dead code (decisione su `addShockwave`, vedi M3) | `index.html`, `src/audio-engine.js` | — |
-| 1.9 | **C2** telegraph da `DRONE_TUNING` | `src/drone-system.js` | — |
-| 1.10 | **C3** `exitPointerLock` sui pannelli di errore | `index.html` | — |
-
-Criteri di uscita Fase 1: `node --test` verde (≥ 4 vecchi + nuovi config), `node --check` pulito sui moduli toccati, smoke test manuale del gioco (checklist §10).
-
-### Fase 2 — Performance & UX
-
-| # | Item |
-|---|------|
-| 2.1 | **B6** marker drone: cache ref + dirty-check + `transform` |
-| 2.2 | **B9** `heightToNormal` chunked async |
-| 2.3 | **C4** temp vectors in `fireBullet`/`onTelegraph`/`applyDamage` |
-| 2.4 | **M2** magic numbers → `CONFIG` (+ passaggio max scudo all'HUD) |
-| 2.5 | **M3** accuracy, toast bonus, feedback impatti nemici, slider sensibilità |
-| 2.6 | **C5** (opzionale) clamp origine proiettili |
-
-### Fase 3 — Struttura (da pianificare a parte)
-
-M5 (refactor moduli, step incrementali), M4 (SRI/vendoring), M6 (CI), completamento M1 (graphics-manager, rng). Richiede una sessione dedicata con branch feature.
-
-
----
-
-## 10. Strategia di validazione
-
-**Automatizzata (locale e CI):**
+## 7. Validazione
 
 ```bash
-node --test                                    # suite unitaria
-for f in src/*.js tests/*.js; do node --check "$f"; done   # parsing moduli
-# parsing dello script inline di index.html:
-sed -n '/<script type="module">/,/<\/script>/p' index.html | sed '1d;$d' > /tmp/main.mjs && node --check /tmp/main.mjs
+npm test          # 103 test
+npm run lint:tsl
+npm run smoke     # anche con SMOKE_WAVE=9 e SMOKE_WEAPON=railgun
+git diff --check
 ```
 
-**Smoke test manuale (browser WebGPU, `python3 -m http.server 8080`):**
+Quello che l'ambiente di sviluppo **non** può verificare: i pixel (adapter software, catture bianche), i tempi per frame, i timeout della GPU. Per quelli serve una macchina con GPU reale — vedi §7 del piano performance.
 
-1. **B1:** profilo browser pulito (o `localStorage.clear()`) → avvio → musica/effetti udibili senza toccare gli slider.
-2. **B2:** pausa con colpi nemici in volo → nessun danno; pausa a fine ondata → nessun banner nuova ondata; ripresa → combattimento coerente.
-3. **B3:** tab in background 60s durante il gioco → ritorno senza raffica né freeze.
-4. **B4:** con throttling CPU (DevTools 6x) farsi colpire da un colpo diretto → danno registrato.
-5. **B5:** RESET LIVELLO a run avanzata → footstep immediatamente presenti; morte → respawn con energia piena.
-6. **B7:** switch ULTRA e click su AUTO durante la transizione → selezione UI torna su ULTRA.
-7. **B8:** riserva piena (180) → camminare su un drop → il pickup resta a terra.
-8. Non regressione: qualità AUTO↔ULTRA, radar, marker, melee, jump pad, ricarica, mute (M), resize finestra.
+## 8. Lezioni apprese
 
-**Non copribile qui:** nessun ambiente browser/GPU nella macchina di sviluppo → i punti 1–8 richiedono verifica manuale; i fix sono progettati per essere a rischio minimo (gating e clamp, nessuna riscrittura di logica).
-
----
-
-## 11. Rischi e mitigazioni
-
-| Rischio | Mitigazione |
-|---------|-------------|
-| B2: il gate congela qualcosa che deve restare vivo (es. idle dei droni prima dello start) | Guardia esplicita sui tre stati (`!started` / `paused` / `active`); smoke test 2 e 8 |
-| B6/M2: il CSS consuma sia `--target-x/y` sia `left/top` | Verifica in `hud.css` prima di rimuovere un canale; diff visivo dei marker |
-| B9: `rebuildMaterials` async cambia il contratto del constructor | Boot 1024 fire-and-forget; `setQuality` await sotto modale transizione |
-| C1: `addShockwave`/`shockwaves` hanno un consumer nascosto | Ricerca globale già eseguita (unici consumer: `updateShockwaves`/`clearShockwaves`); rimozione atomica nello stesso commit |
-| M5: regressioni durante l'estrazione | Step incrementali con gioco funzionante a ogni commit; M1+M2 prima come rete di sicurezza |
-
-## 12. Metriche di completamento
-
-- **Fase 1 chiusa quando:** 0 bug 🔴/🟠 aperti; `node --test` ≥ 8 test verdi; smoke test 1–8 superati.
-- **Fase 2 chiusa quando:** 0 scritture DOM ridondanti nei marker (verifica con DevTools Performance); switch ULTRA senza long task >100 ms; costanti di gameplay in `CONFIG`.
-- **Fase 3 chiusa quando:** `index.html` < 400 righe (markup + bootstrap); CI verde su push; dipendenze con SRI o vendored.
-
-- **Fase 3 chiusa quando:** `index.html` < 400 righe (markup + bootstrap); CI verde su push; dipendenze con SRI o vendored.
-
----
-
-## 13. Stato di completamento
-
-Aggiornato dopo l'implementazione. **Tutte le azioni del piano sono state eseguite** (Fase 1, 2 e 3), con verifiche automatiche. Rimane segnalato chiaramente il lavoro M5 più profondo (rifattorizzazione completa di `bootGame` in `main.js`/`arena-builder.js`/`weapon-system.js`/`game-state.js`/`input.js`), che richiede una sessione dedicata con test in browser WebGPU.
-
-### Fase 1 — ✅ Completata
-| Item | Verifica |
-|------|----------|
-| B1 `getStoredMix` | Fix + `tests/config.test.js` (5 test) |
-| B2 pausa reale | Gate `gameplayActive` in `animate()` |
-| B3 scheduler audio | Riallineamento `nextStepTime` + tetto iterazioni |
-| B4 sweep colpi nemici | `hostileSegment`/`hostileClosest` (anti-tunneling) |
-| B5 reset stato | `nextFootstep`/`isGrounded` in resetLevel; stamina al respawn |
-| B7 desync qualità | `panel.syncMode` + re-sync in `onQuality` |
-| B8 pickup riserva piena | Non consumato se `amount <= 0` |
-| C1 dead code | Rimosso `addShockwave`/`addSpark`/`effects`/`shockwaves`/`bulletCurrent`/`renderer.onError`/alias audio |
-| C2 telegraph | Usa `DRONE_TUNING.telegraphMin/Max` |
-| C3 pointer lock | `document.exitPointerLock?.()` nei pannelli di errore |
-
-### Fase 2 — ✅ Completata
-| Item | Verifica |
-|------|----------|
-| B6 marker drone | Cache ref + dirty-check + riuso vettore proiezione |
-| B9 `heightToNormal` | Chunked async (`CHUNK_ROWS`), `FacadeSystem.init()`/`setQuality` async |
-| C4 temp vectors | `bulletDir`/`bulletOrigin` riusati in `fireBullet` |
-| C5 origine proiettili | Clamp entro i limiti arena |
-| M2 magic numbers | Costanti salute/scudo/stamina/combo/punteggi in `CONFIG`; `HudController.maxShield` |
-| M3 UX | Accuracy in telemetry; toast bonus ondata; slider sensibilità mouse (persistito) |
-
-### Fase 3 — ✅ Completata (con nota su M5)
-| Item | Verifica |
-|------|----------|
-| M1 test | `tests/rng.test.js` (4) + `tests/graphics-manager.test.js` (5) + `tests/config.test.js` (5) |
-| M4 SRI | `integrity`+`crossorigin` su cannon.js; `integrity` su import map (build three.js) |
-| M6 CI | `.github/workflows/ci.yml` (unit test + syntax check) |
-| M5 (incremental) | Estratto `src/textures.js` (8 generatori) — `index.html` ridotto di ~130 righe |
-
-**Nota M5:** il rifattorizzazione completa di `bootGame()` nei moduli `main.js`/`arena-builder.js`/`weapon-system.js`/`game-state.js`/`input.js` **non** è stata eseguita in questa sessione: è un intervento invasivo su ~2400 righe con stato condiviso implicito e necessita di verifica in browser WebGPU (non disponibile in questo ambiente). È stato invece completato il primo passo incrementale (estrazione dei generatori di texture puri in `src/textures.js`), che è sicuro e testabile. Il resto della Fase 3 è da pianificare su un branch feature, come indicato nel piano (§9, Fase 3).
-
-### Validazione finale
-- `node --test`: **18/18 verdi** (4 originali + 5 config + 4 rng + 5 graphics-manager).
-- `node --check` pulito su tutti i file `src/*.js`, `tests/*.js` e sullo script inline di `index.html`.
-- Smoke test manuale in browser WebGPU: **da eseguire** (checklist §10, punti 1–8) — nessun ambiente GPU a disposizione qui.
-
----
-
-## 14. Seconda tornata — bug residui, improvement grafica/audio/UI (3 agosto 2026, pomeriggio)
-
-> **Contesto:** il commit `3cb4cb1` ("Fix regressione: boot bloccato al 46%") ha **revertito B9** ripristinando `FacadeSystem` sincrono: lo switch ULTRA tornava a bloccare il main thread (~4,2M pixel in `heightToNormal` a 2048²). La tabella §13 segnava B9 chiuso: **riaperto e richiuso correttamente** (N1). Nuova revisione completa + probe headless reale (Playwright/Chromium) del percorso di boot.
->
-> **Stato: ✅ TUTTE LE AZIONI ESEGUITE** con verifiche automatiche (22/22 test, smoke boot OK).
-
-### Bug residui corretti
-
-| ID | Titolo | Fix | Verifica |
-|----|--------|-----|----------|
-| N1 | Switch ULTRA blocca il main thread (B9 riaperto dal revert `3cb4cb1`) | `facade-system.js`: split `createFacadeCanvases`/`facadeMapsFromCanvases`; `heightToNormalAsync` chunked (`CHUNK_ROWS=64`); `rebuildMaterialsAsync` con **token di generazione** + try/catch; boot **invariato** (sincrono a 1024); cache mappe base per ritorno ULTRA→AUTO immediato | `node --check`; checklist GPU §15 |
-| N2 | Input di gioco attivo in pausa (Space→salto al resume, R→reload a sim congelata) | Gate `locked && gameState.started && !gameStartLoading` nel `keydown` (`index.html`) | smoke boot |
-| N3 | Accuracy oltre il 100% con melee (hits++ senza shots) | `damageDrone(..., countHit)`; melee passa `false` | checklist GPU |
-| N4 | Cooldown dry-fire sovrascritto dal loop (click ogni 120 ms) | Rimossa la sovrascrittura: `fireBullet` gestisce da solo il cooldown | revisione codice |
-| N5 | Copy pausa contraddittorio ("restano attivi" ma B2 congela) | Testo brief aggiornato: "simulazione sospesa… congelati fino al rientro" | revisione |
-| N6 | Toast senza tetto | Cap 5 in `HudController.toast` con espulsione del più vecchio | `tests/hud-controller.test.js` (2 test) |
-| N7 | Scritture DOM per-frame (`sprinting`, `firing`) | Dirty-check come da filosofia B6; `fireBullet` non tocca più il DOM | revisione |
-| N8 | Mute non persistito, HUD non sincronizzato | `getStoredMuted`/`storeMuted` in `config.js`; `toggle()` persiste; sync HUD al boot | `tests/config.test.js` (2 test) |
-| N9 | Pan stereo incoerente (explode/impatti non pannati) | Helper `panForWorld(position)` (proiezione NDC → pan clamp); applicato a explode, impatti drone, impatti muro | checklist GPU |
-
-### Improvement
-
-| ID | Area | Titolo | Implementazione |
-|----|------|--------|-----------------|
-| G1 | Grafica | Warmup shader al boot | `await renderer.compileAsync(scene, camera)` + un `renderPipeline.render(0,0)` (try/catch non bloccanti): niente hitch al primo frame/colpo/esplosione |
-| G2 | Grafica | GPU dedicata | `powerPreference: 'high-performance'` nel `WebGPURenderer` |
-| G3 | Grafica | Flicker insegne neon | `flickerSigns` (9 insegne): modulazione colore time-based + rari cali brevi |
-| G4 | Grafica | Landing camera dip | `landingKick` proporzionale alla velocità d'impatto, decadimento morbido |
-| G5 | Grafica | Animazione ricarica arma | `reloadDip` (lerp su `gameState.reloading`): arma scende e si inclina |
-| A1 | Audio | Ducking in pausa | `AudioEngine.setMenuDuck` (musica ×.42, ambiente ×.5, sfx ×.82); hum droni muti col menu aperto |
-| A2 | Audio | Spazializzazione coerente | vedi N9 — pan da proiezione schermo su esplosioni/impatti |
-| A3 | Audio | Stinger ondata | `AudioEngine.waveStart()`: sweep ascendente + impatto basso |
-| A4 | Audio | Heartbeat critico | Doppio tonfo sub-60 Hz su SFX quando `health < 35` (ogni 2 battute) |
-| A5 | Audio | Persistenza mute | vedi N8 |
-| D1 | Affidabilità | **Vendoring dipendenze** | `vendor/three/build/*` + 5 addon jsm + `vendor/cannon/cannon.min.js` (three.js 0.184.0, cannon.js 0.6.2). Import map locale, SRI rimosso. **Demo 100% offline** |
-| D2 | Affidabilità | Smoke test automatico | `tools/smoke-boot.mjs` + `npm run smoke`: zero pageerror/console.error/404, verifica fallback senza adapter |
-| D3 | Affidabilità | Checklist GPU manuale | §15 sotto |
-| D4 | Affidabilità | Documentazione | Questa sezione + README aggiornato |
-
-### Aggiustamenti post-review demo
-
-| ID | Titolo | Fix | Verifica |
-|----|--------|-----|----------|
-| N10 | Pareti che cambiano colore avvicinandosi: la modalità edge-safe sostituiva il materiale testurizzato con un `MeshBasicMaterial` **blu piatto** (`0x2f6488`) entro 2,8 m | `index.html`: edge-safe ora è un `MeshStandardMaterial` che **condivide mappe e tinta** col materiale lit, con solo l'emissiva leggermente alzata come assicurazione anti-faccia-nera. Swap visivamente impercettibile, protezione mantenuta | checklist GPU §15 |
-| A6 | Volumi di base troppo bassi (musica effettiva ~13% del full scale) → poi **SFX mascherati** dal letto musica/ambiente arricchito | `audio-engine.js`: master .72→**.9**; SFX con **boost dedicato ×1.3** (bus ~1.23); musica ×.26→**×.42**; ambiente ×.5→**×.62**; gain alzati su hit marker, passi, melee, pickup, dry, jump, UI. `config.js`: default music .78 / sfx .95 / ambience .66. Verificato con probe headless + AnalyserNode: segnale SFX presente (shoot 0.088→**0.147**, explode 0.177→**0.232**) | `tests/config.test.js` (3 attese) + probe audio |
-| U7 | Slider dei volumi troppo piccoli (griglia 6 colonne/7 elementi, font 8px, range nativi minuscoli) → poi ancora **troppo corti** (117px) | `hud.css`: pannello 980px, **riga dedicata per i 4 slider** (~222px ciascuno, doppio rispetto alla prima iterazione), traccia 5px e thumb 15px custom glow, layout 2×2 sotto i 1100px | screenshot headless verificato: slider 222×18px, nessuno sbordo |
-| U8 | Mute persistente (A5) invisibile sull'overlay → gioco apparentemente "senza audio" | `#overlay-sound-state`: badge **AUDIO MUTED — premi M per riattivare** su start/pausa, sincronizzato da `HudController.setMuted` | revisione + `tests/hud-controller.test.js` |
-| A9 | Musica ancora poco presente | `applyMix`: musica ×.42→**×.55**; default `vibefps.mix.music` .78→**.82** (`config.js`, test aggiornati) | probe audio headless |
-| G8 | **Insegne coreane perpendicolari sui muri est/ovest**: il telaio (`frame`, box sottile solo lungo Z) non veniva mai ruotato — aderiva solo ai muri nord/sud | `index.html` `createNeonSign`: `frame.lookAt(pos + normal)` — il telaio segue la normale della parete | checklist GPU §15 |
-| G9 | Texture procedurali a bassa risoluzione (metallo **256**, legno **256**, asfalto **512**, hazard **256**) | `textures.js`: generatori parametrizzati — metallo **1024**, legno **512**, asfalto **1024**, hazard **512**, PBR asfalto **1024**; normal map muri a 1024 **condivisa** (conversione 1× invece di 4×). Costo generazione misurato: **74 ms** totali | screenshot headless delle 4 texture + smoke boot |
-
-### Validazione seconda tornata
-- `node --test`: **22/22 verdi** (18 precedenti + 2 config mute + 2 hud-controller toast cap).
-- `node --check` pulito su `src/*.js`, `tests/*.js`, `tools/*.mjs` e script inline.
-- `npm run smoke`: **OK** — boot headless completato, fallback WebGPU verificato, nessun errore, nessuna risorsa mancante (valida anche il vendoring D1).
-- Ambiente di sviluppo **senza adapter WebGPU**: la validazione del rendering reale resta alla checklist manuale §15.
-
-## 15. Checklist manuale su macchina con GPU (pre-presentazione)
-
-Eseguire in browser con WebGPU (Chrome/Edge recenti), servendo la cartella via HTTP:
-
-1. **Boot**: barra di caricamento fino a `SYSTEM READY` senza errori console; nessuno stallo (watchdog muto).
-2. **Start**: click su INIZIALIZZA SIMULAZIONE → pointer lock, HUD visibile, musica + ambiente attivi (o MUTED se persistito da sessione precedente, con HUD coerente).
-3. **Primo colpo e prima esplosione**: nessun hitch percettibile (warmup G1).
-4. **Pausa (Esc)**: simulazione congelata (droni fermi, copy N5), musica attenuata (A1), hum droni assenti; Space/R in pausa senza effetto (N2); ripresa senza salto o reload spurii.
-5. **Switch ULTRA**: dal pannello settings → transizione senza freeze (N1); ritorno ad AUTO immediato (cache mappe base).
-6. **Gameplay**: fuoco a secco → click dry ogni ~200 ms (N4); melee + accuracy ≤ 100% (N3); kill → esplosione pannata (N9/A2), toast max 5 (N6); wave start con stinger (A3); salute <35 → heartbeat (A4) + HUD critical.
-7. **RESET LIVELLO**: run riavviata a ondata 1 senza residui.
-8. **Atterraggio da salto/jump pad**: dip camera proporzionale (G4) + suono land; flicker neon visibile sulle insegne (G3); arma si abbassa in ricarica (G5); telai delle insegne coreane aderenti ai muri est/ovest (G8); dettaglio texture di asfalto, muri e casse visibilmente più fine da vicino (G9).
-9. **Pareti rasenti**: percorrere il perimetro incollati al muro — nessun cambio di colore delle pareti (N10); volumi base e SFX chiaramente udibili al primo avvio (A6: sparo, hit marker, passi, esplosioni sopra il letto musicale); slider volumi lunghi e trascinabili (U7); premendo M il badge AUDIO MUTED compare sull'overlay e sparisce alla riattivazione (U8).
-10. **Offline**: ripetere i punti 1–3 con la rete disattivata (vendoring D1).
-
----
-
-## 16. Terza tornata — stato attuale (4 agosto 2026)
-
-> **Contesto:** revisione completa del working tree (cosa è cambiato rispetto alla tornata 2) + verifica che tutti i fix storici siano ancora presenti. La terza tornata ha aggiunto funzionalità significative e rinviene **9 nuovi rilievi** (1 pre-esistente ad alta severità, 2 a media, 6 a bassa).
-
-### 16.1 Verifica dei fix storici (tornate 1-2) — ✅ tutti presenti
-
-Tutti i 38 item tracciati (B1-B9, C1-C5, M3, N1-N10, G1-G9, A1-A6/A9, U7-U8, D1-D4) sono stati riverificati contro il codice attuale e risultano **FIXED/PRESENT**, con evidenza file:riga:
-
-| Gruppo | Esito |
-|--------|-------|
-| B1-B9 (bug core) | ✅ presenti — `getStoredMix` (config.js:265-282), gate `gameplayActive` (index.html:4391-4396), scheduler audio (audio-engine.js:426), sweep colpi nemici (index.html:3041-3044), reset stato (index.html:4333-4334), marker dirty-check (drone-system.js:379-397), sync qualità (index.html:2281-2286), pickup pieno (index.html:2912-2929), `heightToNormalAsync` chunked (facade-system.js:29-39) |
-| C1-C5 (cleanup) | ✅ presenti — dead code rimosso (grep: 0 match), telegraph da `DRONE_TUNING` (drone-system.js:442-445), `exitPointerLock` (index.html:538,697), temp vectors (index.html:3820), clamp origine (index.html:3823-3824) |
-| M3 / M1 / M6 | ✅ presenti — accuracy+toast+sensibilità (hud-controller.js:128-133, index.html:2278), test suite e CI, `heightToNormal` condiviso |
-| N1-N10 | ✅ presenti — tutti verificati (es. N2 gate input, N3 accuracy melee, N7 dirty-check DOM, N9 `panForWorld`, N10 edge-safe material) |
-| G1-G9, A1-A6/A9, U7-U8, D1-D4 | ✅ presenti — warmup, powerPreference, flicker neon, landing dip, reload dip, insegne G8, texture G9, ducking A1, stinger A3, heartbeat A4, mute A5/N8, slider U7, badge U8, vendoring D1, smoke D2 |
-
-**Nota M1/M5:** la copertura test è cresciuta a **51 test** (nuovi: `normal-map.test.js` 4, estensioni `rng`/`hud-controller`/`smoke-volume`). Il refactor completo di `bootGame()` in moduli (M5) resta **parziale**: è stato estratto solo `src/textures.js` (più il nuovo `src/normal-map.js`); `index.html` è ancora ~4200 righe.
-
-### 16.2 Nuove funzionalità (working tree 4/8)
-
-- **Vite e cuori:** `maxLives` (3), i boss droppano un cuore, GAME OVER a vite esaurite con RESTART RUN (`damagePlayer`, `endGameOver`, `updateHeartPickups`).
-- **5 armi:** `WEAPON_TUNING` in `config.js`; helper per-arma (`weaponUnlocked`/`weaponAmmo`/`weaponReserve`/`setWeaponAmmo`/`unlockWeapon`/`weaponTuning`/`availableWeapons`); selezione con tasti 1-5, rotella e Q; HUD per-arma (nome, munizioni, celle ∝ caricatore).
-- **Drop boss:** onda 1 → railgun; onde 2/3/4 → `VULCAN` (minigun), `HELLSTORM` (RPG con missile esplosivo ad area), `PYRE` (lanciafiamme a cono). Ogni arma si sblocca una volta per run.
-- **HP boss ×4** (`APEX_TUNING.hpMultiplier`) + barra boss con numerico (`#boss-hp`, es. "840 / 1680").
-- **Drop munizioni ogni 10 s** in posizione casuale, che riempie la riserva dell'arma equipaggiata.
-- **Kernel normal-map condiviso** (`src/normal-map.js`): unica copia della conversione luminanza→normal (era triplicata).
-
-### 16.3 Nuovi rilievi (dal 4/8) — ✅ tutti corretti nella stessa tornata
-
-> **Stato:** tutti i 9 rilievi (T1-T9) sono stati corretti lo stesso giorno (4/8). La tabella sotto tiene l'evidenza file:riga del fix accanto a ciascun rilievo.
-
-| ID | Severità | Titolo | File:riga (fix) | Note |
-|----|----------|--------|-----------------|------|
-| **T1** | 🔴 Alta · **pre-esistente** | I visuali specifici degli archetipi Apex non vengono renderizzati | `src/drone-system.js:263-266` | Aggiunte le parti archetipo al `visual` (`for (const p of parts) if (p.isMesh) visual.add(p)`), prima restavano solo in `parts`. |
-| **T2** | 🟠 Media | Il drop di un'arma può sparire per sempre (soft-lock) | `index.html` (`spawnWeaponDrop` gate ciclico + reset `weaponDropSpawned`) | Gate `(wave - unlockWave) % 4 === 0`; il flag si resetta alla scadenza; il boss ri-droppa ogni 4 ondate se non raccolta. |
-| **T3** | 🟠 Media | Tuning railgun duplicato (due fonti di verità) | `src/config.js` | `RAILGUN_TUNING` ora deriva da `WEAPON_TUNING.railgun` (`{ ...WEAPON_TUNING.railgun, pickupLifetime: 90 }`). |
-| **T4** | 🟡 Bassa | Leak/duplicazione canne del minigun allo switch ULTRA | `index.html` (`applyWeaponDetail`) | Il vecchio `minigunBarrel` viene rimosso e disposto (non più escluso dal cleanup). |
-| **T5** | 🟡 Bassa | Cell di munizioni "pieno" quando l'arma a colpo singolo è vuota | `src/hud-controller.js:103-105` | Cella 0 piena solo se `ammo > 0`. |
-| **T6** | 🟡 Bassa | Cono del lanciafiamme: distanza su XZ + direzione 3D | `index.html` (`fireFlame`, `flameAim`) | Direzione e offset proiettati su XZ + guardia `dist < .001`: niente NaN-bypass per nemici sopra/sotto. |
-| **T7** | 🟡 Bassa | Bonus munizioni di fine ondata va solo alla riserva del pulse | `index.html` (fine ondata) | `setWeaponAmmo` sulla riserva dell'arma attiva (clamp al max). |
-| **T8** | 🟡 Bassa | `audio.flame()` alloca 2 burst di rumore per tick (20/s) | `index.html` (`flameSoundTimer`) | Suono throttled a max ~1 ogni 0.12 s. |
-| **T9** | 🟡 Bassa | `flameBurst` può saturare il pool additivo (720 particelle) | `src/explosion-system.js` (`flameBurst`) | Count ridotto a ~5 (era 10) per burst: ~100 particelle/s. |
-| **T10** | 🟡 Bassa · **post-T9** | Salto in alto vicino ai muri → l'arena si scurisce ("il sistema luci si rompe") | `src/render-pipeline.js` (`render()`), `index.html` (`updateEdgeSafeMode`) | **Root cause:** la "modalità edge-safe" (camera vicina ai muri, attivata dalla distanza X/Z) **bypassava l'intero post-processing** (`renderBaseScene()`: niente bloom, grading, tone mapping) → l'arena appariva drasticamente più scura vicino al bordo, a qualsiasi altezza. **Fix definitivo:** rimosso il bypass del post-processing in edge-safe (resta solo lo swap materiale delle pareti); il post-processing è ora sempre attivo → l'arena non si scurisce più vicino ai muri. Nota: un primo fix (gate sull'altezza in `updateEdgeSafeMode`) non bastava perché un salto normale non supera la soglia usata. |
-
-**Non-bug verificati (terza tornata):** kernel `normal-map.js` numericamente equivalente; single-flight di `facade-system.js` (nessuna richiesta persa); `initialize()` audio con try/catch (nessun ctx orfano); `smoke-volume.js` drop-on-full + active-after-mesh corretti; `spawnLight` oldest-reuse sicuro; `i18n` en/it parità (108/108); `rng.js` seed normalization corretta.
-
-### 16.4 Validazione terza tornata
-- `node --test`: **51/51 verdi**.
-- `node --check` pulito su tutti i moduli `src/*.js`, `tests/*.js`, `tools/*.mjs` e sullo script inline di `index.html`.
-- `npm run lint:tsl`: OK (import TSL coerenti).
-- `npm run smoke`: OK — boot headless WebGPU, zero errori, zero risorse mancanti.
-- Ambiente di sviluppo **senza adapter WebGPU**: il rendering reale resta alla checklist manuale §15 + nuovi punti per le armi.
-
-### 16.5 Backlog proposto
-> ✅ **Eseguito nella stessa tornata (4/8):** tutti gli item T1-T9 sono stati corretti. Di seguito il backlog residuo (non urgenti, rifiniture opzionali).
-1. **Verifica visuale in browser GPU** — T1 (visuali Apex per-archetipo) e T2 (re-drop) richiedono conferma manuale su macchina con WebGPU (checklist §15 + punti armi).
-2. **Rifiniture opzionali** — cono del lanciafiamme (T6) e budget particelle (T9) sono già mitigati; valutare se il burst visivo del fuoco resta abbastanza denso dopo la riduzione T9.
-
----
-
-## 17. Quarta tornata — regressioni e cause del freeze sul cambio di tier (6 agosto 2026)
-
-> **Contesto:** sessione di ottimizzazione performance (vedi `performance-optimization-plan.md`, §4, §6.3, §10.4, §15.1). Il throttle della reflection ha reso raggiungibile un difetto preesistente e ne ha introdotto uno nuovo. Entrambi segnalati dall'utente in gioco: *«saltando molto in alto verso la parete VIBE il rendering si blocca per circa 1 secondo e quando riprende la grafica ha in sovraimpressione parte di un fotogramma precedente»*.
->
-> Curiosità: lo stesso gesto (salto in alto vicino ai muri) aveva già fatto emergere **T10** nella terza tornata, per una causa completamente diversa.
->
-> **Stato: ✅ risolti e confermati in gioco dall'utente.**
-
-### 17.1 Bug corretti
-
-| ID | Sev. | Titolo | File | Fix |
-|----|------|--------|------|-----|
-| **Q1** | 🔴 Critica | Cambio di tier automatico → **~2 s di freeze**. `ExplosionSystem.setQuality` cambiava `light.visible` al variare di `dynamicLights` (4→2). In WebGPU il `lightsNode` aggrega le luci **visibili** dentro lo shader: variare quel set **ricompila ogni materiale della scena**. Misurate **39 pipeline create e distrutte a ogni switch**. È lo stesso pericolo già descritto nel commento di `precompileAllMaterials`, che però riguardava solo il boot | `src/explosion-system.js` | Set di luci **fissato al boot** al massimo `dynamicLights` fra i profili (`lightSlots`); il budget per profilo resta effettivo perché `lightLimit` governa quante luci vengono accese nel pool di allocazione. `visible` non viene più toccato: spegnere si fa con l'intensità, che è una uniform |
-| **Q2** | 🟠 Alta | Frammenti di un fotogramma precedente sul pavimento dopo un hitch (linee della griglia, grattacieli). **Regressione introdotta in questa sessione:** il throttle limitava la staleness in *frame*. Due frame sono 33 ms a 60 FPS, ma durante un hitch un solo frame resta a schermo per un secondo, e l'asfalto somma via `emissiveNode` una reflection catturata prima | `src/reflection-throttle.js`, `src/main.js` | Soglia di deriva della posa stretta a **.35 m / .05 rad** (era 2 m / .35 rad ≈ 20°): una reflection riusata deve venire da una posa percettivamente identica. In più, un frame oltre 40 ms disattiva il throttle, e lo scheduler viene resettato al cambio profilo e su frame fallito |
-| **Q3** | 🟡 Media | `updateReflectionQuality` era **inefficace**: `resolutionScale` esiste solo su `ReflectorBaseNode`, non sul `ReflectorNode` restituito da `reflector()`. La riga creava una proprietà mai letta, quindi **`reflectorSize` non ha mai avuto effetto** e la render target restava al `.3` del costruttore su tutti i profili | `src/main.js` | Scritto su `floorReflection.reflector.resolutionScale`. Nota: a 1080p DPR 1 questo *aumenta* la reflection di autoHigh (576×324 → 1024×576), ed è ciò che ha reso raggiungibile Q1 |
-| **Q4** | 🟡 Media | `VolumetricSmokeSystem.setQuality` ricostruiva i materiali al variare dei passi del raymarch, compilando shader in gioco (~35 pipeline nello stesso frame di Q1). Era già previsto nel piano performance §6.3 | `src/smoke-volume.js` | Entrambe le varianti precompilate al boot; `setQuality` scambia riferimenti. Le quattro combinazioni (due lati × due qualità) restano nel render graph a scala 0 per il warmup |
-| **Q5** | 🟡 Bassa | `Math.min(getMaxAnisotropy(), profile.anisotropy)` produce **`NaN`** se il profilo non espone il campo (es. `config.js` servito dalla cache del browser insieme a un `main.js` nuovo). `NaN` finirebbe nel sampler descriptor di **ogni** texture procedurale: in WebGPU è un errore di validazione, e muri/asfalto/casse smetterebbero di disegnarsi | `src/main.js` | Valore validato con `Number.isFinite` e fallback a 8, più `Math.max(1, …)`: degrada al default invece di corrompere la scena |
-| **Q6** | 🟡 Media | `tools/smoke-boot.mjs` sostituiva stringhe in `index.html` che dopo la modularizzazione vivono in `src/main.js`: `SMOKE_WAVE=9` e `SMOKE_WEAPON=railgun` **non avevano più effetto, silenziosamente**. Due modalità di smoke test erano di fatto morte | `tools/smoke-boot.mjs` | Le patch agganciano `src/main.js`; un'ancora mancante ora è un **errore esplicito** (`exit 3`) invece di un no-op. Verificato: `SMOKE_WEAPON=railgun` → «weapon railgun Ultra», `SMOKE_WAVE=9` → «boot wave 9» |
-| **Q7** | 🟡 Bassa | Dead code in `applyWeaponDetail`: la closure `attachIfNeeded` definita e mai chiamata (duplicava il loop successivo), più quattro `const` mai usate (`pulseCached`, `railCached`, `rpgCached`, `flameCached`) e un commento duplicato | `src/main.js` | Rimossi; `minigunBarrel` legge direttamente da `getWeaponMeshes`, che è già memoizzato |
-
-### 17.2 Misure
-
-Cambio di tier autoHigh↔autoLow, adapter software 420×320. I conteggi di pipeline sono **indipendenti dall'adapter**, i tempi sono indicativi:
-
-| | pipeline | switch ↓ | switch ↑ |
-|---|---|---|---|
-| prima | 213 → **252** → 213 | **2200 ms** | 486 ms |
-| dopo | **214 costante** | 32–40 ms | 33–38 ms |
-
-Invariante di Q2 verificata in automatico: una traiettoria di salto verso la parete VIBE (camera che sale, avanza e ruota) con hitch da 1 s **iniettati dopo la decisione sulla reflection**, cioè nel caso peggiore. Risultato: `frame lenti=6, frame lenti con reflection non allineata=0`. L'hitch è iniettato, quindi l'esito non dipende dalla velocità della GPU.
-
-### 17.3 Ipotesi verificate e scartate
-
-Documentate per non ripercorrerle: **compilazione delle pipeline del pass reflection** (senza warmup se ne crea **1 sola** salendo in quota, non un burst); **resize della render target della reflection o della shadow map** (rendendo `reflectorSize` e `shadowSize` uguali fra i profili lo stallo non cambiava); **`needsUpdate` in `_applyWetness`** (rimuoverlo non spostava il tempo).
-
-Nota metodologica: su adapter software `maxFrameMs` è dominato dal fill rate — a bassa quota un frame supera i 6 s — e maschera qualunque stallo di compilazione. Le conclusioni attendibili sono venute dai **contatori di pipeline e texture** (`renderer.info.memory`, cache di `_pipelines`), non dai tempi.
-
-### 17.4 Difetti latenti rilevati e NON corretti
-
-> Q6 e Q7, inizialmente elencati qui, sono stati corretti nella stessa tornata: vedi §17.1.
-
-| ID | Titolo | File | Nota |
-|----|--------|------|------|
-| **Q8** | `aoPass.enabled = false` è inerte (il `GTAONode` vendorizzato non consulta la proprietà) e la guardia `if (this.aoPass.enabled !== undefined)` è sempre vera | `src/render-pipeline.js` | Dettaglio in `performance-optimization-plan.md` §3.1. Va affrontato con la variante di pipeline per autoLow (§3.2), non isolatamente |
-
-### 17.5 Validazione quarta tornata
-- `npm test`: **96/96 verdi** (+29 rispetto alla terza tornata) su Node 22 e Node 24.
-- `npm run lint:tsl`: OK.
-- `npm run smoke`: OK — boot headless WebGPU, zero errori, zero risorse mancanti; verificate anche le modalità `SMOKE_WAVE=9` e `SMOKE_WEAPON=railgun`, tornate funzionanti con Q6.
-- `git diff --check`: nessun errore di whitespace.
-- Conferma in gioco su GPU reale da parte dell'utente: freeze e artefatto **non più riproducibili**.
+1. **Un log della console vale dieci ipotesi.** R1 è stato risolto in un passaggio con lo stack reale, dopo tre ipotesi sbagliate formulate senza.
+2. **Distinguere il sintomo dal difetto.** "Si blocca saltando verso il muro" ha avuto tre cause diverse in tre tornate (T10, Q1, R1). Lo stesso gesto non implica lo stesso bug.
+3. **Un'ottimizzazione può rendere raggiungibile un difetto latente.** Q1 esisteva da sempre: è emerso solo quando una reflection più costosa ha iniziato a far scattare il downgrade automatico.
+4. **Le patch basate su stringhe si rompono in silenzio.** Q6 è rimasto invisibile finché non è stata aggiunta un'asserzione sull'ancora.
+5. **Verificare la geometria contro l'implementazione precedente**, usandola come oracolo, invece di ispezionarla a occhio.

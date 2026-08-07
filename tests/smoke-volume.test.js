@@ -145,6 +145,51 @@ test('i puff attivi seguono lo scambio di variante mantenendo il lato corretto',
   assert.equal(puff.mesh.material, system.variants.low.back);
 });
 
+// Regressione: con la camera dentro la nuvola l'hull di ogni puff riempie lo
+// schermo. Il solo tetto `maxActive` ne consentiva 16 in ultra, cioè 16 raymarch
+// a schermo pieno da 12 passi nello stesso frame: abbastanza da mandare la GPU
+// in timeout e far restare lo schermo nero per qualche secondo.
+const insideCamera = () => ({ isCamera: true, fov: 75, position: new Vector3(0, 1, 0) });
+const spawnOverlapping = (system, count) => {
+  for (let i = 0; i < count; i++) {
+    system.spawn({ ...basePuff, position: new Vector3(i * .05, 1, 0), life: 10, radiusStart: 3, radiusEnd: 3 });
+  }
+};
+const visibleCount = system => system.puffs.filter(p => p.active && p.mesh && p.mesh.visible).length;
+
+test('dentro la nuvola gli strati a schermo pieno sono limitati dal budget', () => {
+  const { system } = makeSystem({ smokePuffs: 8 });   // ultra
+  spawnOverlapping(system, 8);
+  system.update(.016, insideCamera());
+  assert.equal(visibleCount(system), 2, 'ultra deve fermarsi a 2 strati');
+});
+
+test('il budget scala con il profilo', () => {
+  const low = makeSystem({ smokePuffs: 2 }).system;   // autoLow
+  spawnOverlapping(low, 4);
+  low.update(.016, insideCamera());
+  assert.equal(visibleCount(low), 1, 'autoLow deve fermarsi a 1 strato');
+});
+
+test('i puff esclusi restano vivi e continuano a invecchiare', () => {
+  const { system } = makeSystem({ smokePuffs: 8 });
+  spawnOverlapping(system, 8);
+  const before = system.activeCount;
+  system.update(.016, insideCamera());
+  // Esclusi dal disegno, non dalla simulazione: altrimenti resterebbero
+  // bloccati e non libererebbero mai lo slot del pool.
+  assert.equal(system.activeCount, before);
+  for (let i = 0; i < 700; i++) system.update(.016, insideCamera());
+  assert.equal(system.activeCount, 0, 'tutti i puff devono scadere');
+});
+
+test('un puff isolato e lontano non viene escluso dal budget', () => {
+  const { system } = makeSystem({ smokePuffs: 8 });
+  system.spawn({ ...basePuff, position: new Vector3(0, 1, 12), life: 10, radiusStart: 2, radiusEnd: 2 });
+  system.update(.016, { isCamera: true, fov: 75, position: new Vector3(0, 1, 0) });
+  assert.equal(visibleCount(system), 1);
+});
+
 test('setQuality a zero puff disattiva completamente il fumo', () => {
   const { system } = makeSystem({ smokePuffs: 0 });
   system.spawn({ ...basePuff });

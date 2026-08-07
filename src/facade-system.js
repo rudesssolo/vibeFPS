@@ -162,7 +162,11 @@ async function createFacadeMapsAsync(resolution, anisotropy) {
   return facadeMapsFromCanvases(canvases, normalMap, anisotropy);
 }
 
-function createPaintedNumber(text, color, resolution, seed) {
+// Disegna un numero "dipinto" su un canvas quadrato e lo restituisce. Il canvas
+// non diventa una texture: le 56 celle finiscono in un unico atlas (vedi
+// buildCity), così la città usa una texture e un materiale invece di 56 di
+// ciascuno. Il corpo del disegno è invariato: cambia solo cosa viene ritornato.
+function paintNumberCanvas(text, color, resolution, seed) {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = resolution;
   const context = canvas.getContext('2d');
@@ -200,12 +204,85 @@ function createPaintedNumber(text, color, resolution, seed) {
   }
   context.globalCompositeOperation = 'source-over';
   context.globalAlpha = 1;
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = 4;
-  return texture;
+  return canvas;
 }
+
+// Celle dell'atlas dei numeri. 256 px bastano: il decal è alto al massimo 8 m su
+// un edificio a 35-60 m, quindi a 1440p con FOV 75° copre ~220 px sullo schermo
+// nel caso più favorevole — 512 era sopra la risoluzione utile. Con 8 colonne i
+// 56 edifici stanno in 8×7 celle: 2048×1792 contro 56 texture da 512².
+/**
+ * Fonde geometrie statiche in una sola, applicando la matrice di ciascuna ai
+ * vertici. Copre position/normal/uv, che è quanto usa la skyline (box, cilindri,
+ * sfere): evita di vendorizzare BufferGeometryUtils e di introdurre una
+ * dipendenza in più nella modalità offline (§13.3 del piano performance).
+ */
+function mergeStaticGeometries(entries) {
+  let vertexCount = 0;
+  let indexCount = 0;
+  for (const { geometry } of entries) {
+    const count = geometry.getAttribute('position').count;
+    const index = geometry.getIndex();
+    vertexCount += count;
+    indexCount += index ? index.count : count;
+  }
+  const positions = new Float32Array(vertexCount * 3);
+  const normals = new Float32Array(vertexCount * 3);
+  const uvs = new Float32Array(vertexCount * 2);
+  // Oltre 65535 vertici servono indici a 32 bit.
+  const indices = vertexCount > 65535 ? new Uint32Array(indexCount) : new Uint16Array(indexCount);
+  const normalMatrix = new THREE.Matrix3();
+  const vertex = new THREE.Vector3();
+  let vertexOffset = 0;
+  let indexOffset = 0;
+
+  for (const { geometry, matrix } of entries) {
+    const position = geometry.getAttribute('position');
+    const normal = geometry.getAttribute('normal');
+    const uv = geometry.getAttribute('uv');
+    normalMatrix.getNormalMatrix(matrix);
+    for (let i = 0; i < position.count; i++) {
+      const target = vertexOffset + i;
+      vertex.fromBufferAttribute(position, i).applyMatrix4(matrix);
+      positions[target * 3] = vertex.x;
+      positions[target * 3 + 1] = vertex.y;
+      positions[target * 3 + 2] = vertex.z;
+      if (normal) {
+        vertex.fromBufferAttribute(normal, i).applyMatrix3(normalMatrix).normalize();
+        normals[target * 3] = vertex.x;
+        normals[target * 3 + 1] = vertex.y;
+        normals[target * 3 + 2] = vertex.z;
+      }
+      if (uv) {
+        uvs[target * 2] = uv.getX(i);
+        uvs[target * 2 + 1] = uv.getY(i);
+      }
+    }
+    const index = geometry.getIndex();
+    if (index) {
+      for (let i = 0; i < index.count; i++) indices[indexOffset + i] = vertexOffset + index.getX(i);
+      indexOffset += index.count;
+    } else {
+      for (let i = 0; i < position.count; i++) indices[indexOffset + i] = vertexOffset + i;
+      indexOffset += position.count;
+    }
+    vertexOffset += position.count;
+  }
+
+  const merged = new THREE.BufferGeometry();
+  merged.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  merged.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  merged.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  merged.setIndex(new THREE.BufferAttribute(indices, 1));
+  merged.computeBoundingSphere();
+  return merged;
+}
+
+const ATLAS_CELL = 256;
+const ATLAS_COLUMNS = 8;
+// Margine in texel sulle UV: le mip mediano oltre il bordo della cella e senza
+// inset il numero della cella vicina può affiorare da lontano.
+const ATLAS_UV_PADDING = 2;
 
 function disposeMaps(maps) {
   if (!maps) return;
@@ -241,7 +318,9 @@ export class FacadeSystem {
     // scartato se nel frattempo è partita un'altra ricostruzione o un ritorno
     // alle mappe base. Evita swap fuori ordine e doppi materiali.
     this.buildGeneration = 0;
-    this.numberTextures = [];
+    this.numberAtlas = null;
+    this.numberGeometry = null;
+    this.numberMaterial = null;
     scene.add(this.group);
     this.rebuildMaterials(resolution);
     this.buildCity();
@@ -366,6 +445,13 @@ export class FacadeSystem {
 
   buildCity() {
     const random = makeRng(4242);
+    const decals = [];
+    // Gli edifici vengono assemblati in un gruppo di appoggio con la stessa
+    // logica di posizionamento di sempre; alla fine le loro matrici mondo
+    // vengono cotte in poche mesh unite. Costruirli davvero (invece di
+    // calcolare le trasformazioni a mano) garantisce che la disposizione
+    // resti identica all'originale.
+    const staging = new THREE.Group();
     const numberColors = ['#e7e2d7', '#d4b24f', '#b7d3d5', '#a24f49'];
     const roofMat = new THREE.MeshStandardMaterial({ color: 0x11171d, metalness: .72, roughness: .48, envMapIntensity: 1.1 });
     const trimMat = new THREE.MeshStandardMaterial({ color: 0x222a31, metalness: .85, roughness: .28, envMapIntensity: 1.25 });
@@ -420,33 +506,170 @@ export class FacadeSystem {
         beacon.position.set((random() - .5) * width * .28, totalHeight + .9, (random() - .5) * depth * .24);
         building.add(beacon);
       }
-      this.group.add(building);
+      staging.add(building);
 
       // Il numero è un vero strato di vernice non emissivo, rivolto verso l'arena.
+      // La sequenza di random() qui sotto è vincolante: cambiarne l'ordine
+      // rigenererebbe l'intera città. I decal vengono solo raccolti; atlas e
+      // geometria si costruiscono dopo il loop.
       const number = String(10 + Math.floor(random() * 990));
       const label = random() < .22 ? `${number}동` : number;
-      const numberTexture = createPaintedNumber(label, numberColors[i % numberColors.length], 512, 9000 + i);
-      this.numberTextures.push(numberTexture);
       const numberHeight = Math.min(8, totalHeight * .28);
-      const decal = new THREE.Mesh(
-        new THREE.PlaneGeometry(Math.min(width * .76, numberHeight * 1.6), numberHeight),
-        new THREE.MeshPhysicalMaterial({
-          map: numberTexture,
-          transparent: true,
-          alphaTest: .06,
-          depthWrite: false,
-          roughness: .78,
-          metalness: .02,
-          clearcoat: .08,
-          polygonOffset: true,
-          polygonOffsetFactor: -2
-        })
-      );
       const inward = new THREE.Vector3(-Math.cos(angle), 0, -Math.sin(angle));
-      decal.position.copy(building.position).addScaledVector(inward, depth * .5 + .045);
-      decal.position.y = totalHeight * (.48 + random() * .18);
-      decal.lookAt(0, decal.position.y, 0);
-      this.group.add(decal);
+      const decalPosition = building.position.clone().addScaledVector(inward, depth * .5 + .045);
+      decalPosition.y = totalHeight * (.48 + random() * .18);
+      decals.push({
+        label,
+        color: numberColors[i % numberColors.length],
+        seed: 9000 + i,
+        width: Math.min(width * .76, numberHeight * 1.6),
+        height: numberHeight,
+        position: decalPosition
+      });
     }
+
+    this.mergeSkyline(staging);
+    this.buildNumberDecals(decals);
+  }
+
+  /**
+   * Un'unica mesh per tutti i numeri della skyline: prima erano 56 mesh, 56
+   * MeshPhysicalMaterial (con clearcoat) e 56 texture 512², cioè ~78 MB di VRAM
+   * e 56 draw call — pagate due volte, perché la città entra anche nel pass
+   * della reflection del pavimento.
+   *
+   * Le trasformazioni sono cotte nei vertici invece di usare `lookAt` per mesh:
+   * ogni quad è verticale e rivolto al centro dell'arena, quindi la sua base
+   * ortonormale si ricava dalla direzione orizzontale verso l'origine.
+   */
+  /**
+   * Riduce le 333 mesh della skyline a una manciata, fondendo la geometria
+   * statica per materiale. I materiali sono già condivisi (4 facciate, tetti,
+   * profili, 2 beacon) e vengono *mutati* al cambio qualità, mai sostituiti:
+   * le mesh unite continuano quindi a riferire gli stessi oggetti e l'animazione
+   * di `emissiveIntensity`/`opacity` in update() funziona come prima.
+   *
+   * I caster d'ombra restano in mesh separate: `castShadow` è per-oggetto e solo
+   * i primi 22 edifici lo hanno attivo.
+   *
+   * Compromesso: si perde il frustum culling per-edificio, quindi ogni gruppo è
+   * disegnato per intero o per niente. Su geometrie da poche decine di vertici
+   * l'overhead per draw call domina largamente il costo dei vertici scartati.
+   */
+  mergeSkyline(staging) {
+    staging.updateMatrixWorld(true);
+    const groups = new Map();
+    staging.traverse(object => {
+      if (!object.isMesh) return;
+      const key = `${object.material.uuid}|${object.castShadow ? 1 : 0}`;
+      let group = groups.get(key);
+      if (!group) {
+        group = { material: object.material, castShadow: object.castShadow, entries: [] };
+        groups.set(key, group);
+      }
+      group.entries.push({ geometry: object.geometry, matrix: object.matrixWorld });
+    });
+
+    for (const group of groups.values()) {
+      const geometry = mergeStaticGeometries(group.entries);
+      const mesh = new THREE.Mesh(geometry, group.material);
+      mesh.castShadow = group.castShadow;
+      mesh.receiveShadow = true;
+      mesh.name = 'SkylineMerged';
+      this.group.add(mesh);
+      // Le geometrie originali non sono mai state caricate sulla GPU (le mesh
+      // di appoggio non entrano nella scena), ma vanno comunque rilasciate.
+      for (const entry of group.entries) entry.geometry.dispose();
+    }
+  }
+
+  buildNumberDecals(decals) {
+    if (!decals.length) return;
+    const rows = Math.ceil(decals.length / ATLAS_COLUMNS);
+    const atlas = document.createElement('canvas');
+    atlas.width = ATLAS_COLUMNS * ATLAS_CELL;
+    atlas.height = rows * ATLAS_CELL;
+    const atlasContext = atlas.getContext('2d');
+
+    const positions = new Float32Array(decals.length * 4 * 3);
+    const normals = new Float32Array(decals.length * 4 * 3);
+    const uvs = new Float32Array(decals.length * 4 * 2);
+    const indices = new Uint16Array(decals.length * 6);
+    const forward = new THREE.Vector3();
+    const right = new THREE.Vector3();
+
+    decals.forEach((decal, index) => {
+      const column = index % ATLAS_COLUMNS;
+      const row = Math.floor(index / ATLAS_COLUMNS);
+      atlasContext.drawImage(
+        paintNumberCanvas(decal.label, decal.color, ATLAS_CELL, decal.seed),
+        column * ATLAS_CELL, row * ATLAS_CELL
+      );
+
+      // Base del quad: `forward` punta all'origine (come faceva lookAt), la
+      // verticale resta il world up perché il decal non si inclina mai.
+      forward.set(-decal.position.x, 0, -decal.position.z);
+      if (forward.lengthSq() < 1e-6) forward.set(0, 0, -1);
+      forward.normalize();
+      right.set(forward.z, 0, -forward.x);
+      const halfWidth = decal.width / 2;
+      const halfHeight = decal.height / 2;
+
+      const u0 = (column * ATLAS_CELL + ATLAS_UV_PADDING) / atlas.width;
+      const u1 = ((column + 1) * ATLAS_CELL - ATLAS_UV_PADDING) / atlas.width;
+      const v1 = 1 - (row * ATLAS_CELL + ATLAS_UV_PADDING) / atlas.height;
+      const v0 = 1 - ((row + 1) * ATLAS_CELL - ATLAS_UV_PADDING) / atlas.height;
+
+      // Ordine dei vertici: alto-sx, alto-dx, basso-sx, basso-dx (come PlaneGeometry).
+      const corners = [
+        [-halfWidth, halfHeight, u0, v1],
+        [halfWidth, halfHeight, u1, v1],
+        [-halfWidth, -halfHeight, u0, v0],
+        [halfWidth, -halfHeight, u1, v0]
+      ];
+      corners.forEach(([offsetX, offsetY, u, v], corner) => {
+        const vertex = index * 4 + corner;
+        positions[vertex * 3] = decal.position.x + right.x * offsetX;
+        positions[vertex * 3 + 1] = decal.position.y + offsetY;
+        positions[vertex * 3 + 2] = decal.position.z + right.z * offsetX;
+        normals[vertex * 3] = forward.x;
+        normals[vertex * 3 + 1] = forward.y;
+        normals[vertex * 3 + 2] = forward.z;
+        uvs[vertex * 2] = u;
+        uvs[vertex * 2 + 1] = v;
+      });
+
+      const base = index * 4;
+      indices.set([base, base + 2, base + 1, base + 2, base + 3, base + 1], index * 6);
+    });
+
+    const texture = new THREE.CanvasTexture(atlas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = 4;
+    this.numberAtlas = texture;
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+    geometry.computeBoundingSphere();
+    this.numberGeometry = geometry;
+
+    // MeshStandard invece di MeshPhysical: il clearcoat era a .08, cioè quasi
+    // nulla, e non giustifica il lobo speculare in più su un decal di vernice.
+    this.numberMaterial = new THREE.MeshStandardMaterial({
+      map: texture,
+      transparent: true,
+      alphaTest: .06,
+      depthWrite: false,
+      roughness: .78,
+      metalness: .02,
+      polygonOffset: true,
+      polygonOffsetFactor: -2
+    });
+    const mesh = new THREE.Mesh(geometry, this.numberMaterial);
+    mesh.name = 'SkylineNumbers';
+    this.group.add(mesh);
   }
 }

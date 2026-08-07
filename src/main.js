@@ -4583,6 +4583,15 @@
     reflectionHeight: 0,
     lastFrameMs: 0,
     maxFrameMs: 0,
+    // Il render pipeline cattura i propri errori e NON disegna: in WebGPU la
+    // texture del canvas è invalidata dopo il present, quindi un frame saltato
+    // è nero, non l'ultimo frame valido. Questi contatori rendono visibile
+    // quella condizione dall'esterno.
+    postProcessingFailures: 0,
+    postProcessingStreak: 0,
+    lastPostProcessingError: '',
+    slowFrameReports: 0,
+    previousSnapshot: null,
     // Pipeline e programmable stage vivi. La chiave della cache delle pipeline
     // include il formato colore del render context, quindi la render target
     // HalfFloat del reflector ne richiede di proprie: contarle è il modo
@@ -4619,6 +4628,29 @@
     // Forza un cambio di tier lungo il percorso reale (applyProfile), che è
     // quello che in gioco scatta da updateFPS quando gli FPS restano bassi.
     window.__vibeStall = ms => { injectedStallMs = Math.max(0, Number(ms) || 0); };
+    // Bisezione manuale del costo: spegne un sospetto alla volta nel punto
+    // esatto in cui il difetto si manifesta. Serve perché un timeout della
+    // GPU non è riproducibile su adapter software.
+    window.__vibeOff = {
+      reflection: () => { reflectionAllowed = false; floorReflection.reflector.updateBefore = () => {}; return 'reflection spenta'; },
+      cielo: () => { for (const n of ['sky']) void n; scene.traverse(o => { if (o.material?.fog === false && o.geometry?.type === 'SphereGeometry') o.visible = false; }); return 'cupola del cielo spenta'; },
+      citta: () => { facadeSystem.group.visible = false; return 'skyline spenta'; },
+      atmosfera: () => { atmosphereSystem.setFxOverrides?.({ }); atmosphereSystem.clouds && (atmosphereSystem.clouds.visible = false); atmosphereSystem.aurora && (atmosphereSystem.aurora.visible = false); return 'nuvole e aurora spente'; },
+      meteo: () => { weatherSystem.setFxOverrides({ weather: false }); return 'pioggia e nebbia spente'; },
+      postFx: () => { renderPipeline.setFxOverrides({ flare: false, heatHaze: false, grain: false, vignette: false, grade: false }); return 'post-effetti azzerati'; }
+    };
+    // Esplosione a comando: serve a misurare il costo del fumo volumetrico
+    // con la camera dentro i puff, che è il caso peggiore per il raymarch.
+    window.__vibeExplode = (x, y, z) => explosionSystem.explode(new THREE.Vector3(x, y, z), 0xff7b2d);
+    window.__vibeSmoke = () => ({
+      attivi: explosionSystem.volumetric.activeCount,
+      dentro: explosionSystem.volumetric.puffs.filter(p => p.active && p.inside).length,
+      visibili: explosionSystem.volumetric.puffs.filter(p => p.active && p.mesh && p.mesh.visible).length,
+      passi: explosionSystem.volumetric.steps
+    });
+    // La scena serve alle verifiche geometriche headless (es. confronto dei
+    // decal uniti della skyline contro PlaneGeometry + lookAt).
+    window.__vibeScene = scene;
     window.__vibeForceTier = tier => {
       graphicsManager.mode = 'auto';
       graphicsManager.autoTier = tier === 'autoLow' ? 'autoLow' : 'autoHigh';
@@ -4650,6 +4682,12 @@
         diagnostics.staleReflectionFrames++;
       }
     }
+    const streak = renderPipeline.consecutivePostProcessingErrors || 0;
+    if (streak > 0) {
+      diagnostics.postProcessingFailures++;
+      diagnostics.postProcessingStreak = Math.max(diagnostics.postProcessingStreak, streak);
+      diagnostics.lastPostProcessingError = String(renderPipeline.postProcessingError || '').slice(0, 300);
+    }
     const pipelines = renderer._pipelines?.caches?.size ?? 0;
     if (diagnostics.pipelines && pipelines > diagnostics.pipelines) {
       diagnostics.pipelinesCreatedInWindow += pipelines - diagnostics.pipelines;
@@ -4661,6 +4699,30 @@
       diagnostics.texturesCreatedInWindow += textures - diagnostics.textures;
     }
     diagnostics.textures = textures;
+    // Referto del frame lento. Un hitch da secondi su una scena che gira a 100
+    // FPS non è fill che cresce: è un evento singolo — un'allocazione, un
+    // upload di texture, una compilazione. Questo stampa COSA è cambiato in
+    // quel frame, così la causa si legge invece di indovinarla. Non è
+    // riproducibile su adapter software, quindi il referto va raccolto sulla
+    // macchina che manifesta il difetto.
+    if (frameMs > SLOW_FRAME_REPORT_MS * 5 && diagnostics.slowFrameReports < 12) {
+      diagnostics.slowFrameReports++;
+      const previous = diagnostics.previousSnapshot;
+      console.warn('VIBE frame lento', {
+        ms: Math.round(frameMs),
+        camera: `${camera.position.x.toFixed(1)}, ${camera.position.y.toFixed(1)}, ${camera.position.z.toFixed(1)}`,
+        drawCalls,
+        triangoli: renderer.info.render.triangles,
+        pipelineNuove: pipelines - (previous?.pipelines ?? pipelines),
+        textureNuove: renderer.info.memory.textures - (previous?.textures ?? renderer.info.memory.textures),
+        geometrie: renderer.info.memory.geometries,
+        reflectionRenderizzata: reflectionAllowed,
+        reflectionTarget: `${diagnostics.reflectionWidth}x${diagnostics.reflectionHeight}`,
+        fumoVisibile: explosionSystem.volumetric.puffs?.filter(p => p.active && p.mesh?.visible).length ?? 0,
+        errorePostProcessing: String(renderPipeline.postProcessingError || '') || 'nessuno'
+      });
+    }
+    diagnostics.previousSnapshot = { pipelines, textures };
     const target = floorReflection?.reflector.renderTargets.values().next().value;
     if (target) {
       diagnostics.reflectionWidth = target.width;

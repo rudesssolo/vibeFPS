@@ -175,6 +175,16 @@
   #objective-text { font-weight: 700; font-size: 14px; letter-spacing: .8px; }
   .mission-progress { height: 2px; margin-top: 10px; background: rgba(255,255,255,.09); overflow: hidden; }
   #mission-progress-fill { display: block; width: 0%; height: 100%; background: linear-gradient(90deg,var(--pink),var(--cyan)); box-shadow: 0 0 9px var(--cyan); transition: width .3s; }
+  .core-line { display:flex; align-items:center; gap:8px; margin-top:9px; color:rgba(210,247,255,.88); }
+  .core-pip { width:6px; height:6px; border:1px solid var(--cyan); transform:rotate(45deg); box-shadow:0 0 10px var(--cyan); }
+  #core-status { font:800 10px/1.2 ui-monospace,monospace; letter-spacing:.7px; }
+  .core-progress { height:3px; margin-top:5px; background:rgba(255,255,255,.08); overflow:hidden; }
+  #core-progress-fill { display:block; width:100%; height:100%; background:linear-gradient(90deg,#78dfff,#ecfeff); box-shadow:0 0 10px #9ef5ff; transition:width .18s,background .18s; }
+  #core-objective.destroyed .core-pip { border-color:#ff465f; box-shadow:0 0 10px #ff465f; }
+  #core-objective.destroyed #core-status { color:#ff7184; }
+  #core-objective.destroyed #core-progress-fill { background:#ff3155; box-shadow:0 0 10px #ff3155; }
+  #damage-boost-status { display:none; margin-top:7px; color:#fff4b8; font:900 10px/1.2 ui-monospace,monospace; letter-spacing:1px; text-shadow:0 0 10px #ffd166; }
+  #damage-boost-status.active { display:block; }
   .sector { color: var(--cyan); font-weight: 900; letter-spacing: 2.5px; font-size: 12px; margin-bottom: 5px; }
   .telemetry { padding: 10px 13px; min-width: 178px; text-align: right; }
   .telemetry-row { display:flex; justify-content:space-between; gap:18px; margin-top:5px; font: 700 10px/1.2 ui-monospace, monospace; color: rgba(202,240,246,.72); }
@@ -291,8 +301,13 @@
         <div class="sector">NIGHT//SHIFT <span style="color:rgba(255,255,255,.28)">·</span> SECTOR 07</div>
         <div class="mission-card hud-panel">
           <div class="micro-label"><span data-i18n="mission.label">ACTIVE OBJECTIVE</span> <span id="wave-label" style="float:right;color:var(--pink)">WAVE 01</span></div>
-          <div class="mission-line"><i class="mission-pip"></i><span id="objective-text">NEUTRALIZE THE DRONES · 0/5</span></div>
+          <div class="mission-line"><i class="mission-pip"></i><span id="objective-text">NEUTRALIZE HOSTILES · 0/5</span></div>
           <div class="mission-progress"><i id="mission-progress-fill"></i></div>
+          <div id="core-objective">
+            <div class="core-line"><i class="core-pip"></i><span id="core-status">DEFEND VIBE CORE · 100%</span></div>
+            <div class="core-progress"><i id="core-progress-fill"></i></div>
+            <div id="damage-boost-status"></div>
+          </div>
         </div>
       </div>
       <div class="telemetry hud-panel">

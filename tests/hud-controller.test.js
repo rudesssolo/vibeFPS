@@ -132,6 +132,32 @@ test('toast, barra del boss, cuori e barra di missione', () => {
       hud.render({ ...vitalsBase, waveKills: 6, waveTargets: 5 });
       assert.equal(hud.ui.missionFill.style.width, '100%');
       assert.equal(hud.ui.objective.textContent.includes('6/5'), true);
+
+      // Il secondo obiettivo comunica integrità e premio senza dipendere dai
+      // toast: il countdown arrotonda verso l'alto per non mostrare 0s mentre
+      // il moltiplicatore è ancora attivo.
+      hud.render({
+        ...vitalsBase,
+        crystalHealth: 255,
+        crystalMaxHealth: 510,
+        crystalDestroyed: false,
+        damageBoostRemaining: 29.2
+      });
+      assert.equal(hud.ui.coreStatus.textContent, 'DEFEND VIBE CORE · 50%');
+      assert.equal(hud.ui.coreFill.style.width, '50%');
+      assert.equal(hud.ui.damageBoostStatus.textContent, '2× DAMAGE ACTIVE · 30s');
+      assert.equal(hud.ui.damageBoostStatus.classList.contains('active'), true);
+
+      hud.render({
+        ...vitalsBase,
+        crystalHealth: 0,
+        crystalMaxHealth: 510,
+        crystalDestroyed: true,
+        damageBoostRemaining: 0
+      });
+      assert.equal(hud.ui.coreStatus.textContent, 'VIBE CORE DESTROYED · REWARD LOST');
+      assert.equal(hud.ui.coreObjective.classList.contains('destroyed'), true);
+      assert.equal(hud.ui.damageBoostStatus.classList.contains('active'), false);
     });
   }
 });

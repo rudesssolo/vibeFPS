@@ -1,5 +1,8 @@
 import { QUALITY_PROFILES, getStoredQualityMode, storeQualityMode } from './config.js';
 
+// Tempo reale, non numero di campioni: updateFPS riceve delta in secondi.
+export const AUTO_TIER_COOLDOWN_SECONDS = 15;
+
 export class GraphicsManager {
   constructor({ applyProfile, onStatus, onTransition, allowUltra = true }) {
     this.applyProfile = applyProfile;
@@ -75,14 +78,14 @@ export class GraphicsManager {
 
     if (this.autoTier === 'autoHigh' && this.lowWindows >= 6 && this.cooldown <= 0) {
       this.autoTier = 'autoLow';
-      // L15: il cooldown è conteggiato in sample FPS (updateFPS è chiamato con
-      // delta=0.5s da index.html), non in secondi: 30 sample ≈ 15s di gioco.
-      this.cooldown = 30;
+      // U3: `cooldown` e `delta` sono entrambi secondi. Il valore precedente
+      // era 30 mentre il commento dichiarava 30 campioni da .5s (=15s).
+      this.cooldown = AUTO_TIER_COOLDOWN_SECONDS;
       this.lowWindows = 0;
       this.applyCurrent(false);
     } else if (this.autoTier === 'autoLow' && this.highWindows >= 20 && this.cooldown <= 0) {
       this.autoTier = 'autoHigh';
-      this.cooldown = 30;
+      this.cooldown = AUTO_TIER_COOLDOWN_SECONDS;
       this.highWindows = 0;
       this.applyCurrent(false);
     }

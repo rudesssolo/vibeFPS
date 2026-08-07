@@ -65,6 +65,18 @@ export function guardPassReentrancy(passNodes) {
   return passNodes;
 }
 
+/**
+ * Compone tutti gli slot nel grafo al momento della costruzione. Il limite di
+ * qualità può cambiare soltanto uniform e allocazione CPU: non può aggiungere
+ * a posteriori nodi che non erano presenti nello shader (U2).
+ */
+export function composeHeatSlotOffsets(slots, makeOffset, addOffsets = (a, b) => a.add(b)) {
+  if (!Array.isArray(slots) || slots.length === 0) return null;
+  let offset = makeOffset(slots[0], 0);
+  for (let i = 1; i < slots.length; i++) offset = addOffsets(offset, makeOffset(slots[i], i));
+  return offset;
+}
+
 // Bloom a 1/4 della risoluzione di output: equivalente di
 // `UnrealBloomPass.resolution = (window.innerWidth/4, ...)`. `setSize()` viene
 // invocato da `updateBefore()` a ogni frame con la dimensione del drawing
@@ -272,24 +284,22 @@ export class RenderPipelineController {
 
   addHeatHaze(inputNode) {
     const inputTexture = convertToTexture(inputNode);
+    // Lo shimmer è uguale per tutti gli slot: costruirlo una volta evita otto
+    // seni duplicati quando i quattro slot ULTRA sono presenti nel grafo.
+    const shimmer = sin(screenUV.y.mul(43).add(this.grainTime.mul(5.2)))
+      .mul(sin(screenUV.x.mul(37).sub(this.grainTime.mul(4.1))))
+      .mul(.25).add(1);
     const slotOffset = slot => {
       const delta = screenUV.sub(slot.center);
       const distance = length(delta);
       const direction = delta.div(max(distance, float(.002)));
       const envelope = exp(distance.mul(distance).mul(slot.radius.negate()));
-      // Shimmer is expensive (2× sin per slot ×4). Gate by heatScale: when 0
-      // the heatHaze post effect is disabled (autoLow) so we return cheap offset.
-      const shimmer = sin(screenUV.y.mul(43).add(this.grainTime.mul(5.2)))
-        .mul(sin(screenUV.x.mul(37).sub(this.grainTime.mul(4.1))))
-        .mul(.25).add(1);
-      return direction.mul(envelope).mul(slot.strength).mul(shimmer);
+      return direction.mul(envelope).mul(slot.strength);
     };
-    // Only compute the first heatSlotLimit slots; remaining slots are zeroed.
-    // When heatScale==0 this whole branch compiles to a single texture sample.
-    let offset = slotOffset(this.heatSlots[0]);
-    if (this.heatSlotLimit > 1) offset = offset.add(slotOffset(this.heatSlots[1]));
-    if (this.heatSlotLimit > 2) offset = offset.add(slotOffset(this.heatSlots[2]));
-    if (this.heatSlotLimit > 3) offset = offset.add(slotOffset(this.heatSlots[3]));
+    // U2: tutti e quattro gli slot devono entrare nella topologia. setQuality()
+    // azzera le uniform degli slot oltre il limite, ma non tenta più di mutare
+    // un grafo TSL già costruito.
+    const offset = composeHeatSlotOffsets(this.heatSlots, slotOffset).mul(shimmer);
     const uv = screenUV.add(offset.mul(this.heatScale).mul(.007)).clamp(0, 1);
     return vec4(inputTexture.sample(uv).rgb, 1);
   }

@@ -18,6 +18,8 @@
   import { makeRng } from './rng.js';
   import { constrainBodyToSquare } from './player-collision.js';
   import { ReflectionScheduler } from './reflection-throttle.js';
+  import { isEarlierSegmentHit, segmentPointFraction, segmentSphereFirstHitFraction } from './projectile-impact.js';
+  import { CrystalDefenseObjective, shouldTargetCrystal } from './crystal-defense.js';
   import { WeaponDropRegistry } from './weapon-drops.js';
   import { WaterSystem } from './water-system.js';
   import { getStoredSensitivity, storeSensitivity, getStoredQualityMode, APEX_TUNING, ENDGAME_TUNING, RAILGUN_TUNING, WEAPON_TUNING, QUALITY_PROFILES, getBossEncounter } from './config.js';
@@ -986,16 +988,133 @@
   scene.add(rampMesh);
   addStaticBoxRotated(1.5, 0.78, -10, rampLen, 0.4, 5, [0, 0, 1], rampAngle, null);
 
-  // Colonne cilindriche
-  const pillarMat = new THREE.MeshStandardMaterial({ color: 0x20242e, metalness: 0.75, roughness: 0.4, envMapIntensity: 1.0, normalMap: brushedNormal });
-  for (const [px, pz] of [[-12, 4], [3, 9], [-6, 13]]) {
-    const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 4, 24), pillarMat);
-    pillar.position.set(px, 2, pz);
-    pillar.castShadow = true;
-    pillar.receiveShadow = true;
-    scene.add(pillar);
-    addStaticCylinder(px, 2, pz, 0.6, 4, null);
-  }
+  // Lampioni al neon freddo. I collider restano gli stessi cilindri verticali
+  // da 4 m: la nuova silhouette usa la loro base larga come plinto e si stringe
+  // nel fusto, senza cambiare navigazione, coperture o maschera dell'acqua.
+  (function createArenaLampPosts() {
+    // Tre metri dalla faccia interna lasciano un corridoio di oltre due metri
+    // fra plinto e muro. La posizione deriva dall'arena, quindi resta davvero
+    // "vicino agli angoli" anche se il livello cambia dimensione.
+    const lampCorner = CONFIG.arenaSize / 2 - CONFIG.wallThick / 2 - 3;
+    const lampPositions = [
+      [-lampCorner, -lampCorner], [lampCorner, -lampCorner],
+      [-lampCorner, lampCorner], [lampCorner, lampCorner]
+    ];
+    const coldWhite = 0xd9f8ff;
+    const metalMaterial = new THREE.MeshStandardMaterial({
+      color: 0x29333d, metalness: .92, roughness: .24,
+      envMapIntensity: 1.25, normalMap: brushedNormal
+    });
+    const darkMaterial = new THREE.MeshStandardMaterial({
+      color: 0x090e14, metalness: .82, roughness: .38, envMapIntensity: .9
+    });
+    const accentMaterial = new THREE.MeshStandardMaterial({
+      color: 0x15242b, emissive: coldWhite, emissiveIntensity: 2.1,
+      metalness: .28, roughness: .26
+    });
+    const diffuserMaterial = new THREE.MeshPhysicalMaterial({
+      color: 0xd8f6ff, emissive: 0x6ab9ce, emissiveIntensity: .34,
+      transparent: true, opacity: .42, depthWrite: false,
+      metalness: 0, roughness: .16, clearcoat: 1,
+      clearcoatRoughness: .04, side: THREE.DoubleSide
+    });
+    const emitterMaterial = unlitBasic({ color: 0xf4fdff });
+    const beamMaterial = unlitBasic({
+      color: 0xcdf7ff, transparent: true, opacity: .014,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+      side: THREE.DoubleSide
+    });
+    const metalEntries = [];
+    const darkEntries = [];
+    const accentEntries = [];
+    const diffuserEntries = [];
+    const emitterEntries = [];
+    const beamEntries = [];
+    const translate = (geometry, x, y, z) => ({
+      geometry, matrix: new THREE.Matrix4().makeTranslation(x, y, z)
+    });
+    const rotateXAt = (geometry, x, y, z, angle = Math.PI / 2) => {
+      const matrix = new THREE.Matrix4().makeRotationX(angle);
+      matrix.setPosition(x, y, z);
+      return { geometry, matrix };
+    };
+
+    for (let lampIndex = 0; lampIndex < lampPositions.length; lampIndex++) {
+      const [px, pz] = lampPositions[lampIndex];
+
+      // Plinto meccanico, fusto rastremato e testa ottica: sovrapposizioni
+      // minime fra i pezzi evitano fessure luminose quando cambiano i mip.
+      metalEntries.push(
+        translate(new THREE.CylinderGeometry(.48, .60, .32, 24), px, .16, pz),
+        translate(new THREE.CylinderGeometry(.34, .47, .20, 20), px, .40, pz),
+        translate(new THREE.CylinderGeometry(.18, .27, 3.08, 20), px, 1.98, pz),
+        translate(new THREE.CylinderGeometry(.31, .22, .34, 20), px, 3.56, pz),
+        translate(new THREE.CylinderGeometry(.46, .58, .18, 24), px, 4.06, pz),
+        translate(new THREE.CylinderGeometry(.29, .43, .12, 20), px, 4.20, pz)
+      );
+
+      // Quattro nervature scure rendono il palo una struttura cava e
+      // proteggono il diffusore; i collari interrompono il cilindro perfetto.
+      for (const [ox, oz] of [[.235, 0], [-.235, 0], [0, .235], [0, -.235]]) {
+        darkEntries.push(
+          translate(new RoundedBoxGeometry(.055, 2.48, .055, 2, .012), px + ox, 2.00, pz + oz),
+          translate(new RoundedBoxGeometry(.052, .38, .052, 2, .01), px + ox * 1.86, 3.82, pz + oz * 1.86)
+        );
+      }
+      const collarGeometry = new THREE.TorusGeometry(.245, .034, 8, 24);
+      for (const y of [.73, 1.86, 3.24]) darkEntries.push(rotateXAt(collarGeometry, px, y, pz));
+
+      // Guide luminose verticali a bassa emissione: definiscono la silhouette
+      // da lontano senza competere con l'ottica principale quasi bianca.
+      for (const [ox, oz] of [[.272, 0], [-.272, 0], [0, .272], [0, -.272]]) {
+        accentEntries.push(translate(
+          new RoundedBoxGeometry(.025, 2.18, .018, 2, .006), px + ox, 2.02, pz + oz
+        ));
+      }
+
+      // Diffusore smerigliato, camera luminosa interna e lente inferiore.
+      diffuserEntries.push(translate(
+        new THREE.CylinderGeometry(.43, .50, .34, 28, 1, true), px, 3.82, pz
+      ));
+      emitterEntries.push(
+        translate(new THREE.CylinderGeometry(.355, .355, .085, 28), px, 3.66, pz),
+        translate(new THREE.CircleGeometry(.34, 28), px, 3.612, pz)
+      );
+      // CircleGeometry nasce nel piano XY: la lente deve guardare verso il
+      // basso, non lateralmente.
+      emitterEntries[emitterEntries.length - 1] = rotateXAt(
+        emitterEntries.at(-1).geometry, px, 3.612, pz, Math.PI / 2
+      );
+
+      // Il cono non finge l'illuminazione: visualizza soltanto la diffusione
+      // nella nebbia/pioggia. Il vero pool sul terreno viene dallo SpotLight.
+      beamEntries.push(translate(
+        new THREE.ConeGeometry(2.85, 3.52, 28, 1, true), px, 1.86, pz
+      ));
+      const light = new THREE.SpotLight(coldWhite, 28, 10, .68, .78, 2);
+      light.name = `arena lamp ${lampIndex + 1}`;
+      light.position.set(px, 3.63, pz);
+      light.castShadow = false;
+      light.target.position.set(px, .02, pz);
+      scene.add(light, light.target);
+
+      addStaticCylinder(px, 2, pz, .6, 4, null);
+    }
+
+    const addMerged = (name, entries, material, shadows = false) => {
+      const mesh = new THREE.Mesh(mergeStaticGeometries(entries), material);
+      mesh.name = name;
+      mesh.castShadow = shadows;
+      mesh.receiveShadow = shadows;
+      scene.add(mesh);
+    };
+    addMerged('arena lamp metalwork', metalEntries, metalMaterial, true);
+    addMerged('arena lamp ribs', darkEntries, darkMaterial, true);
+    addMerged('arena lamp guide lights', accentEntries, accentMaterial);
+    addMerged('arena lamp frosted diffusers', diffuserEntries, diffuserMaterial);
+    addMerged('arena lamp emitters', emitterEntries, emitterMaterial);
+    addMerged('arena lamp atmospheric beams', beamEntries, beamMaterial);
+  })();
 
   // Coperture basse (da saltare)
   const coverMat = new THREE.MeshStandardMaterial({ color: 0x262c38, metalness: 0.7, roughness: 0.5, envMapIntensity: 0.9 });
@@ -1021,11 +1140,29 @@
   // entrambi i raggi invece di usare il maggiore per tutta l'altezza.
   addStaticCylinder(0, 0.3, 0, 1.8, 0.6, null, 1.5);
 
-  const crystalMat = new THREE.MeshStandardMaterial({ color: 0x0f2233, emissive: 0x00e5ff, emissiveIntensity: 2.0, roughness: 0.2, metalness: 0.1 });
+  const crystalDefense = new CrystalDefenseObjective();
+  const crystalMat = new THREE.MeshStandardMaterial({
+    color: 0xbcefff, emissive: 0xa8f3ff, emissiveIntensity: 3,
+    roughness: .12, metalness: .08
+  });
   const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.5), crystalMat);
+  crystal.name = 'VIBE defense crystal';
   crystal.position.set(0, 1.5, 0);
   crystal.castShadow = true;
   scene.add(crystal);
+  const crystalAuraMaterial = unlitBasic({
+    color: 0xcaf8ff, transparent: true, opacity: .28,
+    blending: THREE.AdditiveBlending, depthWrite: false, wireframe: true
+  });
+  const crystalAura = new THREE.Mesh(new THREE.IcosahedronGeometry(.72, 1), crystalAuraMaterial);
+  crystalAura.name = 'VIBE defense field';
+  crystalAura.position.copy(crystal.position);
+  scene.add(crystalAura);
+  // Intensità, non visibilità: il set di luci resta stabile e non ricompila i
+  // materiali quando il nucleo viene distrutto o ricostruito.
+  const crystalLight = new THREE.PointLight(0xcdf8ff, 3.4, 7, 2);
+  crystalLight.position.copy(crystal.position);
+  scene.add(crystalLight);
 
   // Jump Pad neon (base smussata)
   const padBaseMesh = new THREE.Mesh(
@@ -1115,6 +1252,7 @@
   const flickerSigns = [];
   const reactiveNeonLights = [];
   let neonSignLight = null;
+  let neonWallLight = null;
 
   // Insegna "VIBE" in tubi al neon sul muro ovest.
   //
@@ -1132,7 +1270,10 @@
   const neonTubes = [];
   (function createSign() {
     const H = 1.5;                  // altezza delle lettere
-    const CORE_RADIUS = .042;
+    const GAS_RADIUS = .024;
+    const GLASS_RADIUS = .046;
+    const GLOW_RADIUS = .082;
+    const TUBE_Z = .15;
     const GAP = .28;
     const half = H / 2;
 
@@ -1174,17 +1315,85 @@
 
     const totalWidth = LETTERS.reduce((sum, l) => sum + l.width, 0) + GAP * (LETTERS.length - 1);
     const group = new THREE.Group();
-    group.position.set(-19.28, 3.5, -4);
+    group.name = 'VIBE neon sign';
+    group.position.set(-19.40, 3.5, -4);
     group.rotation.y = Math.PI / 2;   // il piano locale guarda dentro l'arena
     scene.add(group);
+
+    // La luce diventa credibile soltanto se esiste anche l'oggetto spento.
+    // Pannello, cornice, viti e alimentatore rimangono leggibili quando il gas
+    // cala; il piccolo distacco dal muro produce inoltre una vera ombra di
+    // contatto invece di un rettangolo incollato alla parete.
+    const panelMaterial = new THREE.MeshStandardMaterial({
+      color: 0x090c12, metalness: .78, roughness: .34
+    });
+    const frameMaterial = new THREE.MeshStandardMaterial({
+      color: 0x242833, metalness: .92, roughness: .22
+    });
+    const ceramicMaterial = new THREE.MeshStandardMaterial({
+      color: 0x24202b, metalness: .08, roughness: .6
+    });
+    const cableMaterial = new THREE.MeshStandardMaterial({
+      color: 0x09080b, metalness: .05, roughness: .82
+    });
+    const panel = new THREE.Mesh(
+      new RoundedBoxGeometry(5.4, 2.9, .10, 4, .08), panelMaterial
+    );
+    panel.name = 'VIBE backing panel';
+    panel.receiveShadow = true;
+    panel.castShadow = true;
+    group.add(panel);
+
+    // Cornice estrusa e otto fissaggi: le variazioni di profondità prendono il
+    // rim della luna e impediscono al pannello di leggersi come un quad nero.
+    const frameParts = [
+      [0, 1.405, 5.48, .09], [0, -1.405, 5.48, .09],
+      [-2.695, 0, .09, 2.72], [2.695, 0, .09, 2.72]
+    ];
+    const frameEntries = [];
+    for (const [x, y, width, height] of frameParts) {
+      frameEntries.push({
+        geometry: new RoundedBoxGeometry(width, height, .14, 2, .025),
+        matrix: new THREE.Matrix4().makeTranslation(x, y, .035)
+      });
+    }
+    const screwGeometry = new THREE.CylinderGeometry(.035, .035, .026, 12);
+    const screwPositions = [
+      [-2.48, -1.22], [-2.48, 0], [-2.48, 1.22],
+      [2.48, -1.22], [2.48, 0], [2.48, 1.22],
+      [0, -1.22], [0, 1.22]
+    ];
+    for (const [x, y] of screwPositions) {
+      const matrix = new THREE.Matrix4().makeRotationX(Math.PI / 2);
+      matrix.setPosition(x, y, .112);
+      frameEntries.push({ geometry: screwGeometry, matrix });
+    }
 
     // `facing` vale 1 dove la normale punta alla camera — il centro del tubo,
     // dove lo sguardo attraversa più gas — e 0 sulla silhouette.
     const facing = dot(normalView, positionViewDirection).abs().clamp(0, 1);
     const GLASS_OFF = color(0x2b2732);   // vetro spento: grigio, non nero
+    const glassMaterial = new THREE.MeshPhysicalMaterial({
+      color: 0xffd9ec,
+      emissive: 0x3a071f,
+      emissiveIntensity: .16,
+      transparent: true,
+      opacity: .24,
+      depthWrite: false,
+      metalness: 0,
+      roughness: .08,
+      clearcoat: 1,
+      clearcoatRoughness: .025,
+      side: THREE.DoubleSide
+    });
+    const mountGeometry = new THREE.CylinderGeometry(.038, .045, .11, 10);
+    const clampGeometry = new THREE.TorusGeometry(GLASS_RADIUS + .012, .009, 6, 12);
+    const capEntries = [];
+    const mountPoints = [];
 
     let cursor = -totalWidth / 2;
-    for (const letter of LETTERS) {
+    for (let letterIndex = 0; letterIndex < LETTERS.length; letterIndex++) {
+      const letter = LETTERS[letterIndex];
       const build = (radius, radialSegments, sphereSegments) => {
         const entries = [];
         for (const points of letter.strokes) {
@@ -1221,8 +1430,20 @@
       // satura, sulla silhouette ne attraversa poco e resta la tinta.
       const coreMaterial = unlitBasic({});
       coreMaterial.colorNode = mix(GLASS_OFF, mix(tint, color(0xfff2fb), facing.pow(2.4)), level);
-      const core = new THREE.Mesh(build(CORE_RADIUS, 8, 6), coreMaterial);
+      const core = new THREE.Mesh(build(GAS_RADIUS, 8, 6), coreMaterial);
+      core.name = `VIBE gas ${letterIndex}`;
+      core.position.z = TUBE_Z;
+      core.renderOrder = 2;
       group.add(core);
+
+      // Il tubo di vetro è un oggetto distinto dal gas: resta specchiante e
+      // leggermente rosato anche quando la scarica si spegne. L'opacità bassa
+      // lascia vedere il core più sottile al suo interno.
+      const glass = new THREE.Mesh(build(GLASS_RADIUS, 10, 7), glassMaterial);
+      glass.name = `VIBE glass ${letterIndex}`;
+      glass.position.z = TUBE_Z;
+      glass.renderOrder = 3;
+      group.add(glass);
 
       // Il manicotto è un guscio: sulla silhouette il raggio ne attraversa una
       // corda lunga, al centro solo lo spessore. Quindi è l'INVERSO del core —
@@ -1232,9 +1453,46 @@
         depthWrite: false, side: THREE.DoubleSide
       });
       glowMaterial.colorNode = tint;
-      glowMaterial.opacityNode = facing.oneMinus().pow(2.2).mul(level).mul(.62);
-      const glow = new THREE.Mesh(build(CORE_RADIUS * 3.2, 6, 5), glowMaterial);
+      glowMaterial.opacityNode = facing.oneMinus().pow(2.2).mul(level).mul(.42);
+      const glow = new THREE.Mesh(build(GLOW_RADIUS, 6, 5), glowMaterial);
+      glow.name = `VIBE local glow ${letterIndex}`;
+      glow.position.z = TUBE_Z;
+      glow.renderOrder = 1;
       group.add(glow);
+
+      // Supporti e terminali seguono la stessa topologia delle lettere, non
+      // coordinate decorative scollegate. I morsetti stanno dietro al vetro;
+      // i cappucci coprono davvero gli estremi aperti di ogni tratto.
+      const unique = new Map();
+      for (const points of letter.strokes) {
+        const endpoints = [
+          [points[0], points[1]],
+          [points.at(-1), points.at(-2)]
+        ];
+        for (const [endpoint, neighbour] of endpoints) {
+          const [x, y] = endpoint;
+          const [nx, ny] = neighbour;
+          const dx = nx - x;
+          const dy = ny - y;
+          const length = Math.hypot(dx, dy) || 1;
+          const capEnd = new THREE.Vector3(
+            cursor + x + dx / length * .09,
+            y + dy / length * .09,
+            TUBE_Z
+          );
+          capEntries.push({
+            geometry: new THREE.TubeGeometry(
+              new THREE.LineCurve3(new THREE.Vector3(cursor + x, y, TUBE_Z), capEnd),
+              1, GLASS_RADIUS * 1.22, 8, false
+            ),
+            matrix: new THREE.Matrix4()
+          });
+        }
+        for (const [x, y] of points) unique.set(`${x}:${y}`, [cursor + x, y]);
+      }
+      [...unique.values()].forEach((point, pointIndex) => {
+        if ((pointIndex + letterIndex) % 2 === 0) mountPoints.push(point);
+      });
 
       neonTubes.push({
         level,
@@ -1246,14 +1504,60 @@
       cursor += letter.width + GAP;
     }
 
-    // Pannello di fondo: dà il nero contro cui il neon stacca, e nasconde il
-    // muro dietro i tubi.
-    const backing = new THREE.Mesh(
-      new THREE.BoxGeometry(0.1, 2.9, 5.4),
-      new THREE.MeshStandardMaterial({ color: 0x0a0d13, metalness: 0.85, roughness: 0.28 })
+    const ceramicEntries = [...capEntries];
+    for (const [x, y] of mountPoints) {
+      const standoffMatrix = new THREE.Matrix4().makeRotationX(Math.PI / 2);
+      standoffMatrix.setPosition(x, y, .09);
+      ceramicEntries.push({ geometry: mountGeometry, matrix: standoffMatrix });
+      frameEntries.push({
+        geometry: clampGeometry,
+        matrix: new THREE.Matrix4().makeTranslation(x, y, TUBE_Z + .003)
+      });
+    }
+    const frame = new THREE.Mesh(mergeStaticGeometries(frameEntries), frameMaterial);
+    frame.name = 'VIBE frame and clamps';
+    frame.castShadow = true;
+    group.add(frame);
+
+    // Alimentatore ad alta tensione, spia e cablaggio sul pannello. Le curve
+    // restano dietro ai tubi (z=.075 contro z=.15), per cui alle intersezioni
+    // l'occlusione comunica subito quale componente è fissato sopra l'altro.
+    ceramicEntries.push({
+      geometry: new RoundedBoxGeometry(.62, .38, .16, 3, .035),
+      matrix: new THREE.Matrix4().makeTranslation(2.24, -1.03, .13)
+    });
+    const ceramicFixtures = new THREE.Mesh(mergeStaticGeometries(ceramicEntries), ceramicMaterial);
+    ceramicFixtures.name = 'VIBE insulators, electrodes and transformer';
+    ceramicFixtures.castShadow = true;
+    group.add(ceramicFixtures);
+    const warningPlate = new THREE.Mesh(
+      new RoundedBoxGeometry(.26, .13, .012, 2, .012),
+      new THREE.MeshStandardMaterial({ color: 0xc89a22, metalness: .35, roughness: .42 })
     );
-    backing.position.set(-19.47, 3.5, -4);
-    scene.add(backing);
+    warningPlate.position.set(2.24, -1.03, .217);
+    group.add(warningPlate);
+    const indicator = new THREE.Mesh(
+      new THREE.SphereGeometry(.025, 10, 7),
+      unlitBasic({ color: 0xffb52e })
+    );
+    indicator.position.set(2.45, -.93, .225);
+    group.add(indicator);
+
+    const cablePaths = [
+      [[1.96, -1.08, .075], [1.55, -1.16, .075], [.95, -1.03, .075], [.48, -.77, .075]],
+      [[2.18, -.83, .075], [2.32, -.54, .075], [2.28, -.12, .075], [1.98, .38, .075]]
+    ];
+    const cableEntries = [];
+    for (const points of cablePaths) {
+      const curve = new THREE.CatmullRomCurve3(points.map(point => new THREE.Vector3(...point)));
+      cableEntries.push({
+        geometry: new THREE.TubeGeometry(curve, 18, .018, 6, false),
+        matrix: new THREE.Matrix4()
+      });
+    }
+    const cables = new THREE.Mesh(mergeStaticGeometries(cableEntries), cableMaterial);
+    cables.name = 'VIBE high-voltage cables';
+    group.add(cables);
   })();
 
   /**
@@ -1270,11 +1574,16 @@
    * miscela fra vetro spento e gas acceso mantenendo la tinta. Scalare il
    * colore invece porterebbe verso il nero, e un tubo spento non è nero — è un
    * cilindro di vetro grigio che riflette la stanza.
-   */
+  */
   function updateNeonTubes(elapsed, lightningFlash) {
-    let brightest = 0;
+    let totalLevel = 0;
     for (const tube of neonTubes) {
-      const mains = .96 + Math.sin(elapsed * tube.speed + tube.phase) * .04;
+      // Una scarica sana non fa respirare vistosamente la lettera: il ripple
+      // di rete resta sotto il 2%. Il movimento evidente è riservato alla rara
+      // crisi dell'elettrodo difettoso.
+      const mains = .985
+        + Math.sin(elapsed * tube.speed + tube.phase) * .012
+        + Math.sin(elapsed * 97 + tube.phase) * .003;
       const crisis = Math.sin(elapsed * .77 + tube.phase * 3.1)
         * Math.sin(elapsed * .31 + tube.phase * 1.7);
       let level = mains;
@@ -1286,18 +1595,23 @@
       }
       level = Math.min(1.3, level + lightningFlash * .2);
       tube.level.value = level;
-      brightest = Math.max(brightest, level);
+      totalLevel += level;
     }
-    // La luce sul muro segue il tubo più acceso: quando la 'B' se ne va, il
-    // resto dell'insegna tiene ancora illuminata la parete.
-    if (neonSignLight) neonSignLight.intensity = 2 * brightest;
+    // L'illuminazione dipende dall'energia media, non dalla lettera più accesa:
+    // se la B si spegne il wash cala di circa un quarto invece di restare
+    // invariato come prima. Area light e luce locale seguono lo stesso valore.
+    const averageLevel = neonTubes.length ? totalLevel / neonTubes.length : 0;
+    if (neonSignLight) neonSignLight.intensity = 2.15 * averageLevel;
+    if (neonWallLight) neonWallLight.intensity = 4.2 * averageLevel;
   }
 
   // Luci ad area fisiche (soft box) per illuminazione fotorealistica
   THREE.RectAreaLightNode.setLTC(RectAreaLightTexturesLib.init());
   (function createAreaLights() {
-    // Insegna VIBE -> soft box magenta
-    const signLight = new THREE.RectAreaLight(0xff2d95, 2.0, 5.2, 2.6);
+    // L'area light porta il colore nell'arena; il point vicino al pannello
+    // produce il falloff concentrato e il wash sul supporto/parete. Una sola
+    // luce locale evita di gonfiare inutilmente il lightsNode di WebGPU.
+    const signLight = new THREE.RectAreaLight(0xff2d95, 2.15, 5.2, 2.6);
     signLight.position.set(-18.7, 3.5, -4);
     signLight.lookAt(0, 3.5, -4);
     scene.add(signLight);
@@ -1305,6 +1619,10 @@
     // pilota il flicker dei tubi. Un'insegna che sfarfalla mentre la luce che
     // getta sul muro resta ferma è la cosa che tradisce il finto.
     neonSignLight = signLight;
+    const wallLight = new THREE.PointLight(0xff2d95, 4.2, 6.5, 2);
+    wallLight.position.set(-19.05, 3.5, -4);
+    scene.add(wallLight);
+    neonWallLight = wallLight;
 
     // Jump pad -> soft box magenta dall'alto
     const padLight = new THREE.RectAreaLight(0xff2d95, 1.6, 6, 6);
@@ -1411,16 +1729,6 @@
       [[-18,6.1,19],[-7,4.8,18],[3,6.2,19]]
     ];
     for(const points of cablePaths){const curve=new THREE.CatmullRomCurve3(points.map(p=>new THREE.Vector3(...p)));const cable=new THREE.Mesh(new THREE.TubeGeometry(curve,28,.025,6,false),cableMat);scene.add(cable);}
-
-    // Fari industriali con cono volumetrico simulato.
-    const lampMat=new THREE.MeshStandardMaterial({color:0x1b222b,metalness:.85,roughness:.3});
-    const beamMat=unlitBasic({color:0x9fefff,transparent:true,opacity:.025,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide});
-    for(const [lx,lz] of [[-14,-14],[14,13],[-14,13]]){
-      const housing=new THREE.Mesh(new RoundedBoxGeometry(1.2,.16,.55,2,.05),lampMat);housing.position.set(lx,6.35,lz);housing.castShadow=true;scene.add(housing);
-      const panel=new THREE.Mesh(new THREE.PlaneGeometry(.9,.3),unlitBasic({color:0xbaf7ff}));panel.rotation.x=Math.PI/2;panel.position.set(lx,6.25,lz);scene.add(panel);
-      const light=new THREE.PointLight(0xa8ecff,3.2,10,2);light.position.set(lx,6,lz);scene.add(light);
-      const beam=new THREE.Mesh(new THREE.ConeGeometry(3.2,6.1,24,1,true),beamMat);beam.position.set(lx,3.25,lz);scene.add(beam);
-    }
 
     // Texture di vapore: rumore di fumo (cumulo con grumi e buchi) invece del
     // puff radiale liscio, per un aspetto più organico e meno "cartoon".
@@ -2247,6 +2555,10 @@
     hudSnapshot._reserve = weaponReserve(w);
     hudSnapshot._weaponName = t(tuning.nameKey);
     hudSnapshot._magazineSize = tuning.magazineSize;
+    hudSnapshot.crystalHealth = crystalDefense.health;
+    hudSnapshot.crystalMaxHealth = crystalDefense.maxHealth;
+    hudSnapshot.crystalDestroyed = crystalDefense.destroyed;
+    hudSnapshot.damageBoostRemaining = crystalDefense.boostRemaining;
     hudController.render(hudSnapshot);
     hudController.renderBoss(droneSystem.getBossHudState());
   }
@@ -2612,14 +2924,104 @@
   // Sweep segmento→punto per il hit test dei colpi nemici contro il giocatore
   // (riveled da B4): evita il tunneling a FPS bassi, come già fatto per i
   // proiettili del giocatore contro i droni.
-  const hostileSegment = new THREE.Line3();
-  const hostileClosest = new THREE.Vector3();
   let aliveEnemyCount = 0;
   let apexSpawned = false;
   // T2: chi può cadere, quando, e cosa è già a terra. Deriva gli id e le ondate
   // da WEAPON_TUNING, così aggiungere un'arma droppabile non richiede di
   // toccare questa lista.
   const weaponDrops = new WeaponDropRegistry(WEAPON_TUNING);
+  const crystalTargetPoint = new THREE.Vector3(0, 1.5, 0);
+  const hostileCrystalPoint = new THREE.Vector3();
+  const hostileAimPoint = new THREE.Vector3();
+  const apexAimPoint = new THREE.Vector3();
+  let hostileAimSequence = 0;
+  let crystalWarningBand = 4;
+  let crystalDamageFlash = 0;
+
+  function resetCrystalDefenseForWave(announce) {
+    crystalDefense.startWave(gameState.wave);
+    hostileAimSequence = 0;
+    crystalWarningBand = 4;
+    crystalDamageFlash = 0;
+    crystal.visible = true;
+    crystalAura.visible = true;
+    crystal.scale.setScalar(1);
+    crystalAura.scale.setScalar(1);
+    crystalMat.emissive.setHex(0xa8f3ff);
+    crystalMat.emissiveIntensity = 3;
+    crystalAuraMaterial.color.setHex(0xcaf8ff);
+    crystalLight.intensity = 3.4;
+    if (announce) {
+      toast(`<b>VIBE CORE</b> · ${t('crystal.toast.rebuilt')}`);
+      audio.ui();
+    }
+  }
+
+  function selectHostileAim(attacker, boss = false, out = hostileAimPoint) {
+    const attackerId = Number(attacker?.id ?? attacker?.tier ?? attacker?.megaPhase ?? 0) || 0;
+    const targetsCrystal = crystalDefense.active
+      && shouldTargetCrystal(hostileAimSequence++, attackerId, boss ? 2 : 3);
+    if (targetsCrystal) return out.copy(crystalTargetPoint);
+    return out.set(playerBody.position.x, playerBody.position.y + .55, playerBody.position.z);
+  }
+
+  function damageDefenseCrystal(amount, impactPosition = crystal.position) {
+    const result = crystalDefense.damage(amount);
+    if (result.applied <= 0) return false;
+    crystalDamageFlash = .18;
+    explosionSystem.sparkBurst(impactPosition, 0xbef9ff, 7);
+    audio.playImpact({ pan: panForWorld(crystal.position) });
+    if (result.destroyedNow) {
+      crystal.visible = false;
+      crystalAura.visible = false;
+      crystalLight.intensity = 0;
+      explosionSystem.explode(crystal.position, 0xbef9ff);
+      audio.explode(panForWorld(crystal.position));
+      showWave(t('crystal.destroyed.title'), t('crystal.destroyed.sub'));
+      toast(`<b>VIBE CORE</b> · ${t('crystal.toast.destroyed')}`);
+    } else {
+      const nextBand = result.healthRatio > .75 ? 4 : result.healthRatio > .5 ? 3 : result.healthRatio > .25 ? 2 : 1;
+      if (nextBand < crystalWarningBand) {
+        crystalWarningBand = nextBand;
+        toast(`<b>VIBE CORE</b> · ${t('crystal.toast.warning',{health:Math.round(result.healthRatio*100)})}`);
+      }
+    }
+    updateHUD();
+    return true;
+  }
+
+  function resolveCrystalDefenseWave() {
+    const result = crystalDefense.completeWave();
+    if (!result.resolvedNow || !result.survived) return result;
+    showWave(t('crystal.secured.title'), t('crystal.secured.sub'));
+    toast(`<b>VIBE CORE</b> · ${t('crystal.toast.secured')}`);
+    audio.ui();
+    updateHUD();
+    return result;
+  }
+
+  function updateCrystalDefenseVisual(delta, time) {
+    crystalDamageFlash = Math.max(0, crystalDamageFlash - delta);
+    if (crystalDefense.destroyed) return;
+    const ratio = Math.max(0, Math.min(1, crystalDefense.health / crystalDefense.maxHealth));
+    crystal.position.y = 1.5 + Math.sin(time * 2) * .12;
+    crystal.rotation.y += delta * (.65 + ratio * .2);
+    crystalAura.position.copy(crystal.position);
+    crystalAura.rotation.y -= delta * .32;
+    crystalAura.rotation.x += delta * .16;
+    const pulse = 1 + Math.sin(time * 4.1) * .025;
+    crystal.scale.setScalar((.84 + ratio * .16) * pulse);
+    crystalAura.scale.setScalar(.9 + ratio * .1 + Math.sin(time * 2.7) * .025);
+    const colorHex = crystalDamageFlash > 0 ? 0xff3155
+      : ratio > .5 ? 0xa8f3ff : ratio > .25 ? 0xffc857 : 0xff465f;
+    crystalMat.emissive.setHex(colorHex);
+    crystalMat.emissiveIntensity = 1.6 + ratio * 1.4 + (crystalDamageFlash > 0 ? 1.2 : 0);
+    crystalAuraMaterial.color.setHex(colorHex);
+    crystalAuraMaterial.opacity = .12 + ratio * .18;
+    crystalLight.color.setHex(colorHex);
+    crystalLight.intensity = .8 + ratio * 2.6;
+    crystalLight.position.copy(crystal.position);
+  }
   // S7: cooldown del danno da contatto della carica VANGUARD (una volta per
   // ~0.9s invece di ogni frame: 16 frame di overlap facevano ~350 danno).
   let apexChargeContactCooldown = 0;
@@ -2658,6 +3060,7 @@
   function spawnWave(announce=true){
     // S6: i campi minati VEX non devono sopravvivere al cambio d'ondata.
     clearVexMines();
+    resetCrystalDefenseForWave(announce);
     const encounter=getBossEncounter(gameState.wave);
     const count=encounter.kind==='standard'?Math.min(4+gameState.wave,9):0;
     gameState.waveTargets=encounter.kind==='standard'?count:encounter.bossCount;
@@ -2675,11 +3078,11 @@
     // P3: entry riciclato dal pool — niente mesh/geometrie/cloni allocati.
     const entry=acquireShotEntry(hostileShotGeometry,0xff3155,.5,.7);
     const origin=drone.group.position;
-    shotAimTmp.set(playerBody.position.x,playerBody.position.y+.55,playerBody.position.z).sub(origin);
+    shotAimTmp.copy(selectHostileAim(drone, false)).sub(origin);
     if(shotAimTmp.lengthSq()>.0001)shotAimTmp.normalize();
     entry.vel.copy(shotAimTmp).multiplyScalar(18+gameState.wave*.65);
-    entry.pos.copy(origin);entry.prev.copy(origin);entry.rayFrom.copy(origin);
-    entry.age=0;entry.dmg=dmg;entry.rayToggle=false;
+    entry.pos.copy(origin);entry.prev.copy(origin);
+    entry.age=0;entry.dmg=dmg;
     entry.mesh.position.copy(origin);
     scene.add(entry.mesh);scene.add(entry.trail);
     hostileShots.push(entry);
@@ -2721,7 +3124,7 @@
 
   function damageApex(apex,amount,position,countHit=true){
     if(!apex||!apex.alive)return;
-    const result=droneSystem.applyApexDamage(apex,amount);
+    const result=droneSystem.applyApexDamage(apex,amount*crystalDefense.damageMultiplier);
     if(countHit)gameState.hits++;
     gameState.comboTimer=CONFIG.comboWindow;
     showHitmarker(result.killed);
@@ -2776,8 +3179,8 @@
     const entry=acquireShotEntry(apexShotGeometry,color,.55,.75);
     const origin=apex.group.position;
     entry.vel.copy(vel);
-    entry.pos.copy(origin);entry.prev.copy(origin);entry.rayFrom.copy(origin);
-    entry.age=0;entry.dmg=apex.damage;entry.rayToggle=false;
+    entry.pos.copy(origin);entry.prev.copy(origin);
+    entry.age=0;entry.dmg=apex.damage;
     entry.mesh.position.copy(origin);
     scene.add(entry.mesh);scene.add(entry.trail);
     hostileShots.push(entry);
@@ -2787,9 +3190,16 @@
   function handleApexAttack(apex,type){
     const color=apex.coreMaterial.emissive.getHex();
     if(type==='charge'){audio.apexCharge();return;}
+    const attackTarget=selectHostileAim(apex,true,apexAimPoint);
+    const aimedAtCrystal=crystalDefense.active&&attackTarget.distanceToSquared(crystalTargetPoint)<1e-6;
     if(type==='megaSpiral'){
       const count=28+apex.megaPhase*4;
       for(let i=0;i<count;i++){
+        if(aimedAtCrystal&&i===0){
+          const direct=attackTarget.clone().sub(apex.group.position).normalize().multiplyScalar(16+apex.megaPhase);
+          spawnApexProjectile(apex,direct,color);
+          continue;
+        }
         const a=i/count*Math.PI*2+elapsed*.7;
         const vel=new THREE.Vector3(Math.cos(a),Math.sin(i*.9)*.12,Math.sin(a)).multiplyScalar(14+apex.megaPhase);
         spawnApexProjectile(apex,vel,color);
@@ -2799,9 +3209,9 @@
     }
     if(type==='megaLance'){
       const base=new THREE.Vector3(
-        playerBody.position.x-apex.group.position.x,
-        (playerBody.position.y+.5)-apex.group.position.y,
-        playerBody.position.z-apex.group.position.z
+        attackTarget.x-apex.group.position.x,
+        attackTarget.y-apex.group.position.y,
+        attackTarget.z-apex.group.position.z
       ).normalize();
       const rays=7+apex.megaPhase*2;
       for(let i=0;i<rays;i++){
@@ -2816,9 +3226,9 @@
       const count=8+apex.megaPhase*2;
       for(let i=0;i<count;i++){
         const target=new THREE.Vector3(
-          playerBody.position.x+(apex.random()-.5)*10,
-          playerBody.position.y+.5,
-          playerBody.position.z+(apex.random()-.5)*10
+          attackTarget.x+(apex.random()-.5)*(aimedAtCrystal?2.2:10),
+          attackTarget.y,
+          attackTarget.z+(apex.random()-.5)*(aimedAtCrystal?2.2:10)
         );
         const d=target.sub(apex.group.position).normalize().multiplyScalar(12+apex.random()*4);
         spawnApexProjectile(apex,d,i%2?color:0xff4f5f);
@@ -2829,6 +3239,11 @@
     if(type==='radial'){
       const count=12+Math.min(6,apex.tier*2);
       for(let i=0;i<count;i++){
+        if(aimedAtCrystal&&i===0){
+          const direct=attackTarget.clone().sub(apex.group.position).normalize().multiplyScalar(12.5);
+          spawnApexProjectile(apex,direct,color);
+          continue;
+        }
         const a=i/count*Math.PI*2;
         const vel=new THREE.Vector3(Math.cos(a),0,Math.sin(a)).multiplyScalar(12.5);
         vel.y=.5;
@@ -2839,9 +3254,9 @@
     }
     if(type==='burst'){
       const base=new THREE.Vector3(
-        playerBody.position.x-apex.group.position.x,
-        (playerBody.position.y+.5)-apex.group.position.y,
-        playerBody.position.z-apex.group.position.z
+        attackTarget.x-apex.group.position.x,
+        attackTarget.y-apex.group.position.y,
+        attackTarget.z-apex.group.position.z
       ).normalize();
       for(let i=-1;i<=1;i++){
         const d=base.clone().applyAxisAngle(axisY,i*.16);
@@ -2852,9 +3267,9 @@
     }
     // shot singolo a distanza
     const dir=new THREE.Vector3(
-      playerBody.position.x-apex.group.position.x,
-      (playerBody.position.y+.5)-apex.group.position.y,
-      playerBody.position.z-apex.group.position.z
+      attackTarget.x-apex.group.position.x,
+      attackTarget.y-apex.group.position.y,
+      attackTarget.z-apex.group.position.z
     );
     if(dir.lengthSq()>.0001)dir.normalize();
     spawnApexProjectile(apex,dir.multiplyScalar(17),color);
@@ -3273,7 +3688,7 @@
   // è hits/shots e il melee non consuma un colpo (prima poteva superare il 100%).
   function damageDrone(drone,amount,position,countHit=true){
     if(!drone.alive)return;
-    const result=droneSystem.applyDamage(drone,amount);if(countHit)gameState.hits++;gameState.comboTimer=CONFIG.comboWindow;showHitmarker(result.killed);
+    const result=droneSystem.applyDamage(drone,amount*crystalDefense.damageMultiplier);if(countHit)gameState.hits++;gameState.comboTimer=CONFIG.comboWindow;showHitmarker(result.killed);
     const impactPosition = result.position || position || drone.group.position;
     if(result.killed){
       gameState.waveKills++;gameState.combo=Math.min(CONFIG.comboMax,gameState.combo+CONFIG.comboKillStep);
@@ -3367,7 +3782,10 @@
     }
     if(aliveEnemyCount===0&&gameState.waveDelay<=0){
       if(!apexSpawned)spawnApexUnit();
-      else if(apexAliveCount===0)gameState.waveDelay=gameState.wave===ENDGAME_TUNING.finalWave?4.2:2.8;
+      else if(apexAliveCount===0){
+        resolveCrystalDefenseWave();
+        gameState.waveDelay=gameState.wave===ENDGAME_TUNING.finalWave?4.2:2.8;
+      }
     }
     updateVexMines(delta,time);
     updateApexShockwaves(delta);
@@ -3375,6 +3793,7 @@
 
   function updateHostileShots(delta){
     hostilePlayerPoint.set(playerBody.position.x,playerBody.position.y+.5,playerBody.position.z);
+    hostileCrystalPoint.copy(crystal.position);
     for(let i=hostileShots.length-1;i>=0;i--){const s=hostileShots[i];
       if(!Number.isFinite(s.age)||!isFiniteVector3(s.pos)||!isFiniteVector3(s.prev)||!isFiniteVector3(s.vel)){
         disposeHostileShot(s);hostileShots.splice(i,1);continue;
@@ -3382,11 +3801,30 @@
       s.age+=delta;s.prev.copy(s.pos);s.pos.addScaledVector(s.vel,delta);s.mesh.position.copy(s.pos);
       const attr=s.trail.geometry.attributes.position;attr.setXYZ(0,s.prev.x,s.prev.y,s.prev.z);attr.setXYZ(1,s.pos.x,s.pos.y,s.pos.z);attr.needsUpdate=true;
       let remove=s.age>2.5;
-      // Hit test sweep segmento→punto (B4): traduce il movimento del colpo tra
-      // prev e pos in un segmento, così a FPS bassi il proiettile non salta sopra
-      // il giocatore. .52 = raggio di collisione effettivo ^2 (≈0.72m).
-      if(!remove){hostileSegment.start.copy(s.prev);hostileSegment.end.copy(s.pos);hostileSegment.closestPointToPoint(hostilePlayerPoint,true,hostileClosest);if(hostileClosest.distanceToSquared(hostilePlayerPoint)<CONFIG.hostileHitRadiusSq){damagePlayer(s.dmg||(CONFIG.hostileDmgBase+gameState.wave*CONFIG.hostileDmgWave));remove=true;}}
-      if(!remove){s.rayToggle=!s.rayToggle;if(s.rayToggle){hostileFrom.set(s.rayFrom.x,s.rayFrom.y,s.rayFrom.z);hostileTo.set(s.pos.x,s.pos.y,s.pos.z);if(hostileRay.intersectWorld(world,{mode:CANNON.Ray.CLOSEST,result:hostileHit,from:hostileFrom,to:hostileTo,collisionFilterGroup:COLLISION.BULLET,collisionFilterMask:COLLISION.STATIC|COLLISION.CRATE}))remove=true;else s.rayFrom.copy(s.pos);}}
+      if(!remove){
+        // U1: ostacolo e giocatore competono sullo STESSO segmento e vince il
+        // primo t fisico. Prima il giocatore veniva provato per primo e il
+        // raycast statico arrivava solo dopo (e a frame alterni), consentendo a
+        // un colpo di attraversare una copertura nello stesso frame.
+        hostileFrom.set(s.prev.x,s.prev.y,s.prev.z);hostileTo.set(s.pos.x,s.pos.y,s.pos.z);
+        const staticHit=hostileRay.intersectWorld(world,{mode:CANNON.Ray.CLOSEST,result:hostileHit,from:hostileFrom,to:hostileTo,collisionFilterGroup:COLLISION.BULLET,collisionFilterMask:COLLISION.STATIC|COLLISION.CRATE});
+        const staticT=staticHit?segmentPointFraction(s.prev,s.pos,hostileHit.hitPointWorld):null;
+        let firstT=staticHit?(staticT??0):Number.POSITIVE_INFINITY;
+        let firstPriority=staticHit?0:Number.POSITIVE_INFINITY;
+        let hitPlayer=false;
+        let hitCrystal=false;
+        const playerT=segmentSphereFirstHitFraction(s.prev,s.pos,hostilePlayerPoint,Math.sqrt(CONFIG.hostileHitRadiusSq));
+        if(isEarlierSegmentHit(playerT,firstT,1,firstPriority)){firstT=playerT;firstPriority=1;hitPlayer=true;}
+        if(crystalDefense.active){
+          const crystalT=segmentSphereFirstHitFraction(s.prev,s.pos,hostileCrystalPoint,.68);
+          if(isEarlierSegmentHit(crystalT,firstT,1,firstPriority)){
+            firstT=crystalT;firstPriority=1;hitPlayer=false;hitCrystal=true;
+          }
+        }
+        if(hitPlayer)damagePlayer(s.dmg||(CONFIG.hostileDmgBase+gameState.wave*CONFIG.hostileDmgWave));
+        if(hitCrystal)damageDefenseCrystal(s.dmg||(CONFIG.hostileDmgBase+gameState.wave*CONFIG.hostileDmgWave),hostileCrystalPoint);
+        remove=staticHit||hitPlayer||hitCrystal;
+      }
       if(remove){disposeHostileShot(s);hostileShots.splice(i,1);}
     }
   }
@@ -3426,6 +3864,8 @@
     meleeTimer=Math.max(0,meleeTimer-delta);
     if(gameState.reloading){gameState.reloadTimer-=delta;if(gameState.reloadTimer<=0)completeReload();}
     if(gameState.comboTimer>0){gameState.comboTimer-=delta;if(gameState.comboTimer<=0)gameState.combo=1;}
+    const boostUpdate=crystalDefense.update(delta,!gameState.dead&&gameState.waveDelay<=0);
+    if(boostUpdate.expiredNow)toast(`<b>VIBE CORE</b> · ${t('crystal.toast.expired')}`);
     if(time-gameState.lastDamage>CONFIG.shieldRegenDelay&&gameState.shield<CONFIG.maxShield&&!gameState.dead)gameState.shield=Math.min(CONFIG.maxShield,gameState.shield+delta*CONFIG.shieldRegen);
     if(gameState.waveDelay>0&&!gameState.dead){
       gameState.waveDelay-=delta;
@@ -3612,6 +4052,7 @@
       hudController.beginOnboardingFade();
       showWave();
       toast(`<b>${t('toast.missionLabel')}</b> · ${t('toast.mission')}`);
+      toast(`<b>VIBE CORE</b> · ${t('crystal.toast.defend')}`);
       loadingUI.update(1, 'LINK ACTIVE', 'Simulation operational');
       await loadingUI.nextFrame();
       await new Promise(resolve => setTimeout(resolve, 180));
@@ -4132,11 +4573,6 @@
       pos: new THREE.Vector3(),
       prev: new THREE.Vector3(),
       vel: new THREE.Vector3(),
-      // P3: origine dell'ultimo raycast muro eseguito: i raycast viaggiano a
-      // frame alterni (metà del costo) ma il segmento testato è accumulato,
-      // quindi niente tunnelling oltre pareti/casse.
-      rayFrom: new THREE.Vector3(),
-      rayToggle: false,
       age: 0,
       dmg: 0
     };
@@ -4253,6 +4689,7 @@
       body, mesh, tracer,
       age: 0,
       hit: false,
+      physicsHit: false,
       impactSet: false,
       impact: new CANNON.Vec3(),
       prev: new CANNON.Vec3(),
@@ -4265,7 +4702,11 @@
     // record è sempre lo stesso oggetto, quindi `entry.hit` resta corretto
     // anche dopo il riuso (il body sparisce dal mondo mentre è nel pool,
     // quindi non riceve eventi di collisione da inattivo).
-    body.addEventListener('collide', () => { entry.hit = true; });
+    // Cannon avanza prima dello sweep manuale. Conserviamo il suo contatto
+    // come candidato statico di fallback, senza marcare subito l'impatto:
+    // updateBullets deve ancora poter scegliere un target precedente alla
+    // parete lungo lo stesso segmento (U1).
+    body.addEventListener('collide', () => { entry.physicsHit = true; });
     return entry;
   }
   function acquireBulletEntry(type) {
@@ -4340,6 +4781,7 @@
 
     bullet.age = 0;
     bullet.hit = false;
+    bullet.physicsHit = false;
     bullet.impactSet = false;
     bullet.prev.set(bulletOrigin.x, bulletOrigin.y, bulletOrigin.z);
     bullet.targetHit = false;
@@ -4507,8 +4949,8 @@
   const railHit = new CANNON.RaycastResult();
   const railFrom = new CANNON.Vec3();
   const railTo = new CANNON.Vec3();
-  const bulletSegment = new THREE.Line3();
   const bulletClosest = new THREE.Vector3();
+  const bulletThreatEnd = new THREE.Vector3();
   // C4: temp vector riusati per direzione e origine del colpo (niente allocazioni
   // per colpo nel percorso caldo di fireBullet).
   const bulletDir = new THREE.Vector3();
@@ -4651,32 +5093,10 @@
       // Sweep: raycast tra la posizione precedente e quella attuale,
       // per evitare il tunnelling dei proiettili veloci.
       if (!b.hit) {
-        droneSystem.registerProjectileThreat(b.prev,b.body.position);
-        bulletSegment.start.set(b.prev.x,b.prev.y,b.prev.z);
-        bulletSegment.end.set(b.body.position.x,b.body.position.y,b.body.position.z);
-        for (const drone of drones) {
-          if (!drone.alive) continue;
-          bulletSegment.closestPointToPoint(drone.group.position,true,bulletClosest);
-          if (bulletClosest.distanceToSquared(drone.group.position) <= drone.radius * drone.radius) {
-            b.hit=true;b.targetHit=true;b.impact.set(bulletClosest.x,bulletClosest.y,bulletClosest.z);b.impactSet=true;
-            b.targetRef = drone;
-            damageDrone(drone,b.damage,bulletClosest.clone());
-            break;
-          }
-        }
-        // Sweep contro tutti gli Apex (wave 9 ne schiera quattro insieme).
-        for (const apexDrone of droneSystem.apexes) {
-          if (b.hit || !apexDrone.alive) continue;
-          bulletSegment.closestPointToPoint(apexDrone.group.position,true,bulletClosest);
-          if (bulletClosest.distanceToSquared(apexDrone.group.position) <= apexDrone.radius * apexDrone.radius) {
-            b.hit=true;b.targetHit=true;b.impact.set(bulletClosest.x,bulletClosest.y,bulletClosest.z);b.impactSet=true;
-            b.targetRef = apexDrone;
-            damageApex(apexDrone,b.damage,bulletClosest.clone());
-          }
-        }
-      }
-      if (!b.hit) {
-        const hasHit = bulletRay.intersectWorld(world, {
+        // U1: tutti i contatti competono per il t minimo lungo lo stesso
+        // segmento. L'ostacolo ha priorità sulle parità, poi droni e Apex sono
+        // confrontati per distanza fisica invece che per ordine nell'array.
+        const staticHit = bulletRay.intersectWorld(world, {
           mode: CANNON.Ray.CLOSEST,
           result: bulletHit,
           from: b.prev,
@@ -4684,9 +5104,52 @@
           collisionFilterGroup: COLLISION.BULLET,
           collisionFilterMask: COLLISION.STATIC | COLLISION.CRATE
         });
-        if (hasHit) {
+        // Il solver può aver già emesso `collide` e riportato il body appena
+        // prima della superficie, facendo fallire il raycast fino all'endpoint.
+        // In quel caso il contatto fisico resta un candidato statico a t=1.
+        const hasStaticContact = staticHit || b.physicsHit;
+        const staticT = staticHit
+          ? segmentPointFraction(b.prev, b.body.position, bulletHit.hitPointWorld)
+          : (b.physicsHit ? 1 : null);
+        let firstT = hasStaticContact ? (staticT ?? 0) : Number.POSITIVE_INFINITY;
+        let firstPriority = hasStaticContact ? 0 : Number.POSITIVE_INFINITY;
+        let firstTarget = null;
+        let firstTargetIsApex = false;
+        for (const drone of drones) {
+          if (!drone.alive) continue;
+          const hitT = segmentSphereFirstHitFraction(b.prev,b.body.position,drone.group.position,drone.radius);
+          if (!isEarlierSegmentHit(hitT,firstT,1,firstPriority)) continue;
+          firstT=hitT;firstPriority=1;firstTarget=drone;firstTargetIsApex=false;
+        }
+        // Sweep contro tutti gli Apex (wave 9 ne schiera quattro insieme), nello
+        // stesso arbitraggio dei droni semplici.
+        for (const apexDrone of droneSystem.apexes) {
+          if (!apexDrone.alive) continue;
+          const hitT = segmentSphereFirstHitFraction(b.prev,b.body.position,apexDrone.group.position,apexDrone.radius);
+          if (!isEarlierSegmentHit(hitT,firstT,1,firstPriority)) continue;
+          firstT=hitT;firstPriority=1;firstTarget=apexDrone;firstTargetIsApex=true;
+        }
+
+        // Anche il telegraph di evasione vede solo il tratto che il proiettile
+        // percorre davvero: non attraversa pareti né il primo bersaglio.
+        const threatT = Number.isFinite(firstT) ? firstT : 1;
+        bulletThreatEnd.set(
+          b.prev.x + (b.body.position.x - b.prev.x) * threatT,
+          b.prev.y + (b.body.position.y - b.prev.y) * threatT,
+          b.prev.z + (b.body.position.z - b.prev.z) * threatT
+        );
+        droneSystem.registerProjectileThreat(b.prev,bulletThreatEnd);
+
+        if (firstTarget) {
+          bulletClosest.copy(bulletThreatEnd);
+          b.hit=true;b.targetHit=true;b.impact.set(bulletClosest.x,bulletClosest.y,bulletClosest.z);b.impactSet=true;
+          b.targetRef=firstTarget;
+          if(firstTargetIsApex)damageApex(firstTarget,b.damage,bulletClosest);
+          else damageDrone(firstTarget,b.damage,bulletClosest);
+        } else if (hasStaticContact) {
           b.hit = true;
-          b.impact.copy(bulletHit.hitPointWorld);
+          if (staticHit) b.impact.copy(bulletHit.hitPointWorld);
+          else b.impact.copy(b.body.position);
           b.impactSet = true;
         }
       }
@@ -4815,6 +5278,7 @@
     gameState.hits = 0;
     gameState.started = wasStarted;
     weaponDrops.reset();
+    crystalDefense.resetRun();
 
     elapsed = 0;
     lastVisualEvent = -99;
@@ -5187,9 +5651,8 @@
       updateNeonTubes(elapsed, lightningFlash);
     }
 
-    // Cristallo centrale: fluttuazione e rotazione
-    crystal.position.y = 1.5 + Math.sin(elapsed * 2) * 0.12;
-    crystal.rotation.y += delta * 0.8;
+    // Cristallo centrale: posa, colore e luce comunicano integrità/distruzione.
+    updateCrystalDefenseVisual(delta,elapsed);
 
     // Camera in prima persona (+ head bob)
     camera.position.set(

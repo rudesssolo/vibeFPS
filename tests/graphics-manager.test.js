@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { GraphicsManager } from '../src/graphics-manager.js';
+import { AUTO_TIER_COOLDOWN_SECONDS, GraphicsManager } from '../src/graphics-manager.js';
 import { QUALITY_PROFILES } from '../src/config.js';
 
 function withFakeTimers() {
@@ -76,7 +76,7 @@ test('ULTRA esegue la transizione e spegne il watchdog degli FPS', () => {
   }
 });
 
-test('il tier automatico scende dopo 6 finestre lente, rispetta il cooldown e risale dopo 20 veloci', () => {
+test('il tier automatico usa un cooldown di 15 secondi reali (U3)', () => {
   const restore = withAutoMode();
   try {
     const { manager, applied } = makeManager();
@@ -89,13 +89,19 @@ test('il tier automatico scende dopo 6 finestre lente, rispetta il cooldown e ri
     for (let i = 0; i < 6; i++) manager.updateFPS(40, 0.5);
     assert.equal(manager.autoTier, 'autoLow');
     assert.equal(manager.profile, QUALITY_PROFILES.autoLow);
-    assert.equal(manager.cooldown, 30);
-    // Durante il cooldown non si risale, anche con FPS alti.
+    assert.equal(manager.cooldown, AUTO_TIER_COOLDOWN_SECONDS);
+    // Le 20 finestre veloci richieste maturano, ma a 10 secondi il cooldown non
+    // è ancora scaduto e il tier deve restare basso.
     for (let i = 0; i < 20; i++) manager.updateFPS(60, 0.5);
     assert.equal(manager.autoTier, 'autoLow');
-    // Scaduto il cooldown, 20 finestre veloci riportano su.
-    manager.cooldown = 0;
-    for (let i = 0; i < 20; i++) manager.updateFPS(60, 0.5);
+    assert.equal(manager.cooldown, 5);
+    // Un istante prima dei 15 secondi resta basso; il campione successivo scade
+    // il cooldown e applica il tier alto senza mutare direttamente lo stato.
+    for (let i = 0; i < 9; i++) manager.updateFPS(60, 0.5);
+    assert.equal(manager.cooldown, .5);
+    assert.equal(manager.autoTier, 'autoLow');
+    manager.updateFPS(60, 0.5);
     assert.equal(manager.autoTier, 'autoHigh');
+    assert.equal(manager.cooldown, AUTO_TIER_COOLDOWN_SECONDS);
   } finally { restore(); }
 });

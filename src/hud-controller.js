@@ -28,6 +28,10 @@ export class HudController {
       fps: document.getElementById('fps'),
       objective: document.getElementById('objective-text'),
       missionFill: document.getElementById('mission-progress-fill'),
+      coreObjective: document.getElementById('core-objective'),
+      coreStatus: document.getElementById('core-status'),
+      coreFill: document.getElementById('core-progress-fill'),
+      damageBoostStatus: document.getElementById('damage-boost-status'),
       waveLabel: document.getElementById('wave-label'),
       toasts: document.getElementById('toast-stack'),
       sound: document.getElementById('sound-state'),
@@ -137,6 +141,24 @@ export class HudController {
       // superare il target (es. 6/5) senza rompere la barra.
       this.ui.missionFill.style.width = `${state.waveTargets ? Math.min(100, state.waveKills / state.waveTargets * 100) : 0}%`;
       last.objective = objective;
+    }
+    const corePct = state.crystalMaxHealth > 0
+      ? Math.max(0, Math.min(100, Math.round(state.crystalHealth / state.crystalMaxHealth * 100)))
+      : 0;
+    const boostSeconds = Math.max(0, Math.ceil(state.damageBoostRemaining || 0));
+    const coreState = `${state.crystalDestroyed ? 1 : 0}:${corePct}:${boostSeconds}`;
+    if (last.coreState !== coreState) {
+      const destroyed = state.crystalDestroyed === true;
+      this.ui.coreObjective.classList.toggle('destroyed', destroyed);
+      this.ui.coreStatus.textContent = destroyed
+        ? t('crystal.hud.destroyed')
+        : t('crystal.hud.defend', { health: corePct });
+      this.ui.coreFill.style.width = `${corePct}%`;
+      this.ui.damageBoostStatus.classList.toggle('active', boostSeconds > 0);
+      this.ui.damageBoostStatus.textContent = boostSeconds > 0
+        ? t('crystal.hud.boost', { seconds: boostSeconds })
+        : '';
+      last.coreState = coreState;
     }
     if (last.wave !== state.wave) {
       this.ui.waveLabel.textContent = t('hud.wave', { wave: String(state.wave).padStart(2, '0') });

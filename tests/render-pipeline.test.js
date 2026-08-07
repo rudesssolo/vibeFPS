@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { RenderPipelineController, guardPassReentrancy } from '../src/render-pipeline.js';
+import { RenderPipelineController, composeHeatSlotOffsets, guardPassReentrancy } from '../src/render-pipeline.js';
 import { QUALITY_PROFILES } from '../src/config.js';
 
 // --- Rientranza fra PassNode -------------------------------------------------
@@ -185,6 +185,29 @@ test('eventi ottici e gate della GTAO', () => {
     // autoHigh ha 8 campioni: il filtro temporale resta acceso solo sopra 4.
     assert.equal(back.controller.aoPass.useTemporalFiltering, QUALITY_PROFILES.autoHigh.gtaoSamples > 4);
   }
+});
+
+test('tutti i quattro slot heat haze entrano nel grafo prima dei limiti runtime (U2)', () => {
+  const slots = [1, 2, 3, 4];
+  const visited = [];
+  const sum = composeHeatSlotOffsets(
+    slots,
+    (slot, index) => { visited.push(index); return slot; },
+    (left, right) => left + right
+  );
+  assert.deepEqual(visited, [0, 1, 2, 3]);
+  assert.equal(sum, 10);
+
+  // Il limite runtime governa l'allocatore e azzera gli esclusi, senza cambiare
+  // la topologia appena verificata.
+  const controller = makeQualityController();
+  controller.setQuality(QUALITY_PROFILES.autoHigh);
+  assert.equal(controller.heatSlotLimit, 2);
+  controller.heatSlots[2].strength.value = 1;
+  controller.setQuality(QUALITY_PROFILES.autoHigh);
+  assert.equal(controller.heatSlots[2].strength.value, 0);
+  controller.setQuality(QUALITY_PROFILES.ultra);
+  assert.equal(controller.heatSlotLimit, 4);
 });
 
 test('la guardia di rientranza rifiuta il pass annidato, lascia passare gli altri e si riarma', () => {

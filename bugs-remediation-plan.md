@@ -1,23 +1,29 @@
 # VIBE FPS — Registro dei bug
 
-> Revisione: 7 agosto 2026 (sera) · Storico dei difetti trovati e corretti, e di quelli ancora aperti.
+> Revisione: 7 agosto 2026 (U1–U3 risolti) · Storico dei difetti trovati e corretti, e di quelli ancora aperti.
 
 ## Come leggere questo documento
 
 - **§1 Aperti** è l'unica sezione che richiede azione. Il resto è storia chiusa, tenuta per non ripercorrere strade già battute.
-- Gli ID sono per tornata: `B/C/M` prima, `N` seconda, `T` terza, `Q` quarta, `R` quinta, `S` sesta.
+- Gli ID sono per tornata: `B/C/M` prima, `N` seconda, `T` terza, `Q` quarta, `R` quinta, `S` sesta, `U` settima (code review).
 - I riferimenti al codice sono `file › simbolo`, non numeri di riga: i numeri marciscono a ogni modifica.
 - Qui stanno i **difetti**. Gli interventi di performance stanno in `performance-optimization-plan.md`.
 
 ## 1. Aperti
 
-**Nessuno.** La sesta tornata (§2) ha chiuso T1, T2, Q8 e S0…S9.
+**Nessuno.** U1–U3 sono stati chiusi nella settima tornata (§2) con test discriminanti e smoke WebGPU.
 
-Quel che resta non sono difetti ma performance: varianti strutturali della pipeline (§4.1 del piano performance) e baseline su GPU hardware, incompleta.
+Resta inoltre un reperto performance da confermare, aperto nel relativo piano: `pipelineNuoveInGioco = 3` su hardware — tre shader compilati in gioco invece che al warmup, riproducibili. Diventa un bug solo se il run discriminante collega le compilazioni ai tre frame lenti.
 
-Un reperto da confermare, aperto lì e non qui: `pipelineNuoveInGioco = 3` su hardware — tre shader compilati in gioco invece che al warmup, riproducibili. Diventa un bug solo se la misura discriminante lo conferma.
+## 2. Settima tornata — ordine degli impatti, heat haze e cooldown (7 agosto 2026)
 
-## 2. Sesta tornata (7 agosto 2026, sera)
+| ID | Sev. | Titolo | Causa e fix |
+|----|------|--------|-------------|
+| **U1** | 🟠 | Sweep attraverso la copertura o bersaglio scelto per ordine d'array | `projectile-impact.js` calcola il primo `t` segmento-sfera e arbitra le parità a favore della superficie. `main.js › updateHostileShots` confronta ostacolo e giocatore sullo stesso segmento a ogni frame; `updateBullets` confronta mondo statico, tutti i droni e tutti gli Apex e applica un solo impatto, quello col `t` minimo. Anche il segmento di threat termina al primo contatto. I test coprono target prima/dietro la copertura, parità, ordine d'inserimento inverso, delta grande e input degeneri |
+| **U2** | 🟠 | Solo il primo slot heat haze entrava nel grafo TSL | `render-pipeline.js › composeHeatSlotOffsets` inserisce tutti e quattro gli slot durante la costruzione del grafo; `heatSlotLimit` resta un limite runtime per allocazione e uniform escluse. Lo shimmer comune viene calcolato una volta (due `sin` totali, non due per slot). Il test visita separatamente gli slot 0–3 e verifica i limiti 2/4 di autoHigh/Ultra. La rimozione strutturale dell'effetto da autoLow resta lavoro performance, non un difetto funzionale |
+| **U3** | 🟡 | Cooldown AUTO dichiarato in campioni ma decrementato in secondi | `graphics-manager.js › AUTO_TIER_COOLDOWN_SECONDS` fissa esplicitamente il valore a **15 s** per downgrade e upgrade. Il test avanza solo tramite `updateFPS(..., .5)`: il tier resta basso a 14,5 s, risale a 15 s e riavvia un cooldown di 15 s, senza modificare direttamente lo stato |
+
+## 3. Sesta tornata (7 agosto 2026, sera)
 
 | ID | Sev. | Titolo | Causa e fix |
 |----|------|--------|-------------|
@@ -37,7 +43,7 @@ Un reperto da confermare, aperto lì e non qui: `pipelineNuoveInGioco = 3` su ha
 
 **Verifica.** Test di regressione per ognuno, più tre smoke in browser reale (wave 1, wave 9, railgun/ULTRA). Quello che qui **non** si può verificare sono i pixel: per T1, S0 e S1 la causa è stata letta nella sorgente vendorizzata di three, non dedotta, e ciò che è misurabile — grafo della scena, conteggi di mesh, flag delle ombre, campo della maschera — è sotto test.
 
-## 3. Quinta tornata — schermo nero (7 agosto 2026)
+## 4. Quinta tornata — schermo nero (7 agosto 2026)
 
 ### R1 — Schermo nero per secondi saltando verso una parete 🔴
 
@@ -64,7 +70,7 @@ La pipeline cattura l'eccezione e non disegna nulla. In WebGPU la texture del ca
 
 **Nota di metodo.** Questa classe di difetto **non è riproducibile sull'adapter software** di sviluppo: non c'è driver da resettare. È stata risolta solo grazie al log della console dell'utente. Da lì è nato il "referto del frame lento" descritto in §7 del piano performance.
 
-## 4. Quarta tornata — cambio di tier e reflection (6 agosto 2026)
+## 5. Quarta tornata — cambio di tier e reflection (6 agosto 2026)
 
 Contesto: la sessione di ottimizzazione ha reso raggiungibile un difetto preesistente e ne ha introdotto uno nuovo.
 
@@ -80,9 +86,9 @@ Contesto: la sessione di ottimizzazione ha reso raggiungibile un difetto preesis
 
 Difetto ulteriore trovato nella stessa tornata e corretto: il **fumo volumetrico** consentiva fino a 16 puff con la camera dentro, cioè 16 raymarch a schermo pieno da 12 passi nello stesso frame. Un budget di copertura ora ne ammette 2 in ultra. Non era la causa di R1, ma era un difetto reale.
 
-## 5. Terza tornata — armi, Apex e luci (4 agosto 2026)
+## 6. Terza tornata — armi, Apex e luci (4 agosto 2026)
 
-Tutte chiuse. T1 e T2 sono state le ultime, il 7 agosto sera: vedi §1.1 per il fix conclusivo e la verifica.
+Tutte chiuse. T1 e T2 sono state le ultime, il 7 agosto sera: vedi §3 per il fix conclusivo e la verifica.
 
 | ID | Titolo | Fix |
 |----|--------|-----|
@@ -95,7 +101,7 @@ Tutte chiuse. T1 e T2 sono state le ultime, il 7 agosto sera: vedi §1.1 per il 
 | T9 | `flameBurst` saturava il pool additivo da 720 particelle | Count per burst ridotto a ~5 |
 | T10 | Salto in alto vicino ai muri → l'arena si scuriva | La "modalità edge-safe" **bypassava tutto il post-processing**. Bypass rimosso: resta solo lo swap del materiale delle pareti |
 
-## 6. Seconda tornata — pausa, audio e HUD (3 agosto 2026)
+## 7. Seconda tornata — pausa, audio e HUD (3 agosto 2026)
 
 Tutte chiuse.
 
@@ -112,7 +118,7 @@ Tutte chiuse.
 | N9 | Pan stereo incoerente su esplosioni e impatti | Helper `panForWorld` |
 | N10 | Pareti che cambiavano colore avvicinandosi | Rimosso lo swap di materiale della modalità edge-safe |
 
-## 7. Prima tornata — bug fondamentali (3 agosto 2026)
+## 8. Prima tornata — bug fondamentali (3 agosto 2026)
 
 Tutte chiuse.
 
@@ -122,14 +128,16 @@ Tutte chiuse.
 
 **Struttura:** M1 copertura test; M2 magic number in `CONFIG`; M3 UX a costo nullo; M4 SRI sulle dipendenze; M6 CI minima. **M5** (rifattorizzazione di `bootGame()`) non è un bug ma lavoro aperto: avviato con l'estrazione di `textures.js` e proseguito con la modularizzazione in `src/`.
 
-## 8. Validazione
+## 9. Validazione
 
 ```bash
-npm test          # 39 test
+npm test          # 42 test
 npm run lint:tsl
 npm run smoke     # anche con SMOKE_WAVE=9 e SMOKE_WEAPON=railgun
 git diff --check
 ```
+
+**Esito dopo U1–U3, 7 agosto 2026:** `npm test` **42/42**, `npm run lint:tsl` OK, `git diff --check` OK, smoke base wave 1 e smoke wave 9/railgun/ULTRA OK (adapter WebGPU attivo, zero errori e zero risorse mancanti), `node --check` sui file modificati OK. I tre nuovi comportamenti discriminanti sono coperti: ordine fisico degli impatti, presenza dei quattro slot nel grafo e scadenza reale del cooldown a 15 s.
 
 I test sono raggruppati per comportamento, non per asserzione: un caso copre un
 invariante intero e ogni `assert` porta il proprio messaggio, così un fallimento
@@ -139,7 +147,7 @@ resta localizzabile senza moltiplicare i `test()`.
 
 **Verificabile qui**, ed è ciò che ha chiuso T1: la struttura del grafo della scena. Costruire le mesh con three reale in Chromium e contarle non dipende dal backend, come i contatori di draw call. Non dice se un Apex è *bello*; dice se è *presente e distinto*, che era la sostanza del difetto.
 
-## 9. Lezioni apprese
+## 10. Lezioni apprese
 
 1. **Un log della console vale dieci ipotesi.** R1 è stato risolto in un passaggio con lo stack reale, dopo tre ipotesi sbagliate formulate senza.
 2. **Distinguere il sintomo dal difetto.** "Si blocca saltando verso il muro" ha avuto tre cause diverse in tre tornate (T10, Q1, R1). Lo stesso gesto non implica lo stesso bug.

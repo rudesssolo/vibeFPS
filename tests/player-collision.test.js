@@ -59,3 +59,26 @@ test('ogni CANNON.Cylinder è montato con un orientamento esplicito', () => {
   assert.match(source, /setFromAxisAngle\(new CANNON\.Vec3\(1, 0, 0\), -Math\.PI \/ 2\)/,
     'la rotazione che porta +Z su +Y è sparita');
 });
+
+test('quattro lampioni occupano gli angoli e conservano il collider verticale', () => {
+  const source = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'main.js'), 'utf8');
+  const start = source.indexOf('(function createArenaLampPosts()');
+  const end = source.indexOf('// Coperture basse', start);
+  assert.ok(start >= 0 && end > start, 'costruzione dei lampioni non trovata');
+  const block = source.slice(start, end);
+
+  assert.match(block, /const lampCorner = CONFIG\.arenaSize \/ 2 - CONFIG\.wallThick \/ 2 - 3/,
+    "la distanza dei lampioni dagli angoli non deriva più dall'arena");
+  assert.match(block, /\[-lampCorner, -lampCorner\], \[lampCorner, -lampCorner\],[\s\S]*\[-lampCorner, lampCorner\], \[lampCorner, lampCorner\]/,
+    'i quattro quadranti non hanno più un lampione ciascuno');
+  assert.match(block, /new THREE\.SpotLight\(coldWhite, 28, 10, \.68, \.78, 2\)/,
+    'manca la luce fredda con falloff locale');
+  assert.match(block, /light\.target\.position\.set\(px, \.02, pz\)/,
+    'lo spotlight non punta più al terreno');
+  assert.match(block, /addStaticCylinder\(px, 2, pz, \.6, 4, null\)/,
+    'il collider verticale originale non è più associato al lampione');
+  assert.match(block, /mergeStaticGeometries\(entries\)/,
+    'i dettagli dei lampioni non sono più fusi per materiale');
+  assert.doesNotMatch(source, /housing\.position\.set\(lx,6\.35,lz\)/,
+    'i vecchi fari sospesi sono ricomparsi');
+});

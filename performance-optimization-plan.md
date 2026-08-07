@@ -1,6 +1,6 @@
 # VIBE FPS — Piano di ottimizzazione performance
 
-> Revisione: 7 agosto 2026 (sera) · Rendering WebGPU/TSL, fisica Cannon.js, audio WebAudio, HUD/DOM.
+> Revisione: 7 agosto 2026 (dopo U1–U3) · Rendering WebGPU/TSL, fisica Cannon.js, audio WebAudio, HUD/DOM.
 
 ## Come leggere questo documento
 
@@ -11,11 +11,11 @@
 
 ## 1. Diagnosi
 
-> **Ragionata sulla struttura del frame, non misurata.** La prima misura su GPU reale (§7) dice che in ultra il frame costa 5-6,7 ms su un budget di 10 ms: su quell'hardware il throughput ha margine e il collo di bottiglia, se c'è, non morde. Vale ancora per i profili bassi e le macchine deboli, dove nessuno ha misurato. L'ordine di priorità sotto poggia su questa ipotesi non verificata.
+> **Ragionata sulla struttura del frame, non generalizzabile.** La prima misura su GPU reale (§7) dice che in ultra il frame costa 5-6,7 ms su un budget di 10 ms: su quell'hardware il throughput ha margine. Profili bassi e macchine deboli non sono stati misurati, quindi non è corretto dichiarare un collo di bottiglia universale.
 
-Il collo di bottiglia è la **GPU**. Il frame attraversa la scena fino a quattro volte: shadow map, normal pre-pass, scene pass, reflection del pavimento. Il profilo autoLow riduce parametri ma non rimuove nessuna pass strutturale.
+Il candidato strutturale principale è la **GPU**: il frame attraversa la scena fino a quattro volte (shadow map, normal pre-pass, scene pass, reflection del pavimento) e autoLow riduce parametri ma non rimuove nessuna pass strutturale. Le uniform a zero non eliminano il codice già entrato nello shader: dopo la correzione U2 autoLow continua, per esempio, a valutare i quattro inviluppi heat haze (con una sola coppia di `sin` condivisa) e il rumore della grana.
 
-Secondo gruppo, **CPU**: i proiettili sono integrati da Cannon *e* sottoposti a sweep manuali; la separazione fra droni è O(n²); il fuoco automatico crea molti nodi WebAudio.
+Secondo gruppo, **CPU**: i proiettili sono integrati da Cannon *e* sottoposti a sweep manuali; la separazione fra droni è O(n²); il fuoco automatico crea molti nodi WebAudio. I pool introdotti per colpi alleati e ostili hanno tolto il churn di body/mesh/tracer, ma non i doppi calcoli, i draw call per entry o le allocazioni di `Vector3.clone()` sul percorso di danno.
 
 ## 2. Stato complessivo
 
@@ -25,7 +25,7 @@ Secondo gruppo, **CPU**: i proiettili sono integrati da Cannon *e* sottoposti a 
 | 4 | Reflection del pavimento | P0 | **FATTO** |
 | 5 | Ombre | P0/P1 | APERTO |
 | 6 | Smoke volumetrico | P1 | **FATTO** in parte (budget + varianti); instancing APERTO |
-| 7 | Proiettili e fisica | P1 | APERTO |
+| 7 | Proiettili e fisica | P1 | **FATTO** in parte (pool alleati/ostili); solver, sweep e instancing APERTI |
 | 8 | Droni e Apex | P1 | APERTO |
 | 9 | Città, draw call e materiali | P1 | **FATTO** in parte (merge + atlas); LOD e instancing APERTI |
 | 10 | Texture e memoria GPU | P1/P2 | **FATTO** solo l'anisotropia |
@@ -54,7 +54,18 @@ Secondo gruppo, **CPU**: i proiettili sono integrati da Cannon *e* sottoposti a 
 | Dirty-check delle barre vitali sul valore mostrato | `hud-controller.js › _renderVitalBar` | **1202 → 380** scritture DOM su 300 frame di rigenerazione |
 | Guardia di rientranza fra PassNode | `render-pipeline.js › guardPassReentrancy` | elimina lo schermo nero da `renderList[i] undefined` (bug R1) |
 | Gate del quad GTAO quando l'AO è spenta | `render-pipeline.js › gateAoPass` | su autoLow il quad a schermo intero passa da 1 render **per frame** a **1 in totale** |
+| Tutti gli slot heat haze nel grafo, shimmer condiviso | `render-pipeline.js › composeHeatSlotOffsets` | U2 chiuso: Ultra può usare 4 slot e autoHigh 2; le funzioni trigonometriche nel grafo massimo restano **2 totali** invece di 2 per slot |
 | Contatori di rendering nel visual checker | `main.js › recordDiagnostics` | draw call, pipeline, texture, frame time, referto del frame lento |
+
+### 3.1 Implementato ma ancora senza misura end-to-end
+
+La review ha trovato lavoro già presente che il vecchio stato non registrava correttamente. Non viene promosso a “FATTO, con le misure” finché non esiste un A/B affidabile:
+
+- `main.js › bulletPools`: body Cannon, mesh e tracer dei proiettili del giocatore vengono riciclati per tipo, con tetto di 48 entry per pool;
+- `main.js › shotPools`: mesh e tracer dei colpi ostili/Apex vengono riciclati per chiave, mentre geometrie e materiali sono condivisi;
+- `audio-engine.js › updateDroneHums`: automazioni gain/frequenza/pan limitate a circa 10 Hz e temporanei riusati.
+
+Per chiudere le voci servono almeno allocazioni/frame e pause GC in una raffica minigun, draw call con 40 proiettili vivi e numero di eventi WebAudio/s prima/dopo.
 
 ## 4. Aperto — P0
 
@@ -62,13 +73,14 @@ Secondo gruppo, **CPU**: i proiettili sono integrati da Cannon *e* sottoposti a 
 
 `render-pipeline.js` costruisce sempre: normal pre-pass con MRT, GTAO, scene pass, bloom a 5 mip, poi heat haze, shockwave, flare, grading, SMAA, grain, vignette. autoLow non rimuove nulla di strutturale.
 
-Tre difetti concreti:
+Quattro difetti concreti:
 
 1. ~~**GTAO gira sempre.**~~ **FATTO** (7 agosto, sera). `aoPass.enabled` era inerte: il `GTAONode` vendorizzato non la consulta in `updateBefore`, quindi il quad a schermo intero veniva disegnato a ogni frame anche con `gtaoSamples: 0`. Ora `render-pipeline.js › gateAoPass` intercetta `updateBefore` e salta il render quando l'AO è spenta; `aoBlend` è una uniform, così la texture non aggiornata non entra nell'immagine e riaccendere l'AO non ricompila niente. Misurato nei test: su autoLow **1 render in totale** invece di 1 per frame (il primo serve a dimensionare e riempire la render target una volta). Restano da rimuovere la render target e il quad, che è lavoro strutturale: vedi sotto.
-2. **`heatSlotLimit` è letto quando il grafo viene costruito**, e in quel momento vale 0: `addHeatHaze` aggiunge solo il primo slot. `setQuality` cambia il valore ma non ricostruisce il grafo, quindi **ultra ha 1 slot di heat haze invece di 4** e gli slot 2-4 ricevono valori che nessuno legge. È un difetto visivo, non solo di costo.
+2. ~~**`heatSlotLimit` era letto quando il grafo veniva costruito** e Ultra restava con un solo slot.~~ **FATTO** come correttezza (U2): `composeHeatSlotOffsets` inserisce tutti e quattro gli slot nel grafo massimo, mentre `heatSlotLimit` governa allocazione e uniform. Lo shimmer è condiviso, quindi il fix aggiunge quattro inviluppi ma soltanto una coppia di `sin`. Resta aperta l'ottimizzazione strutturale 0/2/4 slot per non far valutare a autoLow nodi azzerati.
 3. **Doppio anti-aliasing:** il renderer chiede `antialias: true` e la pipeline applica anche SMAA.
+4. **Gli “early-out” a uniform zero non sono early-out strutturali.** `addGrain` calcola sempre `sin/fract` e moltiplica il risultato per `grainAmount`; `addHeatHaze` calcola quattro direzioni/esponenziali e la coppia di seni condivisa prima di moltiplicare per `heatScale`. Anche `setFxOverrides({ postFx: false })` azzera il risultato ma lascia il lavoro nello shader.
 
-**Da fare.** Varianti strutturali della pipeline per profilo, compilate in anticipo (cambiarla a runtime rischia hitch di compilazione). Misurare MSAA contro SMAA e sceglierne una sola per autoLow.
+**Da fare.** Varianti strutturali della pipeline per profilo, compilate in anticipo (cambiarla a runtime rischia hitch di compilazione). La variante low deve omettere dal grafo GTAO, heat haze e grana, non limitarsi a uniform zero; quelle high/ultra possono ridurre il grafo massimo già corretto a 2/4 slot. Misurare MSAA contro SMAA e sceglierne una sola per autoLow.
 
 **Criteri di accettazione.** autoLow deve evitare almeno una pass; GTAO disabilitato deve produrre zero quad render **e** nessuna render target allocata (il gate arriva a un solo render, non a zero: il resto richiede varianti del grafo); bloom disabilitato zero render target; nessun hitch oltre 100 ms.
 
@@ -76,9 +88,9 @@ Tre difetti concreti:
 
 `renderer.shadowMap.autoUpdate` è sempre `true`: la shadow map della luna si rigenera a ogni frame con tutti i caster.
 
-Il caso più sprecato: `main.js › part()` imposta `castShadow = true` per default, quindi **l'intero modello dell'arma in prima persona** (~30-40 mesh in ultra, attaccate alla camera) entra nella shadow map. Lo stesso vale per tracer, debris e VFX.
+Il caso più sprecato: `main.js › part()` imposta `castShadow = true` per default, quindi **l'intero modello dell'arma in prima persona** (~30-40 mesh in ultra, attaccate alla camera) entra nella shadow map. Anche cuori e pickup arma marcano tutte le mesh come caster. La vecchia affermazione su tracer, debris e VFX era invece imprecisa: allo stato attuale restano col default `castShadow = false` e non vanno “corretti” senza prima contarli.
 
-**Da fare.** Invertire il default in `part()`; togliere castShadow a tracer/debris/VFX; separare caster statici da dinamici e congelare i primi dopo il boot; stringere la camera d'ombra da ±32 all'arena.
+**Da fare.** Invertire il default in `part()` e abilitare esplicitamente solo gli eventuali pezzi che devono proiettare; togliere i pickup piccoli dal pass oppure giustificarli con un A/B visivo; rimuovere l'assegnazione inerte `castShadow` al `Group` del drop munizioni. Separare caster statici da dinamici e congelare i primi dopo il boot; stringere la camera d'ombra da ±32 all'arena.
 
 **Già presenti, non rifarli:** `shadowSize` 512 su autoLow, e i caster della skyline limitati ai primi 22 edifici.
 
@@ -87,9 +99,9 @@ Il caso più sprecato: `main.js › part()` imposta `castShadow = true` per defa
 | Voce | Cosa c'è ora | Da fare |
 |---|---|---|
 | **§6 Smoke** | ogni puff è una mesh separata, `frustumCulled = false`, densità e noise riscritti su tutti i vertici a ogni frame | InstancedMesh con attributi per-istanza; bounding sphere conservativo e culling riattivato; su autoLow 4-6 passi (oggi 8) e self-shadow rimosso |
-| **§7.1 Proiettili** | body Cannon dinamici *più* sweep manuali per ogni proiettile | integrazione manuale in un pool, un solo segment sweep per frame, rimozione dal solver |
-| **§7.2 Query droni** | `registerProjectileThreat` percorre tutti i droni per ogni proiettile, poi `updateBullets` li ripercorre | spatial hash 2D con celle di 3-5 m; threat a 30 Hz |
-| **§7.3 Draw call proiettili** | ogni proiettile ha mesh + glow sprite + tracer | mesh instanziata per tipo; buffer instanziato per i tracer |
+| **§7.1 Proiettili** | body/mesh/tracer sono già poolizzati; U1 ha unificato l'arbitraggio sul primo `t`, ma ogni colpo resta un body Cannon dinamico *più* sweep manuale e i colpi ostili interrogano ora lo statico a ogni frame | misurare il costo dopo U1; poi integrazione manuale nello stesso pool, un solo segment sweep per frame e rimozione dal solver, preservando esattamente l'ordine fisico coperto dai test |
+| **§7.2 Query droni** | `registerProjectileThreat` percorre tutti i droni per ogni proiettile, poi `updateBullets` li ripercorre; U1 ha eliminato i `clone()` dall'impatto diretto ma non dalle esplosioni ad area | spatial hash 2D con celle di 3-5 m; threat a 30 Hz; temporanei riusati e un solo risultato d'impatto |
+| **§7.3 Draw call proiettili** | pool e materiali condivisi evitano churn, ma ogni entry viva conserva mesh + glow sprite + tracer e quindi i propri draw call | mesh instanziata per tipo; buffer instanziato per i tracer; preservare ordine trasparente e scia corretta |
 | **§8.1 Separazione droni** | O(n²) in `drone-system.js › update` | spatial grid. **Priorità reale bassa**: con ≤9 droni sono 81 confronti |
 | **§8.2 Materiali droni** | ogni drone crea 6 materiali (core, eye, halo, ring, 2 thruster): ~54 con 9 droni | palette condivisa per archetipo; colori come uniform o attributi per-istanza |
 | **§8.3 Churn fra ondate** | `clear()` distrugge gruppi, marker e materiali a ogni ondata | pool persistente, reset di visibilità e vita |
@@ -109,7 +121,7 @@ Il caso più sprecato: `main.js › part()` imposta `castShadow = true` per defa
 | **§13.2 Armi** | i LOD di tutte e cinque le armi restano in memoria | costruzione lazy; niente castShadow sui viewmodel |
 | **§13.3 Bundle** | Three e Cannon caricati interi, senza tree-shaking | build step esmodularizzato, mantenendo la modalità offline |
 | **Pozzanghere** | `water-system.js` costruisce una mesh con le sole celle bagnate più una fascia di sfumatura (celle da 28 cm): ~14k triangoli su autoHigh, ~23k in ultra. Le onde muovono i vertici sulla CPU, con la normale dalla derivata analitica e un **indice spaziale a bucket** da 2 m | +1 draw call. CPU in ultra con **14 onde** simultanee: **0,90 ms/frame** (era 1,65 scorrendo tutti i vertici), **0,0005 ms** ad acqua ferma. L'indice è verificato contro il calcolo diretto: scarto 2,6·10⁻⁸. Il displacement nel vertex shader costerebbe meno, ma qui nessuno potrebbe dimostrare che avvenga — i pixel non sono leggibili |
-| **§14 Culling** | `frustumCulled = false` su smoke, tracer del giocatore e ostili, pioggia, traffico, pool particellare e debris | bounding volume conservativo o culling a livello di batch |
+| **§14 Culling** | `frustumCulled = false` su smoke, acqua, tracer del giocatore e ostili, pioggia, traffico, pool particellare e debris; per i tracer è una scelta corretta finché il bounding volume dinamico non viene aggiornato | bounding volume conservativo o culling a livello di batch; non riattivare il flag sui tracer senza aggiornare la sfera del segmento |
 | **Trio visivo rinviato** | muri con `side: DoubleSide` su box chiusi (overdraw doppio, anche nella shadow map); clearcoat del pavimento attivo su autoLow; `backdrop-filter: blur()` su tre pannelli HUD sopra un canvas che cambia ogni frame | tre modifiche da un'ora in tutto, ma cambiano l'aspetto: serve l'approvazione visiva |
 
 ## 7. Metodo di misura
@@ -186,26 +198,29 @@ Regole ricavate da errori realmente commessi. Valgono per chiunque continui il l
 
 Riordinato dopo la prima misura su hardware: con 33-50% di margine in ultra, il lavoro sul *throughput* non è più il primo. Gli **hitch** lo sono — sono l'unica cosa percepibile su una macchina con margine.
 
+Le precondizioni di correttezza sono chiuse: U1 fissa l'ordine fisico da preservare nelle future ottimizzazioni dei proiettili; U2 rende visibili tutti gli slot configurati; U3 rende affidabile il tempo reale dei cambi AUTO. Le varianti strutturali 0/2/4 restano necessarie per recuperare il costo GPU introdotto dal grafo massimo, senza riaprire U2.
+
 1. **Run B di §7** — un run da 60 s, decide se le 3 pipeline compilate in gioco sono un difetto da inseguire o rumore di prima esecuzione.
 2. **Le 3 pipeline in gioco**, se B le conferma: 88 ms sono ~9 frame persi a 100 Hz. Massimo rapporto valore/rischio del piano.
-3. **Trio visivo** (§6, ultima riga) — un'ora, nessun rischio tecnico, serve solo l'approvazione visiva.
-4. **§5 Ombre** — iniziare dal default di `part()`, che è puro spreco a prescindere dal margine.
-5. **Run D di §7 su `autoLow`** — prima di toccare §3. È il proxy delle macchine deboli, le uniche dove il throughput può ancora essere il problema.
-6. **§3 Pipeline** — il più grosso e il più rischioso, e ora anche il meno urgente su hardware come quello misurato. Con i numeri di autoLow in mano, non prima.
-7. **§7 Proiettili** e **§9 instancing** — il resto, per impatto decrescente.
+3. **§5 Ombre, primo taglio** — disabilitare i caster del viewmodel e contare subito la differenza; è spreco verificabile e non richiede ridisegnare la pipeline.
+4. **Run D di §7 su `autoLow`** — prima di toccare §3. È il proxy delle macchine deboli, le uniche dove il throughput può ancora essere il problema.
+5. **§3 Pipeline** — rimuovere davvero i nodi low e precompilare varianti 0/2/4 slot, preservando la copertura funzionale di U2 e facendo warmup prima dello switch.
+6. **§7 Proiettili** — con la semantica U1 ora sotto test, misurare solver, query e draw call separatamente; il pooling è già presente.
+7. **Trio visivo** (§6, ultima riga) e **§9 instancing** — solo con confronto A/B, per impatto decrescente.
 
 ## 10. Rischi da controllare
 
 | Area | Rischio | Mitigazione |
 |---|---|---|
 | pipeline low | perdita di leggibilità o contrasto | screenshot A/B in combattimento |
+| pipeline high/ultra | grafo massimo U2 corretto ma quattro inviluppi valutati anche quando azzerati | varianti da 0/2/4 slot, contatore pipeline e warmup di ciascuna |
 | shadow freeze | ombre dinamiche obsolete | layer dinamico separato |
 | smoke instancing | variante FrontSide/BackSide errata | test con camera dentro e fuori dal puff |
-| proiettili manuali | differenze con gravità e collisioni | test di sweep e collisione statica |
+| proiettili manuali | differenze con gravità, ordine dei target e copertura | test del primo `t` lungo il segmento, collisione statica e delta massimo |
 | pooling droni | stato residuo fra ondate | reset completo verificato da test |
 | audio pooling | voci bloccate o click | voice stealing e test di raffica |
 | profilo iniziale | classificazione GPU errata | `adapter.info` come suggerimento, mai come blocco |
 
 ## 11. Definition of done
 
-Un intervento è completo quando: il miglioramento è misurato con una metrica affidabile (§7); i test restano verdi; non compaiono errori in console; i tre profili restano coerenti; il cambio di qualità non produce hitch percepibili; e la voce in §3 riporta il numero ottenuto.
+Un intervento è completo quando: il miglioramento è misurato con una metrica affidabile (§7); i test restano verdi; non compaiono errori in console; i tre profili restano coerenti; il cambio di qualità non produce hitch percepibili; e la voce in §3 riporta il numero ottenuto. Per CPU/pooling vanno riportati anche allocazioni o pause GC e non soltanto FPS; per una variante shader va dimostrato che il nodo assente non è semplicemente moltiplicato per una uniform zero.

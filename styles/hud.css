@@ -178,6 +178,14 @@
   .weapon-hud { width: 300px; }
 }
 
+/* Su desktop bassi (es. 1280×720) la seconda riga obiettivo rende la card
+   più alta: un radar leggermente più compatto mantiene libera la sua etichetta
+   senza aumentare la sovrapposizione col pannello vitali. */
+@media (max-height: 800px) and (min-width: 901px) {
+  .radar-wrap { width: 190px; height: 190px; bottom: 330px; }
+  #radar { width: 190px; height: 190px; }
+}
+
 /* Apex Sentinel — barra del boss (in alto al centro) e marker dedicato. */
 #boss-bar {
   position: fixed; left: 50%; top: calc(var(--hud-safe) * .72);

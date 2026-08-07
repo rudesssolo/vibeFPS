@@ -26,11 +26,11 @@ test('la lingua si sceglie, si persiste, interpola e non perde chiavi (L1)', () 
     try {
       assert.equal(getLanguage(), 'en');
       assert.equal(t('overlay.cta.start'), 'INITIALIZE SIMULATION');
-      assert.equal(t('mission.objective'), 'NEUTRALIZE THE DRONES');
+      assert.equal(t('mission.objective'), 'NEUTRALIZE HOSTILES');
       setLanguage('it');
       assert.equal(getLanguage(), 'it');
       assert.equal(getStoredLanguage(), 'it', 'la scelta non è stata persistita');
-      assert.equal(t('mission.objective'), 'NEUTRALIZZA I DRONI');
+      assert.equal(t('mission.objective'), 'NEUTRALIZZA GLI OSTILI');
       setLanguage('xx');
       assert.equal(getLanguage(), 'en', 'un codice ignoto deve tornare all\'inglese');
     } finally { restore(); }

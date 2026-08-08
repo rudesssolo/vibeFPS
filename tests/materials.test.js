@@ -40,3 +40,21 @@ test('unlitBasic è davvero unlit, e nessun MeshBasicMaterial resta in src/', ()
     assert.deepEqual(offenders, [], `usare unlitBasic() da src/materials.js invece di new THREE.MeshBasicMaterial: ${offenders.join(', ')}`);
   }
 });
+
+test('il vapore dei tombini viene composto sopra l\'acqua senza attraversare i solidi', () => {
+  const main = fs.readFileSync(path.join(SRC, 'main.js'), 'utf8');
+  assert.match(main, /depthTest:true,depthWrite:false/,
+    'il vapore non conserva più il depth test contro le geometrie solide');
+  assert.match(main, /sprite\.renderOrder=2/,
+    'il vapore viene nuovamente composto prima della lamina d\'acqua');
+  assert.match(main, /p\.base\.y \+ size \* \.72/,
+    'il puff riparte centrato nel pavimento e viene tagliato alla base');
+});
+
+test('l\'aura del cristallo non viene tagliata o duplicata dalla pozzanghera', () => {
+  const main = fs.readFileSync(path.join(SRC, 'main.js'), 'utf8');
+  assert.match(main, /crystalAura\.renderOrder = 2/,
+    'l\'aura trasparente viene nuovamente composta prima dell\'acqua');
+  assert.match(main, /reflectionExclusions\.push\(crystalAura\)/,
+    'l\'aura additiva è rientrata nel reflector come copia frammentata');
+});

@@ -6,6 +6,10 @@ const MAX_RAIN = 2200;
 const MAX_SPLASHES = 32;
 const MAX_RIPPLES = 24;
 const MAX_FOG_BANKS = 12;
+// Riserva minima per gli impatti di gameplay. Anche il profilo low può
+// spegnere gli schizzi casuali della pioggia senza far sparire quelli prodotti
+// direttamente da passi, proiettili ed esplosioni.
+export const INTERACTION_SPLASHES = 8;
 // Scie volutamente minute: la pioggia deve dare profondità alla scena senza
 // creare una cortina luminosa davanti a mirino e bersagli.
 const RAIN_STREAK_OPACITY = .075;
@@ -110,7 +114,7 @@ export class WeatherSystem {
     this.splashes = Array.from({ length: MAX_SPLASHES }, () => {
       const material = new THREE.SpriteMaterial({
         map: this.splashTexture,
-        color: 0xbce7ff,
+        color: 0xe7edf0,
         transparent: true,
         opacity: 0,
         blending: THREE.AdditiveBlending,
@@ -120,12 +124,12 @@ export class WeatherSystem {
       mesh.visible = false;
       this.scene.add(mesh);
       this._objects.push(mesh);
-      return { mesh, material, active: false, age: 0, life: .2 };
+      return { mesh, material, active: false, age: 0, life: .28, strength: 1 };
     });
     this.ripples = Array.from({ length: MAX_RIPPLES }, () => {
       const material = unlitBasic({
         map: this.rippleTexture,
-        color: 0x89ceff,
+        color: 0xdde3e6,
         transparent: true,
         opacity: 0,
         blending: THREE.AdditiveBlending,
@@ -186,20 +190,30 @@ export class WeatherSystem {
     this.linePositions[target + 5] = this.rainPositions[source + 2] + wind * .35;
   }
 
-  registerWetMaterial(material, { dryRoughness = material?.roughness ?? .5, wetRoughness = .16, animatedNormal = false } = {}) {
+  registerWetMaterial(material, {
+    dryRoughness = material?.roughness ?? .5,
+    wetRoughness = .16,
+    wetClearcoat = null,
+    animatedNormal = false
+  } = {}) {
     if (!material) return;
     if (animatedNormal) {
       material.normalMap = this.wetNormalTexture;
       material.normalScale = new THREE.Vector2(.18, .18);
     }
-    this.wetMaterials.push({ material, dryRoughness, wetRoughness, animatedNormal });
+    const dryClearcoat = material.clearcoat ?? 0;
+    this.wetMaterials.push({ material, dryRoughness, wetRoughness, dryClearcoat, wetClearcoat, animatedNormal });
     this._applyWetness();
   }
 
   _applyWetness() {
     for (const entry of this.wetMaterials) {
       entry.material.roughness = THREE.MathUtils.lerp(entry.dryRoughness, entry.wetRoughness, this.wetness);
-      if ('clearcoat' in entry.material) entry.material.clearcoat = Math.max(entry.material.clearcoat || 0, this.wetness * .72);
+      if ('clearcoat' in entry.material) {
+        entry.material.clearcoat = entry.wetClearcoat === null
+          ? Math.max(entry.material.clearcoat || 0, this.wetness * .72)
+          : THREE.MathUtils.lerp(entry.dryClearcoat, entry.wetClearcoat, this.wetness);
+      }
       entry.material.needsUpdate = true;
     }
   }
@@ -243,19 +257,33 @@ export class WeatherSystem {
     item.material.opacity = 0;
   }
 
-  _spawnImpact(pool, limit, x, z) {
-    if (limit <= 0) return;
+  _spawnImpact(pool, limit, x, z, strength = 1) {
+    if (limit <= 0 || !Number.isFinite(x) || !Number.isFinite(z)) return false;
     let item = null;
     for (let i = 0; i < limit; i++) {
       if (!pool[i].active) { item = pool[i]; break; }
     }
-    if (!item) return;
+    if (!item) return false;
     item.active = true;
     item.age = 0;
+    item.strength = Math.max(.35, Math.min(2, Number.isFinite(strength) ? strength : 1));
     item.mesh.visible = true;
     item.mesh.position.set(x, .075, z);
-    item.mesh.scale.setScalar(.12);
-    item.material.opacity = .8;
+    item.mesh.scale.set(.12 * item.strength, .18 * item.strength, 1);
+    item.material.opacity = Math.min(1, .72 + item.strength * .14);
+    return true;
+  }
+
+  /** Schizzo causato dal gameplay, indipendente dal budget degli impatti rain. */
+  splashAt(x, z, strength = 1) {
+    if (this.fxOverrides?.weather === false) return false;
+    return this._spawnImpact(
+      this.splashes,
+      Math.max(this.splashLimit, INTERACTION_SPLASHES),
+      x,
+      z,
+      strength
+    );
   }
 
   _updateImpactPool(pool, limit, ripple, delta) {
@@ -264,8 +292,20 @@ export class WeatherSystem {
       if (!item.active) continue;
       item.age += delta;
       const progress = Math.min(1, item.age / item.life);
-      item.material.opacity = Math.sin(progress * Math.PI) * (ripple ? .38 : .72);
-      item.mesh.scale.setScalar((ripple ? .18 : .1) + progress * (ripple ? 1.6 : .48));
+      if (ripple) {
+        item.material.opacity = Math.sin(progress * Math.PI) * .38;
+        item.mesh.scale.setScalar(.18 + progress * 1.6);
+      } else {
+        const strength = item.strength || 1;
+        const arc = Math.sin(progress * Math.PI);
+        item.material.opacity = arc * Math.min(1, .62 + strength * .2);
+        item.mesh.scale.set(
+          (.1 + progress * .55) * strength,
+          (.16 + arc * .95) * strength,
+          1
+        );
+        item.mesh.position.y = .075 + arc * .42 * strength;
+      }
       if (progress >= 1) this._hideImpact(item);
     }
   }
@@ -274,7 +314,7 @@ export class WeatherSystem {
     const safeDelta = Number.isFinite(delta) ? Math.min(.1, Math.max(0, delta)) : 0;
     this.wetNormalTexture.offset.set((elapsed * .007) % 1, (elapsed * .011) % 1);
     if (this.rainCount === 0 && this.fogLimit === 0) {
-      this._updateImpactPool(this.splashes, this.splashLimit, false, safeDelta);
+      this._updateImpactPool(this.splashes, Math.max(this.splashLimit, INTERACTION_SPLASHES), false, safeDelta);
       this._updateImpactPool(this.ripples, this.rippleLimit, true, safeDelta);
       return;
     }
@@ -300,7 +340,7 @@ export class WeatherSystem {
     }
     if (this.rainCount > 0) this.lineGeometry.attributes.position.needsUpdate = true;
 
-    this._updateImpactPool(this.splashes, this.splashLimit, false, safeDelta);
+    this._updateImpactPool(this.splashes, Math.max(this.splashLimit, INTERACTION_SPLASHES), false, safeDelta);
     this._updateImpactPool(this.ripples, this.rippleLimit, true, safeDelta);
 
     for (let i = 0; i < this.fogLimit; i++) {

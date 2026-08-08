@@ -270,7 +270,7 @@
     // L'asfalto è ruvido e bagnato, non uno specchio: riflette poco e sfocato.
     // Prima era a .34, cioè PIÙ della pozzanghera a distanza ravvicinata —
     // l'acqua deve essere la superficie più riflettente della scena.
-    reflector: { strength: 0.18, blur: 0.45 }
+    reflector: { strength: 0.1, blur: 0.62 }
   };
 
   // Gruppi di collisione (bitmask)
@@ -699,6 +699,9 @@
   // Dichiarata prima del reflector: il wrapper qui sotto la nasconde durante il
   // render dello specchio, e viene costruita più in basso, col pavimento.
   let waterSystem = null;
+  // Effetti emissivi sospesi appena sopra il suolo che non devono entrare nel
+  // reflector condiviso. La base fisica degli oggetti resta invece visibile.
+  const reflectionExclusions = [];
   // Il reflector rende la scena una seconda volta ogni frame: lo scheduler
   // decide su quali frame quel lavoro viene effettivamente svolto (vedi
   // reflection-throttle.js). L'intervallo arriva dal profilo qualità.
@@ -728,13 +731,13 @@
       // annidato, e `false` fa annullare la registrazione a NodeFrame, che
       // ritenta: due consumatori del riflesso bastavano a farlo rirenderizzare
       // a rimbalzo e a restituire un riflesso sbagliato.
-      const water = waterSystem?.mesh;
-      const wasVisible = water ? water.visible : false;
-      if (water) water.visible = false;
+      const hiddenObjects = [waterSystem?.mesh, ...reflectionExclusions].filter(Boolean);
+      const visibility = hiddenObjects.map(object => object.visible);
+      for (const object of hiddenObjects) object.visible = false;
       try {
         return runUpdateBefore(frame);
       } finally {
-        if (water) water.visible = wasVisible;
+        hiddenObjects.forEach((object, index) => { object.visible = visibility[index]; });
       }
     };
   } else {
@@ -746,7 +749,8 @@
     scene.add(floorMesh);
   }
 
-  // Strato PBR sopra la riflessione: evita l'effetto specchio e restituisce asfalto bagnato credibile.
+  // Strato PBR sopra la riflessione: asfalto nero da catrame, molto ruvido ma
+  // con un debole riflesso sfocato dovuto alla pioggia.
   const asphaltCanvas = makeAsphaltCanvas();   // 1024 di default (review demo)
   const asphaltMap = new THREE.CanvasTexture(asphaltCanvas);
   asphaltMap.colorSpace = THREE.SRGBColorSpace;
@@ -759,15 +763,17 @@
   const asphaltMaterialOptions = {
     map: asphaltMap, normalMap: asphaltNormal,
     roughnessMap: asphaltPbr.roughnessMap, metalnessMap: asphaltPbr.metalnessMap,
-    color: 0x8290a1,
-    roughness: .54, metalness: .06, clearcoat: .42, clearcoatRoughness: .38,
+    color: 0x687078,
+    roughness: .82, metalness: .02, clearcoat: .08, clearcoatRoughness: .62,
     transparent: !floorReflection, opacity: floorReflection ? 1 : .72,
-    depthWrite: Boolean(floorReflection), envMapIntensity: .8
+    depthWrite: Boolean(floorReflection), envMapIntensity: .55
   };
   const asphaltMaterial = floorReflection
     ? new THREE.MeshPhysicalNodeMaterial(asphaltMaterialOptions)
     : new THREE.MeshPhysicalMaterial(asphaltMaterialOptions);
-  weatherSystem.registerWetMaterial(asphaltMaterial, { dryRoughness: .54, wetRoughness: .38 });
+  weatherSystem.registerWetMaterial(asphaltMaterial, {
+    dryRoughness: .82, wetRoughness: .62, wetClearcoat: .18
+  });
   // Il pavimento NON ha più un materiale "edge safe" senza riflesso: il piano
   // dello specchio è orizzontale, quindi la distanza dai muri non influenza la
   // stabilità del reflector. Lo swap serviva solo a fermarne l'aggiornamento e
@@ -795,21 +801,6 @@
   // Corpo fisico del pavimento (senza mesh: il visual è il riflettore)
   addStaticBox(0, -0.5, 0, floorSize, 1, floorSize, null);
   loadingUI.update(.72, 'ARENA', 'PBR materials, reflective floor and collisions...');
-
-  // Griglia neon sul pavimento (geometria reale -> si riflette correttamente)
-  (function createFloorGrid() {
-    const n = 5;
-    const spacing = CONFIG.arenaSize / (n + 1);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x0d0f14, emissive: 0x00e5ff, emissiveIntensity: 0.3, roughness: 0.5 });
-    for (let i = 1; i <= n; i++) {
-      const p = -CONFIG.arenaSize / 2 + i * spacing;
-      const a = new THREE.Mesh(new THREE.BoxGeometry(CONFIG.arenaSize - 0.2, 0.02, 0.035), mat);
-      a.position.set(0, 0.07, p);
-      const b = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.02, CONFIG.arenaSize - 0.2), mat);
-      b.position.set(p, 0.07, 0);
-      scene.add(a, b);
-    }
-  })();
 
   // Muri perimetrali con pannelli metallici
   const wallConfigs = [
@@ -1152,12 +1143,18 @@
   scene.add(crystal);
   const crystalAuraMaterial = unlitBasic({
     color: 0xcaf8ff, transparent: true, opacity: .28,
-    blending: THREE.AdditiveBlending, depthWrite: false, wireframe: true
+    blending: THREE.AdditiveBlending, depthTest: true, depthWrite: false, wireframe: true
   });
   const crystalAura = new THREE.Mesh(new THREE.IcosahedronGeometry(.72, 1), crystalAuraMaterial);
   crystalAura.name = 'VIBE defense field';
   crystalAura.position.copy(crystal.position);
+  // Come il vapore, il campo trasparente va composto dopo la lamina d'acqua;
+  // il depth test continua a farlo sparire dietro il piedistallo e i solidi.
+  crystalAura.renderOrder = 2;
   scene.add(crystalAura);
+  // È un VFX additivo, non una superficie fisica: nel reflector produceva un
+  // secondo cristallo frammentato e disallineato. Il nucleo solido resta.
+  reflectionExclusions.push(crystalAura);
   // Intensità, non visibilità: il set di luci resta stabile e non ricompila i
   // materiali quando il nucleo viene distrutto o ricostruito.
   const crystalLight = new THREE.PointLight(0xcdf8ff, 3.4, 7, 2);
@@ -1201,6 +1198,11 @@
   );
   arrowGlow.position.set(CONFIG.padPos.x, 0.95, CONFIG.padPos.z);
   scene.add(arrowGlow);
+
+  // Questi elementi sono VFX emissivi, non parti solide: nel reflector quasi
+  // speculare dell'acqua producevano copie magenta/arancio spostate di metri.
+  // La base scura del pad continua a riflettersi normalmente.
+  reflectionExclusions.push(padGlowMesh, padRing, padArrow, arrowGlow);
 
   // Corpo fisico del jump pad (invariato)
   const padBody = addStaticBox(CONFIG.padPos.x, CONFIG.padHeight / 2, CONFIG.padPos.z, CONFIG.padSize, CONFIG.padHeight, CONFIG.padSize, null);
@@ -1701,6 +1703,9 @@
       const rim=new THREE.Mesh(new THREE.BoxGeometry(1.45,.05,.7),grateMat); rim.position.y=.07; grate.add(rim);
       for(let i=-3;i<=3;i++){const slot=new THREE.Mesh(new THREE.BoxGeometry(.07,.025,.58),unlitBasic({color:0x010205}));slot.position.set(i*.18,.105,0);grate.add(slot);}
       grate.position.set(gx,0,gz); grate.rotation.y=rot; scene.add(grate);
+      // Elemento decorativo senza collider, ma comunque solido per l'acqua:
+      // senza impronta la lamina speculare passa sotto il tombino.
+      staticFootprints.push({ x: gx, z: gz, halfX: .725, halfZ: .35, angle: rot, top: .12, bottom: .045 });
     }
 
     const pipeMat=new THREE.MeshStandardMaterial({color:0x313a43,metalness:.88,roughness:.28,normalMap:brushedNormal,envMapIntensity:1.1});
@@ -1736,8 +1741,12 @@
     smokeTex.colorSpace=THREE.SRGBColorSpace;
     for(const [vx,vz] of [[-4,11],[10,4],[-13,-3]]){
       for(let i=0;i<12;i++){
-        const mat=new THREE.SpriteMaterial({map:smokeTex,color:0xc9ebf3,transparent:true,opacity:0,depthWrite:false,blending:THREE.NormalBlending});
-        const sprite=new THREE.Sprite(mat);scene.add(sprite);
+        const mat=new THREE.SpriteMaterial({map:smokeTex,color:0xc9ebf3,transparent:true,opacity:0,depthTest:true,depthWrite:false,blending:THREE.NormalBlending});
+        const sprite=new THREE.Sprite(mat);
+        // L'acqua trasparente ha renderOrder 1: il vapore va composto dopo,
+        // mantenendo però il depth test contro tombino, muri e oggetti solidi.
+        sprite.renderOrder=2;
+        scene.add(sprite);
         animatedSteam.push({sprite,mat,base:new THREE.Vector3(vx,.12,vz),phase:i/12,speed:.12+rand()*.08,drift:(rand()-.5)*.7});
       }
     }
@@ -1752,6 +1761,11 @@
       group.position.set(bx,0,bz);group.rotation.y=rot;scene.add(group);
       addStaticBoxRotated(bx,.5,bz,3,1,.7,[0,1,0],rot,null);
     }
+
+    // Il set dressing nasce dopo il primo setup dell'acqua. Si sincronizzano qui
+    // tutte le impronte (tombini decorativi e barriere comprese) con un'unica
+    // ricostruzione, evitando acqua nascosta sotto oggetti a filo pavimento.
+    waterSystem.setObstacles(staticFootprints.filter(f => f.top > .05 && f.bottom < 1.4));
   })();
 
   /* ============================================================
@@ -3400,7 +3414,9 @@
     // Solo quello che arriva davvero a pelo d'acqua: un'esplosione a mezz'aria
     // non increspa la pozza sotto.
     if (!Number.isFinite(position.y) || position.y > 1.6) return false;
-    return waterSystem.disturb(position.x, position.z, strength);
+    const disturbed = waterSystem.disturb(position.x, position.z, strength);
+    if (disturbed) weatherSystem.splashAt(position.x, position.z, strength);
+    return disturbed;
   }
 
   /**
@@ -3420,7 +3436,7 @@
       if (body.position.y > .95 || body.velocity.y > -.8) continue;
       const next = crateSplashCooldown.get(body) || 0;
       if (elapsed < next) continue;
-      if (waterSystem.disturb(body.position.x, body.position.z, Math.min(1.4, .5 + Math.abs(body.velocity.y) / 6))) {
+      if (splashAt(body.position, Math.min(1.4, .5 + Math.abs(body.velocity.y) / 6))) {
         crateSplashCooldown.set(body, elapsed + .35);
         audio.waterStep(panForWorld(body.position));
       }
@@ -3429,8 +3445,7 @@
     for (const bullet of bullets) {
       if (bullet.splashed || !bullet.body) continue;
       if (bullet.body.position.y > WATER_LEVEL + .12) continue;
-      bullet.splashed = true;
-      waterSystem.disturb(bullet.body.position.x, bullet.body.position.z, .7);
+      bullet.splashed = splashAt(bullet.body.position, .9);
     }
   }
 
@@ -4411,8 +4426,7 @@
       // G4: la camera "incassa" l'atterraggio in proporzione alla velocità.
       landingKick = Math.min(1, Math.abs(lastVerticalVelocity) / 11);
       // Un tuffo pesa più di un passo: l'ampiezza segue la velocità d'impatto.
-      waterSystem.disturb(playerBody.position.x, playerBody.position.z,
-        Math.min(1.6, .7 + Math.abs(lastVerticalVelocity) / 9));
+      splashAt(playerBody.position, Math.min(1.6, .7 + Math.abs(lastVerticalVelocity) / 9));
     }
     wasGrounded = onGround;
 
@@ -4444,7 +4458,7 @@
       nextFootstep = elapsed + (isSprinting ? .31 : .43);
       // Il passo increspa solo se cade dentro una pozza: sull'asfalto asciutto
       // `disturb` rifiuta da sé, la condizione sta nella maschera e non qui.
-      if (waterSystem.disturb(playerBody.position.x, playerBody.position.z, isSprinting ? .85 : .55)) {
+      if (splashAt(playerBody.position, isSprinting ? 1.05 : .72)) {
         audio.waterStep(panForWorld(playerBody.position));
       }
     }
@@ -5053,6 +5067,11 @@
       if (closestDrone) damageDrone(closestDrone, RAILGUN_TUNING.damage, railTargetPoint.clone());
       else damageApex(closestApex, RAILGUN_TUNING.apexDamage, railTargetPoint.clone());
     }
+    // La railgun non crea un body e non passa dall'osservatore dei proiettili:
+    // se il raycast termina a pelo d'acqua deve generare qui il suo impatto.
+    if (!closestDrone && !closestApex && blocked && railEnd.y <= WATER_LEVEL + .18) {
+      splashAt(railEnd, 1.15);
+    }
     audio.railgun(panForWorld(railEnd));
     showRailBeam(railOrigin, railEnd);
     explosionSystem.sparkBurst(railEnd, closestDrone || closestApex ? 0xffb347 : 0xff8c00, 24);
@@ -5170,6 +5189,15 @@
 
       if (b.hit) {
         const impact = new THREE.Vector3(b.impact.x, b.impact.y, b.impact.z);
+        // Questo ramo precede disposeBullet(): i colpi che urtano il terreno
+        // vengono riciclati nello stesso frame e non arriveranno mai al watcher
+        // updateWaterInteractions(). Il punto dello sweep è la sorgente
+        // affidabile per increspatura e schizzo. I missili sono esclusi perché
+        // explosionSystem.explode(), subito sotto, è già accoppiato all'acqua.
+        if (b.type !== 'missile' && !b.targetHit && !b.splashed
+          && impact.y <= WATER_LEVEL + .18) {
+          b.splashed = splashAt(impact, .9);
+        }
         if (b.type === 'missile') {
           // HELLSTORM: esplosione ad area sul punto di impatto. Il bersaglio
           // colpito in diretta è già stato danneggiato dallo sweep: lo si
@@ -5731,8 +5759,13 @@
     // Vapore dai tombini: sprite morbidi con deriva e dissolvenza non sincronizzata.
     for (const p of animatedSteam) {
       const life = (elapsed * p.speed + p.phase) % 1;
-      p.sprite.position.set(p.base.x + p.drift * life, p.base.y + life * 2.8, p.base.z + Math.sin(life * 5 + p.phase * 9) * .18);
-      p.sprite.scale.setScalar(.28 + life * 1.6);
+      const size = .28 + life * 1.6;
+      // Lo sprite è centrato: ancorandone il centro direttamente alla quota
+      // del tombino, metà puff finiva sotto asfalto/acqua. Il margine 0.72
+      // copre anche la rotazione del quad (diagonale > semilato).
+      const y = p.base.y + size * .72 + life * 2.15;
+      p.sprite.position.set(p.base.x + p.drift * life, y, p.base.z + Math.sin(life * 5 + p.phase * 9) * .18);
+      p.sprite.scale.setScalar(size);
       p.mat.opacity = Math.sin(life * Math.PI) * .16;
       p.mat.rotation = elapsed * .08 + p.phase;
     }

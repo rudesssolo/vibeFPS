@@ -199,7 +199,16 @@ test('la pozza è geometria: triangoli solo dove c\'è acqua, e seguono la coper
   assert.ok(asfalto, 'la configurazione del reflector del pavimento è cambiata forma');
   assert.ok(WATER_R0 > Number(asfalto[1]),
     `a piombo l'acqua riflette ${WATER_R0} contro ${asfalto[1]} dell'asfalto: meno del pavimento su cui poggia`);
+  assert.ok(WATER_R0 >= .8 && Number(asfalto[1]) <= .12,
+    `contrasto lucido insufficiente: acqua ${WATER_R0}, asfalto ${asfalto[1]}`);
+  assert.ok(Number(asfalto[2]) >= .6, `riflesso dell'asfalto troppo nitido: blur ${asfalto[2]}`);
   assert.ok(WATER_FRESNEL_EXPONENT > 0 && WATER_R0 < 1);
+  assert.match(main, /reflectionExclusions\.push\(padGlowMesh, padRing, padArrow, arrowGlow\)/,
+    'gli effetti emissivi del jump pad sono rientrati nel reflector dell\'acqua');
+  assert.match(main, /b\.splashed = splashAt\(impact, \.9\)/,
+    'i proiettili a contatto vengono rimossi prima di generare l\'impatto in acqua');
+  assert.match(main, /splashAt\(railEnd, 1\.15\)/,
+    'la railgun hitscan non genera più impatti sulle pozzanghere');
 
   // Il riflesso va campionato con uv CLAMPATE: la deformazione dovuta alle onde
   // portava il campionamento fuori dalla texture, e ne tornava il colore del
@@ -207,6 +216,10 @@ test('la pozza è geometria: triangoli solo dove c\'è acqua, e seguono la coper
   const sorgente = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'src', 'water-system.js'), 'utf8');
   assert.match(sorgente, /reflectorNode\.sample\(.*\.clamp\(0, 1\)\)/,
     'il campionamento del riflesso non è più clampato');
+  assert.match(sorgente, /reflected\.mul\(reflectance\)/,
+    'il riflesso dell\'acqua ha ripreso una tinta invece dei colori dello specchio');
+  assert.match(sorgente, /normalWorld\.xz\.mul\(/,
+    'la deformazione usa di nuovo la normale camera e trasla anche i riflessi ad acqua ferma');
 
   const scala = make();
   scala.setQuality({ city: { puddleCoverage: .2, puddleRipples: .5 } });
@@ -218,6 +231,17 @@ test('la pozza è geometria: triangoli solo dove c\'è acqua, e seguono la coper
   assert.equal(scala.rippleGain, 1.3);
   assert.equal(scala.mesh.geometry.getAttribute('position').array, scala.positions,
     'l\'attributo caricato sulla GPU non è il buffer che le onde muovono');
+});
+
+test('gli ostacoli aggiunti dopo il setup eliminano acqua e riflessi sotto di sé', () => {
+  const water = make();
+  water.setQuality(QUALITY_PROFILES.ultra);
+  const punto = puntoProfondo(water);
+  assert.equal(water.isPuddle(punto[0], punto[1]), true);
+  water.setObstacles([{ x: punto[0], z: punto[1], halfX: .8, halfZ: .45, angle: .6 }]);
+  assert.equal(water.isPuddle(punto[0], punto[1]), false);
+  assert.equal(water.disturb(punto[0], punto[1], 1), false,
+    'un oggetto aggiunto dopo il setup conserva ancora acqua increspabile sotto di sé');
 });
 
 test('l\'onda si espande dal punto d\'impatto, alza i vertici e torna piatta', () => {

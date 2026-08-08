@@ -9,7 +9,7 @@ export const QUALITY_PROFILES = Object.freeze({
     reflectorHeight: 480,
     // Frame tra due render della reflection del pavimento. Il reflector
     // renderizza l'intera scena da una camera specchiata: è una traversata
-    // completa per frame. L'asfalto miscela il risultato sfocato a strength .34,
+    // completa per frame. L'asfalto miscela il risultato sfocato a strength .1,
     // quindi una reflection a 30 Hz è indistinguibile mentre dimezza il costo.
     reflectorInterval: 2,
     // Anisotropia massima delle texture. È letta UNA volta al boot: cambiarla a

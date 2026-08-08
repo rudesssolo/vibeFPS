@@ -54,6 +54,7 @@ export const modelScale = node;
 export const mrt = node;
 export const normalize = node;
 export const normalView = node;
+export const normalWorld = node;
 export const pass = node;
 export const positionGeometry = node;
 export const positionWorld = node;

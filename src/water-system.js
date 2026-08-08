@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  clamp, dot, float, normalView, positionViewDirection, screenUV, smoothstep, uv, vec3
+  clamp, dot, float, normalView, normalWorld, positionViewDirection, screenUV, smoothstep, uv, vec3
 } from 'three/tsl';
 import { makeRng } from './rng.js';
 import { unlitBasic } from './materials.js';
@@ -23,7 +23,7 @@ export const RIPPLE_SPEED = 2.4;
  * e quello dipende dalla normale: si tiene la superficie bassa e si inclina di
  * più. È un'esagerazione dichiarata, non un errore di unità.
  */
-export const NORMAL_BOOST = 4.5;
+export const NORMAL_BOOST = 7.5;
 
 /**
  * Soglia oltre la quale un punto è acqua. Vive qui e non in due posti: da qui
@@ -45,11 +45,12 @@ export const PUDDLE_FEATHER = .12;
  * Sopra i valori fisici dell'acqua (.02 con esponente 5 di Schlick): qui
  * l'asfalto riflette a `GRAPHICS.reflector.strength` e la pozza deve staccare
  * da quello **a ogni angolo**, non solo di scorcio. `WATER_R0` è quindi il
- * pavimento della curva e va tenuto sopra la riflettanza dell'asfalto — con .12
- * l'acqua guardata a piombo rifletteva meno del pavimento su cui poggia.
+ * pavimento della curva e va tenuto nettamente sopra la riflettanza
+ * dell'asfalto: la separazione deve restare evidente anche guardando quasi a
+ * piombo, dove la curva di Fresnel altrimenti spegne il riflesso.
  * È un'esagerazione dichiarata, non un errore di modello.
  */
-export const WATER_R0 = .2;
+export const WATER_R0 = .88;
 export const WATER_FRESNEL_EXPONENT = 2.5;
 
 /**
@@ -387,21 +388,14 @@ export class WaterSystem {
     // uv.x porta il valore della maschera al vertice.
     const wet = uv().x;
 
-    // Riflettanza secondo Fresnel (approssimazione di Schlick): l'acqua riflette
-    // il ~3% a incidenza normale e quasi tutto a incidenza radente. Prima il
-    // riflesso era mostrato al 210% a QUALUNQUE angolo — uno specchio che
-    // amplifica, più luminoso della sorgente. Da lì il difetto: l'immagine
-    // speculare di un oggetto alto, che uno specchio sposta di 2h/tan θ, non si
-    // leggeva come riflesso ma come una copia solida fuori prospettiva.
-    //
-    // L'esponente è 4 invece dei 5 di Schlick: ammorbidisce la curva quel tanto
-    // che basta perché una pozza si veda anche da mezz'angolo, senza tornare
-    // allo specchio piatto di prima. È una scelta dichiarata, non un errore.
+    // Fresnel artistico: il pavimento della curva è volutamente alto per dare
+    // alle pozze una finitura lucida e riconoscibile anche dall'alto; resta
+    // comunque sotto 1, quindi il riflesso non amplifica mai la sorgente.
     const reflectance = float(WATER_R0).add(float(1 - WATER_R0).mul(grazing.pow(WATER_FRESNEL_EXPONENT)));
 
-    // Corpo dell'acqua: quel che si vede guardando a piombo, dove il riflesso
-    // quasi non c'è.
-    let surface = vec3(.04, .09, .12);
+    // Corpo scuro dell'acqua: resta discreto sotto il riflesso anche guardando
+    // a piombo, così la pozza non diventa una chiazza lattiginosa.
+    let surface = vec3(.008);
     if (reflectorNode) {
       // Il riflesso si campiona PIEGATO dalla normale: quando un'onda passa, la
       // normale si inclina e l'immagine riflessa si spezza. È così che il moto
@@ -411,22 +405,29 @@ export class WaterSystem {
       // normali inclinate fino a .96 l'offset arrivava al 22% dello schermo:
       // il campionamento usciva dalla texture del riflesso e tornava il colore
       // del bordo o nero, a chiazze poligonali lungo gli spigoli dei triangoli.
-      const bend = normalView.xy.mul(.045);
+      // Si usa SOLO la deviazione orizzontale dalla normale piatta in spazio
+      // mondo. `normalView.xy` contiene anche l'inclinazione della camera e
+      // spostava quindi l'intera reflection persino ad acqua ferma: tombini,
+      // pad e ogni altro oggetto divergevano tutti nella stessa direzione.
+      // Qui una superficie calma vale esattamente (0, 0); l'offset nasce solo
+      // quando una vera increspatura inclina la normale.
+      const bend = normalWorld.xz.mul(.06);
       const reflected = reflectorNode.sample(screenUV.flipX().add(bend).clamp(0, 1)).rgb;
-      // Mai più luminoso della sorgente: il fattore resta sotto 1.
-      surface = surface.add(reflected.mul(vec3(.78, .92, 1)).mul(reflectance));
+      // Nessuna tinta aggiunta: la pozza restituisce i colori del reflector
+      // così come sono, compreso il nero neutro del cielo.
+      surface = surface.add(reflected.mul(reflectance));
     }
     material.colorNode = surface;
     // Da zero sul bordo geometrico a piena opacità dentro l'acqua: la
     // dissolvenza occupa tutta la fascia, quindi il contorno è un gradiente e
     // non un gradino.
     const depth = smoothstep(float(PUDDLE_THRESHOLD - PUDDLE_FEATHER), float(PUDDLE_THRESHOLD + .08), wet);
-    // L'opacità segue l'angolo come la riflettanza. A piombo la lamina è in
-    // gran parte trasparente e sotto si vede l'asfalto col suo riflesso sfocato;
-    // radente diventa opaca e specchiante. Tenerla a .76 fissa significava
+    // L'opacità segue l'angolo come la riflettanza. A piombo la lamina lascia
+    // ancora trasparire l'asfalto; radente diventa quasi opaca e specchiante.
+    // Tenerla a .76 fissa significava
     // coprire l'asfalto con un corpo d'acqua scuro proprio dove il riflesso non
     // c'è: macchie spente ai piedi del giocatore.
-    material.opacityNode = depth.mul(clamp(grazing.mul(.55).add(.35), 0, 1));
+    material.opacityNode = depth.mul(clamp(grazing.mul(.08).add(.92), 0, 1));
     return material;
   }
 
@@ -535,6 +536,22 @@ export class WaterSystem {
       if (slot.start < oldest.start) oldest = slot;
     }
     return oldest;
+  }
+
+  /**
+   * Sincronizza le impronte degli oggetti statici aggiunti dopo l'acqua e
+   * ricostruisce la mesh una sola volta. Sotto un oggetto a filo pavimento non
+   * deve esistere una superficie speculare separata.
+   */
+  setObstacles(obstacles = []) {
+    this.obstacles = Array.isArray(obstacles) ? obstacles : [];
+    this.mask = carveObstacles(
+      computePuddleMask(this.maskSize, this.coverage, this.seed),
+      this.maskSize,
+      this.size,
+      this.obstacles
+    );
+    this._rebuildGeometry();
   }
 
   setQuality(profile) {
